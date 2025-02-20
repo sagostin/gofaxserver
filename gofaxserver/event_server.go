@@ -32,12 +32,13 @@ import (
 	"github.com/google/uuid"
 )
 
+/*
 const (
 	recvqFileFormat   = "fax%08d.tif"
 	recvqDir          = "recvq"
 	defaultFaxrcvdCmd = "bin/faxrcvd"
 	defaultDevice     = "freeswitch"
-)
+)*/
 
 // EventSocketServer is a server for handling outgoing event socket connections from FreeSWITCH
 type EventSocketServer struct {
@@ -239,9 +240,30 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	sessionlog.Log("Rxfax to", filenameAbs)
 
+	/*
+
+		todo for inbound calls from carrier if they send t.38, we will support, but for outbound,
+		we should relay it in a sense. We will need to check the gateway and if it is a t.38 gateway?
+
+			<extension name="t38_reinvite">
+			  <condition>
+			    <action application="set" data="fax_enable_t38=true"/> <!-- Enable t.38 for this call -->
+			    <action application="set" data="fax_enable_t38_request=true"/> <!-- Enable t38_gateway to send a t.38 reinvite when a fax tone is detected. If using t38_gateway peer then you need to export this variable instead of set -->
+			    <action application="set" data="execute_on_answer=t38_gateway self"/> <!--Execute t38_gateway on answer. self or peer. self: send a reinvite back to the a-leg. peer reinvite forward to the b-leg -->
+			    <action application="bridge" data="sofia/external/1234@host"/>
+			  </condition>
+			</extension>
+
+	*/
+
 	c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
 	c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
+
+	// todo do i need the fax_ident?
 	c.Execute("set", fmt.Sprintf("fax_ident=%s", csi), true)
+
+	// todo support bridging the call to another extension / gateway
+	// check priority of the endpoints, and if the gateway is one, then attempt to transcode it
 
 	// todo
 	// we need to save the file temporarily
