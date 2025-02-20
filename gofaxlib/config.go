@@ -18,11 +18,12 @@
 package gofaxlib
 
 import (
+	"encoding/json"
+	"io/ioutil"
 	"log"
+	"os"
 
-	"github.com/gonicus/gofaxip/gofaxlib/logger"
-
-	"gopkg.in/gcfg.v1"
+	_ "github.com/gonicus/gofaxip/gofaxlib/logger"
 )
 
 var (
@@ -32,55 +33,66 @@ var (
 
 type config struct {
 	Freeswitch struct {
-		Socket            string
-		Password          string
-		Gateway           []string
-		Ident             string
-		Header            string
-		Verbose           bool
-		SoftmodemFallback bool
-	}
+		Socket            string   `json:"Socket"`
+		Password          string   `json:"Password"`
+		Gateway           []string `json:"Gateway"`
+		Ident             string   `json:"Ident"`
+		Header            string   `json:"Header"`
+		Verbose           bool     `json:"Verbose"`
+		SoftmodemFallback bool     `json:"SoftmodemFallback"`
+	} `json:"Freeswitch"`
 	Hylafax struct {
-		Spooldir   string
-		Modems     uint
-		Xferfaxlog string
-	}
+		Spooldir   string `json:"Spooldir"`
+		Modems     uint   `json:"Modems"`
+		Xferfaxlog string `json:"Xferfaxlog"`
+	} `json:"Hylafax"`
 	Gofaxd struct {
-		EnableT38                    bool
-		RequestT38                   bool
-		RecipientFromDiversionHeader bool
-		Socket                       string
-		Answerafter                  uint64
-		Waittime                     uint64
-		FaxRcvdCmd                   string
-		DynamicConfig                string
-		AllocateInboundDevices       bool
-	}
+		EnableT38                    bool   `json:"EnableT38"`
+		RequestT38                   bool   `json:"RequestT38"`
+		RecipientFromDiversionHeader bool   `json:"RecipientFromDiversionHeader"`
+		Socket                       string `json:"Socket"`
+		Answerafter                  uint64 `json:"Answerafter"`
+		Waittime                     uint64 `json:"Waittime"`
+		FaxRcvdCmd                   string `json:"FaxRcvdCmd"`
+		DynamicConfig                string `json:"DynamicConfig"`
+		AllocateInboundDevices       bool   `json:"AllocateInboundDevices"`
+	} `json:"Gofaxd"`
 	Gofaxsend struct {
-		EnableT38            bool
-		RequestT38           bool
-		FaxNumber            string
-		CallPrefix           string
-		DynamicConfig        string
-		DisableV17AfterRetry string
-		DisableECMAfterRetry string
-		CidName              string
-		FailedResponse       []string
-		FailedResponseMap    map[string]bool
-	}
+		EnableT38            bool            `json:"EnableT38"`
+		RequestT38           bool            `json:"RequestT38"`
+		FaxNumber            string          `json:"FaxNumber"`
+		CallPrefix           string          `json:"CallPrefix"`
+		DynamicConfig        string          `json:"DynamicConfig"`
+		DisableV17AfterRetry string          `json:"DisableV17AfterRetry"`
+		DisableECMAfterRetry string          `json:"DisableECMAfterRetry"`
+		CidName              string          `json:"CidName"`
+		FailedResponse       []string        `json:"FailedResponse"`
+		FailedResponseMap    map[string]bool `json:"FailedResponseMap"`
+	} `json:"Gofaxsend"`
 }
 
-// LoadConfig loads the configuration from given file path
+// LoadConfig loads the configuration from a JSON file.
 func LoadConfig(filename string) {
-	err := gcfg.ReadFileInto(&Config, filename)
+	file, err := os.Open(filename)
 	if err != nil {
-		logger.Logger.Print("Config: ", err)
-		log.Fatal("Config: ", err)
-	} else {
-		Config.Gofaxsend.FailedResponseMap = make(map[string]bool)
-		for _, i := range Config.Gofaxsend.FailedResponse {
-			Config.Gofaxsend.FailedResponseMap[i] = true
-		}
+		log.Fatalf("Config: unable to open file: %v", err)
+	}
+	defer file.Close()
+
+	data, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Config: unable to read file: %v", err)
+	}
+
+	err = json.Unmarshal(data, &Config)
+	if err != nil {
+		log.Fatalf("Config: unable to parse JSON: %v", err)
+	}
+
+	// Rebuild FailedResponseMap from FailedResponse list
+	Config.Gofaxsend.FailedResponseMap = make(map[string]bool)
+	for _, val := range Config.Gofaxsend.FailedResponse {
+		Config.Gofaxsend.FailedResponseMap[val] = true
 	}
 }
 

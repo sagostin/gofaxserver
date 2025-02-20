@@ -1,4 +1,4 @@
-package gofaxsend
+package gofaxserver
 
 import (
 	"errors"
@@ -8,7 +8,6 @@ import (
 // Qmemory provides the same functionality as Qfile, but all in-memory. It implements Qfiler.
 type Qmemory struct {
 	params map[string][]string
-
 }
 
 // NewQmemory instantiates a new Qmemory with the given parameters.
@@ -61,4 +60,3 @@ func (q Qmemory) Add(tag, value string) {
 	existing, _ := q.params[tag]
 	q.params[tag] = append(existing, value)
 }
-

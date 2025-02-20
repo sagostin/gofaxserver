@@ -15,49 +15,44 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-package main
+package gofaxserver
 
 import (
-	"errors"
+	"flag"
 	"fmt"
+	"log"
+	"os"
 )
 
-type manager struct {
-	devices []*Device
+const (
+	defaultConfigfile = "/etc/gofaxserver/config.json"
+	productName       = "gofaxserver"
+)
+
+var (
+	configFile  = flag.String("c", defaultConfigfile, "GOfax configuration file")
+	showVersion = flag.Bool("version", false, "Show version information")
+
+	usage = fmt.Sprintf("Usage: %s -version | [-c configfile]", os.Args[0])
+
+	// Version can be set at build time using:
+	//    -ldflags "-X main.version 0.42"
+	version string
+
+	// devmanager *manager
+)
+
+func init() {
+	if version == "" {
+		version = "development version"
+	}
+
+	flag.Usage = func() {
+		log.Printf("%s %s\n%s\n", productName, version, usage)
+		flag.PrintDefaults()
+	}
 }
 
-func newManager(nameprefix string, count uint) (*manager, error) {
-	var err error
+func Start() {
 
-	m := &manager{
-		devices: make([]*Device, count),
-	}
-
-	for i := uint(0); i < count; i++ {
-		m.devices[i], err = NewDevice(fmt.Sprintf("%v%v", nameprefix, i))
-		if err != nil {
-			m.SetAllDown()
-			return nil, err
-		}
-	}
-
-	return m, nil
-}
-
-func (m *manager) SetAllDown() {
-	for _, d := range m.devices {
-		if d != nil {
-			d.SetDown()
-		}
-	}
-}
-
-func (m *manager) FindDevice(msg string) (*Device, error) {
-	for _, d := range m.devices {
-		if d.GetState() == stateReady {
-			d.SetBusy(msg, false)
-			return d, nil
-		}
-	}
-	return nil, errors.New("No available modem found.")
 }

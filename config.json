@@ -1,0 +1,39 @@
+{
+  "Freeswitch": {
+    "Socket": "127.0.0.1:8021",
+    "Password": "ClueCon",
+    "Gateway": ["default"],
+    "Ident": "+1 337",
+    "Header": "GONICUS LABS",
+    "Verbose": false,
+    "SoftmodemFallback": true
+  },
+  "Hylafax": {
+    "Spooldir": "/var/spool/hylafax",
+    "Modems": 5,
+    "Xferfaxlog": "log/xferfaxlog"
+  },
+  "Gofaxd": {
+    "Socket": "127.0.0.1:8022",
+    "EnableT38": true,
+    "RequestT38": true,
+    "RecipientFromDiversionHeader": false,
+    "Answerafter": 2000,
+    "Waittime": 1000
+  },
+  "Gofaxsend": {
+    "EnableT38": true,
+    "RequestT38": true,
+    "FaxNumber": "4711",
+    "CallPrefix": "",
+    "DynamicConfig": "",
+    "DisableV17AfterRetry": "0",
+    "DisableECMAfterRetry": "0",
+    "CidName": "sender",
+    "FailedResponse": [
+      "UNALLOCATED_NUMBER",
+      "CALL_REJECTED"
+    ],
+    "FailedResponseMap": {}
+  }
+}

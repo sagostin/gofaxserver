@@ -15,7 +15,7 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-package main
+package gofaxserver
 
 import (
 	"fmt"
@@ -206,6 +206,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	if device != nil {
 		// Notify faxq
+		// todo this is used for hylafax only, we will not use this going forward
 		gofaxlib.Faxq.ModemStatus(device.Name, "I"+sessionlog.CommID())
 		gofaxlib.Faxq.ReceiveStatus(device.Name, "B")
 		gofaxlib.Faxq.ReceiveStatus(device.Name, "S")
@@ -232,6 +233,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		sessionlog.Log(err)
 		return
 	}
+	// todo can we require to a database instead or just in memory and pass to a channel?
 	filename := filepath.Join(recvqDir, fmt.Sprintf(recvqFileFormat, seq))
 	filenameAbs := filepath.Join(gofaxlib.Config.Hylafax.Spooldir, filename)
 
@@ -240,6 +242,12 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
 	c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
 	c.Execute("set", fmt.Sprintf("fax_ident=%s", csi), true)
+
+	// todo
+	// we need to save the file temporarily
+	// and then add it to the database or
+	// something because freeswitch needs
+	// to do it like that, hmm...
 	c.Execute("rxfax", filenameAbs, true)
 	c.Execute("hangup", "", true)
 
@@ -248,6 +256,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	pages := result.TransferredPages
 
+	// todo how does this work???
 EventLoop:
 	for {
 		select {
