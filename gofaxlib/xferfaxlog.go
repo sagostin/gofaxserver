@@ -81,7 +81,7 @@ func (r *XFRecord) formatReceptionReport() string {
 		fmt.Sprintf("\"%s\"", r.Cidname), fmt.Sprintf("\"%s\"", r.Cidnum), "", "", r.Dcs)
 }
 
-// SaveTransmissionReport appends a transmisison record to the configured xferfaxlog file
+/*// SaveTransmissionReport appends a transmisison record to the configured xferfaxlog file
 func (r *XFRecord) SaveTransmissionReport() error {
 	if Config.Hylafax.Xferfaxlog == "" {
 		return nil
@@ -95,7 +95,7 @@ func (r *XFRecord) SaveReceptionReport() error {
 		return nil
 	}
 	return AppendTo(Config.Hylafax.Xferfaxlog, r.formatReceptionReport())
-}
+}*/
 
 func formatDuration(d time.Duration) string {
 	s := uint(d.Seconds())

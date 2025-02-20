@@ -30,7 +30,7 @@ const (
 )
 
 var (
-	configFile  = flag.String("c", defaultConfigfile, "GOfax configuration file")
+	configFile  = flag.String("c", defaultConfigfile, "gofaxserver configuration file")
 	showVersion = flag.Bool("version", false, "Show version information")
 
 	usage = fmt.Sprintf("Usage: %s -version | [-c configfile]", os.Args[0])

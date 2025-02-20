@@ -183,7 +183,7 @@ func (t *transmission) start() {
 		t.conn.Send(fmt.Sprintf("uuid_dump %v", t.faxjob.UUID))
 		hangupcause := strings.TrimSpace(err.Error())
 		t.sessionlog.Log("Originate failed with hangup cause", hangupcause)
-		if gofaxlib.FailedHangupcause(hangupcause) {
+		if gofaxlib.FailedHangUpCause(hangupcause) {
 			t.errorChan <- NewFaxError(hangupcause+" (retry disabled)", false)
 		} else {
 			t.errorChan <- NewFaxError(hangupcause, true)

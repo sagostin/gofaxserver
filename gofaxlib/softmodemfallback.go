@@ -13,13 +13,13 @@ const (
 // GetSoftmodemFallback checks if fallback to SpanDSP's softmodem (no T.38)
 // should be enabled for the given callerid number
 func GetSoftmodemFallback(c *eventsocket.Connection, cidnum string) (bool, error) {
-	if !Config.Freeswitch.SoftmodemFallback || cidnum == "" {
+	if !Config.FreeSwitch.SoftmodemFallback || cidnum == "" {
 		return false, nil
 	}
 
 	var err error
 	if c == nil {
-		c, err = eventsocket.Dial(Config.Freeswitch.Socket, Config.Freeswitch.Password)
+		c, err = eventsocket.Dial(Config.FreeSwitch.Socket, Config.FreeSwitch.Password)
 		if err != nil {
 			return false, err
 		}
@@ -37,13 +37,13 @@ func GetSoftmodemFallback(c *eventsocket.Connection, cidnum string) (bool, error
 // SetSoftmodemFallback saves the given softmodem fallback setting for a caller id
 // to FreeSWITCH's mod_db
 func SetSoftmodemFallback(c *eventsocket.Connection, cidnum string, enabled bool) error {
-	if !Config.Freeswitch.SoftmodemFallback || cidnum == "" {
+	if !Config.FreeSwitch.SoftmodemFallback || cidnum == "" {
 		return nil
 	}
 
 	var err error
 	if c == nil {
-		c, err = eventsocket.Dial(Config.Freeswitch.Socket, Config.Freeswitch.Password)
+		c, err = eventsocket.Dial(Config.FreeSwitch.Socket, Config.FreeSwitch.Password)
 		if err != nil {
 			return err
 		}

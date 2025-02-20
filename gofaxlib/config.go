@@ -32,43 +32,27 @@ var (
 )
 
 type config struct {
-	Freeswitch struct {
-		Socket            string   `json:"Socket"`
-		Password          string   `json:"Password"`
-		Gateway           []string `json:"Gateway"`
-		Ident             string   `json:"Ident"`
-		Header            string   `json:"Header"`
-		Verbose           bool     `json:"Verbose"`
-		SoftmodemFallback bool     `json:"SoftmodemFallback"`
+	FreeSwitch struct {
+		Socket            string   `json:"socket"`
+		Password          string   `json:"password"`
+		Gateway           []string `json:"gateway"`
+		Ident             string   `json:"ident"`
+		Header            string   `json:"header"`
+		Verbose           bool     `json:"verbose"`
+		SoftmodemFallback bool     `json:"softmodem_fallback"`
 	} `json:"Freeswitch"`
-	Hylafax struct {
-		Spooldir   string `json:"Spooldir"`
-		Modems     uint   `json:"Modems"`
-		Xferfaxlog string `json:"Xferfaxlog"`
-	} `json:"Hylafax"`
-	Gofaxd struct {
-		EnableT38                    bool   `json:"EnableT38"`
-		RequestT38                   bool   `json:"RequestT38"`
-		RecipientFromDiversionHeader bool   `json:"RecipientFromDiversionHeader"`
-		Socket                       string `json:"Socket"`
-		Answerafter                  uint64 `json:"Answerafter"`
-		Waittime                     uint64 `json:"Waittime"`
-		FaxRcvdCmd                   string `json:"FaxRcvdCmd"`
-		DynamicConfig                string `json:"DynamicConfig"`
-		AllocateInboundDevices       bool   `json:"AllocateInboundDevices"`
-	} `json:"Gofaxd"`
-	Gofaxsend struct {
-		EnableT38            bool            `json:"EnableT38"`
-		RequestT38           bool            `json:"RequestT38"`
-		FaxNumber            string          `json:"FaxNumber"`
-		CallPrefix           string          `json:"CallPrefix"`
-		DynamicConfig        string          `json:"DynamicConfig"`
-		DisableV17AfterRetry string          `json:"DisableV17AfterRetry"`
-		DisableECMAfterRetry string          `json:"DisableECMAfterRetry"`
-		CidName              string          `json:"CidName"`
-		FailedResponse       []string        `json:"FailedResponse"`
-		FailedResponseMap    map[string]bool `json:"FailedResponseMap"`
-	} `json:"Gofaxsend"`
+	Fax struct {
+		EnableT38                    bool            `json:"enable_t38"`
+		RequestT38                   bool            `json:"request_t38"`
+		RecipientFromDiversionHeader bool            `json:"recipient_from_diversion_header"`
+		EventSocketListen            string          `json:"event_socket_listen"`
+		AnswerAfter                  uint64          `json:"answer_after"`
+		WaitTime                     uint64          `json:"wait_time"`
+		DisableV17AfterRetry         string          `json:"disable_v17_after_retry"`
+		DisableECMAfterRetry         string          `json:"disable_ecm_after_retry"`
+		FailedResponse               []string        `json:"failed_response"`
+		FailedResponseMap            map[string]bool `json:"failed_response_map"`
+	} `json:"fax"`
 }
 
 // LoadConfig loads the configuration from a JSON file.
@@ -90,14 +74,14 @@ func LoadConfig(filename string) {
 	}
 
 	// Rebuild FailedResponseMap from FailedResponse list
-	Config.Gofaxsend.FailedResponseMap = make(map[string]bool)
-	for _, val := range Config.Gofaxsend.FailedResponse {
-		Config.Gofaxsend.FailedResponseMap[val] = true
+	Config.Fax.FailedResponseMap = make(map[string]bool)
+	for _, val := range Config.Fax.FailedResponse {
+		Config.Fax.FailedResponseMap[val] = true
 	}
 }
 
-func FailedHangupcause(hangupcause string) bool {
-	if Config.Gofaxsend.FailedResponseMap[hangupcause] {
+func FailedHangUpCause(hangUpCause string) bool {
+	if Config.Fax.FailedResponseMap[hangUpCause] {
 		return true
 	} else {
 		return false
