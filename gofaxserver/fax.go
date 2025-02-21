@@ -3,6 +3,7 @@ package gofaxserver
 import (
 	"github.com/gonicus/gofaxip/gofaxlib"
 	"github.com/google/uuid"
+	"time"
 )
 
 // FaxJob contains everything FreeSWITCH needs to send a fax.
@@ -21,9 +22,9 @@ type FaxJob struct {
 	Identifier     string `json:"ident,omitempty"`        // Faxing ident
 	Header         string `json:"header,omitempty"`       // Header (e.g., sender company name)
 
-	Endpoints                []*Endpoint              `json:"gateways,omitempty"` // List of endpoints and such
-	Result                   *gofaxlib.FaxResult      `json:"result,omitempty"`
-	SourceRoutingInformation SourceRoutingInformation `json:"source_routing_information,omitempty"` // Routing information for the fax
+	Endpoints                []*Endpoint         `json:"gateways,omitempty"` // List of endpoints and such
+	Result                   *gofaxlib.FaxResult `json:"result,omitempty"`
+	SourceRoutingInformation FaxSourceInfo       `json:"source_routing_information,omitempty"` // Routing information for the fax
 
 	// These fields may be updated later in the process:
 	NPages     int    `json:"npages,omitempty"`     // number of pages sent
@@ -35,6 +36,13 @@ type FaxJob struct {
 	TotDials   int    `json:"totdials"`             // total attempted calls (as an int)
 	NDials     int    `json:"ndials"`               // consecutive failed call attempts
 	TotTries   int    `json:"tottries"`             // total answered or attempted calls
+}
+
+type FaxSourceInfo struct {
+	Timestamp  time.Time
+	SourceType string // the source of the message, could be a carrier, or a webhook, etc, or gateway
+	Source     string // name of gateway, or webhook api key id or something
+	SourceID   string // id of the source, could be the carrier id, or the webhook id, or uuid of channel id
 }
 
 // NewFaxJob initializes a new FaxJob with a random UUID and default FreeSwitch settings.

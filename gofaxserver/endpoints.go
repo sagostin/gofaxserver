@@ -32,7 +32,7 @@ func (s *Server) addEndpoint(endpoint *Endpoint) error {
 	switch endpoint.Type {
 	case "tenant":
 		// For tenant endpoints, TypeID is the tenant's ID.
-		s.TenantEndpoints[endpoint.TypeID] = append(s.TenantEndpoints[endpoint.TypeID], endpoint)
+		s.tenantEndpoints[endpoint.TypeID] = append(s.tenantEndpoints[endpoint.TypeID], endpoint)
 	case "number":
 		// For number endpoints, we must first find the tenant number using the TenantNumber ID.
 		var numberStr string

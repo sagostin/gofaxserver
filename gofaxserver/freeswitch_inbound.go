@@ -436,10 +436,11 @@ EventLoop:
 		UseECM:         true, // set this by default
 		DisableV17:     false,
 		Result:         result,
-		SourceRoutingInformation: SourceRoutingInformation{
+		SourceRoutingInformation: FaxSourceInfo{
 			Timestamp:  time.Now(),
-			SourceType: "gateway", // gateway is freeswitch
+			SourceType: "gateway", // gateway means freeswitch
 			Source:     gateway,
+			SourceID:   channelUUID.String(),
 		},
 	}
 

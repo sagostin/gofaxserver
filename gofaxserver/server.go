@@ -15,6 +15,7 @@ import (
 type Server struct {
 	fsSocket        *EventSocketServer
 	router          *Router
+	queue           *Queue
 	logManager      *gofaxlib.LogManager
 	dialplanManager *DialplanManager
 	faxJobRouting   chan *FaxJob
@@ -50,10 +51,14 @@ func (s *Server) Start() {
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
 	// start the router
+	queue := NewQueue(s)
+	go queue.Start()
+
 	router := NewRouter(s)
-	router.Start()
+	go router.Start()
 
 	s.router = router
+	s.queue = queue
 
 	// start freeswitch inbound event socket server
 	fsSocket := NewEventSocketServer(s)

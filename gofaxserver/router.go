@@ -2,7 +2,6 @@ package gofaxserver
 
 import (
 	"github.com/gonicus/gofaxip/gofaxlib"
-	"time"
 )
 
 type Router struct {
@@ -15,25 +14,13 @@ func NewRouter(server *Server) *Router {
 	return &Router{server: server}
 }
 
-type SourceRoutingInformation struct {
-	Timestamp  time.Time
-	SourceType string // the source of the message, could be a carrier, or a webhook, etc, or gateway
-	Source     string // name of gateway, or webhook api key id or something
-	SourceID   string // id of the source, could be the carrier id, or the webhook id, or uuid of channel id
-}
-
 func (r *Router) Start() {
 	// we will have multiple channels to route messages to/from freeswitch, along with channels for the inbound webhook requests, etc.
-
-	go func(server *Server) {
-		for {
-			// these are inbound messages from freeswitch (carrier trunks, vs pbx trunks)
-			fax := <-server.faxJobRouting
-			go r.routeFax(fax)
-		}
-		// todo
-	}(r.server)
-
+	for {
+		// these are inbound messages from freeswitch (carrier trunks, vs pbx trunks)
+		fax := <-r.server.faxJobRouting
+		go r.routeFax(fax)
+	}
 	// todo
 }
 
@@ -58,18 +45,37 @@ func (r *Router) routeFax(fax *FaxJob) {
 				return // todo log error with no matching destination for fax from trunk
 			}
 			fax.Endpoints = ep
+
+			r.server.queue.Queue <- fax
 			return
 		}
 
+		// do we actually have to check src sending number? can we not just check destination?
+		// we could also validate that the sending / src address is coming from the right allowed endpoint?
+		// do we want that much control where you need matching source / destination endpoints?
+
 		_, err := r.server.getTenantByNumber(srcNum)
 		// todo route to other tenant by dst number based on endpoint then send to queue
-
 		if err != nil {
-			return // todo throw error
+			// todo throw error cuz not valid sending number
 		}
 
-		// todo
+		// we'll just check for destination
+		// this will only output if it's a valid tenant to tenant fax, otherwise, we will needa send to default gateway(s)
+		endpoints, err := r.server.getEndpointsForNumber(dstNum)
+		if err == nil {
+			fax.Endpoints = endpoints
+			r.server.queue.Queue <- fax
+			return
+		}
 
+		// route to default gateway for freeswitch
+		var eps []*Endpoint
+		for _, ep := range gofaxlib.Config.FreeSwitch.Gateway {
+			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 0})
+		}
+		fax.Endpoints = eps
+		r.server.queue.Queue <- fax
 		return
 	case "webhook":
 	// todo for webhooks, we will need to validate sending number to prevent abuse and such.
