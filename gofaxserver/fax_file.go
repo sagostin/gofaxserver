@@ -31,7 +31,7 @@ import (
 
 // One item (TIFF file) of a fax
 type faxItem struct {
-	// First directory in the file to transmit
+	// First directory in the file to newEventClient
 	startdir uint
 
 	// HDLC subaddress (unused)

@@ -17,7 +17,7 @@ type Endpoint struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
 	Type         string `json:"type"`          // tenant, or number
 	TypeID       uint   `json:"type_id"`       // id of type, either tenant or number id
-	EndpointType string `json:"endpoint_type"` // webhook, or gateway (gateway is for freeswitch)
-	Endpoint     string `json:"endpoint"`      // if type=gateway then this is the freeswitch gateway name, otherwise, it's the webhook url
+	EndpointType string `json:"endpoint_type"` // webhook, gateway (gateway is for freeswitch), or email
+	Endpoint     string `json:"endpoint"`      // if type=gateway then this is the freeswitch gateway name, otherwise, it's the webhook url, or email address (or multiple email addresses separated by semi-colons)
 	Priority     uint   `json:"webhook"`       // priority from 0 to any? 0 being the highest priority
 }

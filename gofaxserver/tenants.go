@@ -15,5 +15,5 @@ type TenantNumber struct {
 	TenantID uint   `gorm:"index;not null" json:"tenant_id"`
 	Number   string `gorm:"unique;not null" json:"number"`
 	CID      string `json:"cid"`     // caller id that is displayed on the fax? eg. +1 555-555-5555
-	Header   string `json:"webhook"` // this is the name displayed at the top of the fax eg. "Company Fax Relay"
+	Header   string `json:"webhook"` // this is the name displayed at the top of the fax eg. "Company Faxing Relay"
 }

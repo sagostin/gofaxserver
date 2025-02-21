@@ -57,18 +57,18 @@ func parseResolution(resstr string) (*Resolution, error) {
 	return res, nil
 }
 
-// PageResult is the result of a transmitted Fax page as reported by SpanDSP
+// PageResult is the result of a transmitted Faxing page as reported by SpanDSP
 type PageResult struct {
-	Ts               time.Time
-	Page             uint
-	BadRows          uint
-	LongestBadRowRun uint
-	EncodingName     string
-	ImagePixelSize   Resolution
-	FilePixelSize    Resolution
-	ImageResolution  Resolution
-	FileResolution   Resolution
-	ImageSize        uint
+	Ts               time.Time  `json:"ts"`
+	Page             uint       `json:"page,omitempty"`
+	BadRows          uint       `json:"bad_rows,omitempty"`
+	LongestBadRowRun uint       `json:"longest_bad_row_run,omitempty"`
+	EncodingName     string     `json:"encoding_name,omitempty"`
+	ImagePixelSize   Resolution `json:"image_pixel_size"`
+	FilePixelSize    Resolution `json:"file_pixel_size"`
+	ImageResolution  Resolution `json:"image_resolution"`
+	FileResolution   Resolution `json:"file_resolution"`
+	ImageSize        uint       `json:"image_size,omitempty"`
 }
 
 func (p PageResult) String() string {
@@ -76,34 +76,34 @@ func (p PageResult) String() string {
 		p.ImagePixelSize, p.EncodingName, p.ImageSize, p.BadRows)
 }
 
-// FaxResult is the result of a completed or aborted Fax transmission
+// FaxResult is the result of a completed or aborted Faxing transmission
 type FaxResult struct {
-	uuid       uuid.UUID
-	sessionlog SessionLogger
+	UUID       uuid.UUID `json:"uuid,omitempty"`
+	logManager *LogManager
 
-	StartTs time.Time
-	EndTs   time.Time
+	StartTs time.Time `json:"start_ts"`
+	EndTs   time.Time `json:"end_ts"`
 
-	Hangupcause string
+	Hangupcause string `json:"hangupcause,omitempty"`
 
-	TotalPages       uint
-	TransferredPages uint
-	Ecm              bool
-	RemoteID         string
-	ResultCode       int // SpanDSP, not HylaFAX!
-	ResultText       string
-	Success          bool
-	TransferRate     uint
-	NegotiateCount   uint
+	TotalPages       uint   `json:"total_pages,omitempty"`
+	TransferredPages uint   `json:"transferred_pages,omitempty"`
+	Ecm              bool   `json:"ecm,omitempty"`
+	RemoteID         string `json:"remote_id,omitempty"`
+	ResultCode       int    `json:"result_code,omitempty"` // SpanDSP, not HylaFAX!
+	ResultText       string `json:"result_text,omitempty"`
+	Success          bool   `json:"success,omitempty"`
+	TransferRate     uint   `json:"transfer_rate,omitempty"`
+	NegotiateCount   uint   `json:"negotiate_count,omitempty"`
 
-	PageResults []PageResult
+	PageResults []PageResult `json:"page_results,omitempty"`
 }
 
 // NewFaxResult creates a new FaxResult structure
-func NewFaxResult(uuid uuid.UUID, sessionlog SessionLogger) *FaxResult {
+func NewFaxResult(uuid uuid.UUID, logManager *LogManager) *FaxResult {
 	f := &FaxResult{
-		uuid:       uuid,
-		sessionlog: sessionlog,
+		UUID:       uuid,
+		logManager: logManager,
 	}
 	return f
 }
@@ -124,17 +124,17 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 		}
 
 	case "CUSTOM":
-		// Fax results have changed
+		// Faxing results have changed
 		action := ""
 		switch ev.Get("Event-Subclass") {
 		case "spandsp::rxfaxnegociateresult",
 			"spandsp::txfaxnegociateresult":
 			f.NegotiateCount++
-			if ecm := ev.Get("Fax-Ecm-Used"); ecm == "on" {
+			if ecm := ev.Get("Faxing-Ecm-Used"); ecm == "on" {
 				f.Ecm = true
 			}
-			f.RemoteID = ev.Get("Fax-Remote-Station-Id")
-			if rate, err := strconv.Atoi(ev.Get("Fax-Transfer-Rate")); err == nil {
+			f.RemoteID = ev.Get("Faxing-Remote-Station-Id")
+			if rate, err := strconv.Atoi(ev.Get("Faxing-Transfer-Rate")); err == nil {
 				f.TransferRate = uint(rate)
 			}
 			f.sessionlog.Logf("Remote ID: \"%v\", Transfer Rate: %v, ECM=%v", f.RemoteID, f.TransferRate, f.Ecm)
@@ -147,33 +147,33 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 				action = "sent"
 			}
 			// A page was transferred
-			if pages, err := strconv.Atoi(ev.Get("Fax-Document-Transferred-Pages")); err == nil {
+			if pages, err := strconv.Atoi(ev.Get("Faxing-Document-Transferred-Pages")); err == nil {
 				f.TransferredPages = uint(pages)
 			}
 
 			pr := new(PageResult)
 			pr.Page = f.TransferredPages
 
-			if badrows, err := strconv.Atoi(ev.Get("Fax-Bad-Rows")); err == nil {
+			if badrows, err := strconv.Atoi(ev.Get("Faxing-Bad-Rows")); err == nil {
 				pr.BadRows = uint(badrows)
 			}
-			pr.EncodingName = ev.Get("Fax-Encoding-Name")
-			if imgsize, err := parseResolution(ev.Get("Fax-Image-Pixel-Size")); err == nil {
+			pr.EncodingName = ev.Get("Faxing-Encoding-Name")
+			if imgsize, err := parseResolution(ev.Get("Faxing-Image-Pixel-Size")); err == nil {
 				pr.ImagePixelSize = *imgsize
 			}
-			if filesize, err := parseResolution(ev.Get("Fax-File-Image-Pixel-Size")); err == nil {
+			if filesize, err := parseResolution(ev.Get("Faxing-File-Image-Pixel-Size")); err == nil {
 				pr.FilePixelSize = *filesize
 			}
-			if imgres, err := parseResolution(ev.Get("Fax-Image-Resolution")); err == nil {
+			if imgres, err := parseResolution(ev.Get("Faxing-Image-Resolution")); err == nil {
 				pr.ImageResolution = *imgres
 			}
-			if fileres, err := parseResolution(ev.Get("Fax-File-Image-Resolution")); err == nil {
+			if fileres, err := parseResolution(ev.Get("Faxing-File-Image-Resolution")); err == nil {
 				pr.FileResolution = *fileres
 			}
-			if size, err := strconv.Atoi(ev.Get("Fax-Image-Size")); err == nil {
+			if size, err := strconv.Atoi(ev.Get("Faxing-Image-Size")); err == nil {
 				pr.ImageSize = uint(size)
 			}
-			if badrowrun, err := strconv.Atoi(ev.Get("Fax-Longest-Bad-Row-Run")); err == nil {
+			if badrowrun, err := strconv.Atoi(ev.Get("Faxing-Longest-Bad-Row-Run")); err == nil {
 				pr.LongestBadRowRun = uint(badrowrun)
 			}
 
@@ -182,24 +182,24 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 
 		case "spandsp::rxfaxresult",
 			"spandsp::txfaxresult":
-			if totalpages, err := strconv.Atoi(ev.Get("Fax-Document-Total-Pages")); err == nil {
+			if totalpages, err := strconv.Atoi(ev.Get("Faxing-Document-Total-Pages")); err == nil {
 				f.TotalPages = uint(totalpages)
 			}
-			if transferredpages, err := strconv.Atoi(ev.Get("Fax-Document-Transferred-Pages")); err == nil {
+			if transferredpages, err := strconv.Atoi(ev.Get("Faxing-Document-Transferred-Pages")); err == nil {
 				f.TransferredPages = uint(transferredpages)
 			}
-			if ecm := ev.Get("Fax-Ecm-Used"); ecm == "on" {
+			if ecm := ev.Get("Faxing-Ecm-Used"); ecm == "on" {
 				f.Ecm = true
 			}
-			f.RemoteID = ev.Get("Fax-Remote-Station-Id")
-			if resultcode, err := strconv.Atoi(ev.Get("Fax-Result-Code")); err == nil {
+			f.RemoteID = ev.Get("Faxing-Remote-Station-Id")
+			if resultcode, err := strconv.Atoi(ev.Get("Faxing-Result-Code")); err == nil {
 				f.ResultCode = resultcode
 			}
-			f.ResultText = ev.Get("Fax-Result-Text")
-			if ev.Get("Fax-Success") == "1" {
+			f.ResultText = ev.Get("Faxing-Result-Text")
+			if ev.Get("Faxing-Success") == "1" {
 				f.Success = true
 			}
-			if rate, err := strconv.Atoi(ev.Get("Fax-Transfer-Rate")); err == nil {
+			if rate, err := strconv.Atoi(ev.Get("Faxing-Transfer-Rate")); err == nil {
 				f.TransferRate = uint(rate)
 			}
 

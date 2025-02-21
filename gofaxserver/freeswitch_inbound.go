@@ -19,8 +19,7 @@ package gofaxserver
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
+	"github.com/sirupsen/logrus"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -32,25 +31,26 @@ import (
 	"github.com/google/uuid"
 )
 
-/*
 const (
-	recvqFileFormat   = "fax%08d.tif"
-	recvqDir          = "recvq"
-	defaultFaxrcvdCmd = "bin/faxrcvd"
-	defaultDevice     = "freeswitch"
-)*/
+	tempFileFormat = "fax_%s.tif"
+	/*	recvqDir          = "recvq"
+		defaultFaxrcvdCmd = "bin/faxrcvd"
+		defaultDevice     = "freeswitch"*/
+)
 
 // EventSocketServer is a server for handling outgoing event socket connections from FreeSWITCH
 type EventSocketServer struct {
 	errorChan chan error
 	killChan  chan struct{}
+	server    *Server
 }
 
 // NewEventSocketServer initializes a EventSocketServer
-func NewEventSocketServer() *EventSocketServer {
+func NewEventSocketServer(server *Server) *EventSocketServer {
 	e := new(EventSocketServer)
 	e.errorChan = make(chan error)
 	e.killChan = make(chan struct{})
+	e.server = server // this is used to point back to the main server struct to access the other methods and shit
 	return e
 }
 
@@ -60,7 +60,7 @@ func getNumberFromSIPURI(uri string) (string, error) {
 	matches := re.FindStringSubmatch(uri)
 
 	if len(matches) < 2 {
-		return "", fmt.Errorf("Number could not be extracted from SIP URI")
+		return "", fmt.Errorf("number could not be extracted from SIP URI")
 	}
 
 	number := matches[1]
@@ -70,7 +70,7 @@ func getNumberFromSIPURI(uri string) (string, error) {
 // Start starts a goroutine to listen for ESL connections and handle incoming calls
 func (e *EventSocketServer) Start() {
 	go func() {
-		err := eventsocket.ListenAndServe(gofaxlib.Config.Gofaxd.Socket, e.handler)
+		err := eventsocket.ListenAndServe(gofaxlib.Config.FreeSwitch.EventServerSocket, e.handler)
 		if err != nil {
 			e.errorChan <- err
 		}
@@ -117,7 +117,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	// Extract Caller/Callee
 	var recipient string
-	if gofaxlib.Config.Gofaxd.RecipientFromDiversionHeader {
+	if gofaxlib.Config.Faxing.RecipientFromDiversionHeader {
 		recipient, err = getNumberFromSIPURI(connectev.Get("Variable_sip_h_diversion"))
 		if err != nil {
 			logger.Logger.Println(err)
@@ -135,8 +135,8 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	logger.Logger.Printf("Incoming call to %v from %v <%v> via gateway %v", recipient, cidname, cidnum, gateway)
 
-	var device *Device
-	if gofaxlib.Config.Gofaxd.AllocateInboundDevices {
+	/*var device *Device
+	if gofaxlib.Config.Faxing.AllocateInboundDevices {
 		// Find free device
 		device, err := devmanager.FindDevice(fmt.Sprintf("Receiving facsimile"))
 		if err != nil {
@@ -146,19 +146,19 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			return
 		}
 		defer device.SetReady()
-	}
+	}*/
 
-	var usedDevice string
+	/*var usedDevice string
 	if device != nil {
 		usedDevice = device.Name
 	} else {
 		usedDevice = defaultDevice
-	}
+	}*/
 
-	csi := gofaxlib.Config.Freeswitch.Ident
+	csi := gofaxlib.Config.FreeSwitch.Ident
 
 	// Query DynamicConfig
-	if dcCmd := gofaxlib.Config.Gofaxd.DynamicConfig; dcCmd != "" {
+	/*if dcCmd := gofaxlib.Config.Faxing.DynamicConfig; dcCmd != "" {
 		logger.Logger.Println("Calling DynamicConfig script", dcCmd)
 		dc, err := gofaxlib.DynamicConfig(dcCmd, usedDevice, cidnum, cidname, recipient, gateway)
 		if err != nil {
@@ -178,70 +178,92 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			}
 
 		}
-	}
+	}*/
 
-	sessionlog, err := gofaxlib.NewSessionLogger(0)
+	/*logManager, err := gofaxlib.NewSessionLogger(0)
 	if err != nil {
 		c.Send("exit")
 		logger.Logger.Print(err)
 		return
-	}
+	}*/
 
-	logger.Logger.Println(channelUUID, "Logging events for commid", sessionlog.CommID(), "to", sessionlog.Logfile())
-	sessionlog.Log("Inbound channel UUID: ", channelUUID)
+	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		"EventServer",
+		"Inbound channel UUID: %s",
+		logrus.InfoLevel,
+		map[string]interface{}{"uuid": channelUUID.String()}, channelUUID.String(),
+	))
 
 	// Check if T.38 should be enabled
-	requestT38 := gofaxlib.Config.Gofaxd.RequestT38
-	enableT38 := gofaxlib.Config.Gofaxd.EnableT38
+	requestT38 := gofaxlib.Config.Faxing.RequestT38
+	enableT38 := gofaxlib.Config.Faxing.EnableT38
 
 	fallback, err := gofaxlib.GetSoftmodemFallback(nil, cidnum)
 	if err != nil {
-		sessionlog.Log(err)
+		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			"EventServer",
+			err.Error(),
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": channelUUID.String()},
+		))
 	}
 	if fallback {
-		sessionlog.Logf("Softmodem fallback active for caller %s, disabling T.38", cidnum)
+		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			"EventServer",
+			"Softmodem fallback active for caller %s, disabling T.38",
+			logrus.WarnLevel,
+			map[string]interface{}{"uuid": channelUUID.String()}, cidnum,
+		))
 		enableT38 = false
 		requestT38 = false
 	}
-	sessionlog.Logf("Accepting call to %v from %v <%v> via gateway %v with commid %v", recipient, cidname, cidnum, gateway, sessionlog.CommID())
+	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		"FreeSwitch.EventServer",
+		"Accepting call to %v from %v <%v> via gateway %v with commid %v",
+		logrus.InfoLevel,
+		map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway, channelUUID.String(),
+	))
 
-	if device != nil {
+	/*if device != nil {
 		// Notify faxq
 		// todo this is used for hylafax only, we will not use this going forward
-		gofaxlib.Faxq.ModemStatus(device.Name, "I"+sessionlog.CommID())
+		gofaxlib.Faxq.ModemStatus(device.Name, "I"+logManager.CommID())
 		gofaxlib.Faxq.ReceiveStatus(device.Name, "B")
 		gofaxlib.Faxq.ReceiveStatus(device.Name, "S")
 		defer gofaxlib.Faxq.ReceiveStatus(device.Name, "E")
-	}
+	}*/
 
 	// Start interacting with the caller
 
-	if gofaxlib.Config.Gofaxd.Answerafter != 0 {
+	if gofaxlib.Config.Faxing.AnswerAfter != 0 {
 		c.Execute("ring_ready", "", true)
-		c.Execute("sleep", strconv.FormatUint(gofaxlib.Config.Gofaxd.Answerafter, 10), true)
+		c.Execute("sleep", strconv.FormatUint(gofaxlib.Config.Faxing.AnswerAfter, 10), true)
 	}
 
 	c.Execute("answer", "", true)
 
-	if gofaxlib.Config.Gofaxd.Waittime != 0 {
-		c.Execute("playback", "silence_stream://"+strconv.FormatUint(gofaxlib.Config.Gofaxd.Waittime, 10), true)
+	if gofaxlib.Config.Faxing.WaitTime != 0 {
+		c.Execute("playback", "silence_stream://"+strconv.FormatUint(gofaxlib.Config.Faxing.WaitTime, 10), true)
 	}
 
 	// Find filename in recvq to save received .tif
-	seq, err := gofaxlib.GetSeqFor(recvqDir)
+	/*seq, err := gofaxlib.GetSeqFor(recvqDir)
 	if err != nil {
 		c.Send("exit")
-		sessionlog.Log(err)
+		logManager.Log(err)
 		return
-	}
+	}*/
 	// todo can we require to a database instead or just in memory and pass to a channel?
-	filename := filepath.Join(recvqDir, fmt.Sprintf(recvqFileFormat, seq))
-	filenameAbs := filepath.Join(gofaxlib.Config.Hylafax.Spooldir, filename)
+	filename := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, channelUUID.String()))
 
-	sessionlog.Log("Rxfax to", filenameAbs)
+	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		"FreeSwitch.EventServer",
+		"Rxfax to %s",
+		logrus.DebugLevel,
+		map[string]interface{}{"uuid": channelUUID.String()}, filename,
+	))
 
 	/*
-
 		todo for inbound calls from carrier if they send t.38, we will support, but for outbound,
 		we should relay it in a sense. We will need to check the gateway and if it is a t.38 gateway?
 
@@ -253,7 +275,6 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			    <action application="bridge" data="sofia/external/1234@host"/>
 			  </condition>
 			</extension>
-
 	*/
 
 	c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
@@ -270,10 +291,10 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	// and then add it to the database or
 	// something because freeswitch needs
 	// to do it like that, hmm...
-	c.Execute("rxfax", filenameAbs, true)
+	c.Execute("rxfax", filename, true)
 	c.Execute("hangup", "", true)
 
-	result := gofaxlib.NewFaxResult(channelUUID, sessionlog)
+	result := gofaxlib.NewFaxResult(channelUUID, e.server.logManager)
 	es := gofaxlib.NewEventStream(c)
 
 	pages := result.TransferredPages
@@ -284,7 +305,12 @@ EventLoop:
 		select {
 		case ev := <-es.Events():
 			if ev.Get("Content-Type") == "text/disconnect-notice" {
-				sessionlog.Log("Received disconnect message")
+				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+					"FreeSwitch.EventServer",
+					"Received disconnect message",
+					logrus.WarnLevel,
+					map[string]interface{}{"uuid": channelUUID.String()},
+				))
 				//c.Close()
 				//break EventLoop
 			} else {
@@ -296,51 +322,76 @@ EventLoop:
 
 				if pages != result.TransferredPages {
 					pages = result.TransferredPages
-					if device != nil {
+					/*if device != nil {
 						gofaxlib.Faxq.ReceiveStatus(device.Name, "P")
-					}
+					}*/
 				}
 			}
 		case err := <-es.Errors():
 			if err.Error() == "EOF" {
-				sessionlog.Log("Event socket client disconnected")
+				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+					"FreeSwitch.EventServer",
+					"Event socket client disconnected",
+					logrus.ErrorLevel,
+					map[string]interface{}{"uuid": channelUUID.String()},
+				))
 			} else {
-				sessionlog.Log("Error:", err)
+				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+					"FreeSwitch.EventServer",
+					"Error: %v",
+					logrus.ErrorLevel,
+					map[string]interface{}{"uuid": channelUUID.String()}, err,
+				))
 			}
 			break EventLoop
 		case _ = <-e.killChan:
-			sessionlog.Log("Kill reqeust received, destroying channel")
+			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				"FreeSwitch.EventServer",
+				"Kill reqeust received, destroying channel",
+				logrus.ErrorLevel,
+				map[string]interface{}{"uuid": channelUUID.String()},
+			))
 			c.Send(fmt.Sprintf("api uuid_kill %v", channelUUID))
 			c.Close()
 			return
 		}
 	}
 
-	if device != nil {
+	/*if device != nil {
 		gofaxlib.Faxq.ReceiveStatus(device.Name, "D")
-	}
-	sessionlog.Logf("Success: %v, Hangup Cause: %v, Result: %v", result.Success, result.Hangupcause, result.ResultText)
+	}*/
+	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		"FreeSwitch.EventServer",
+		"Success: %v, Hangup Cause: %v, Result: %v",
+		logrus.InfoLevel,
+		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.Hangupcause, result.ResultText,
+	))
 
 	xfl := &gofaxlib.XFRecord{}
-	xfl.Commid = sessionlog.CommID()
+	xfl.Commid = channelUUID.String()
 	xfl.SetResult(result)
-	xfl.Modem = usedDevice
+	xfl.Modem = gateway // parse this better?
 	xfl.Filename = filename
 	xfl.Destnum = recipient
 	xfl.Cidnum = cidnum
 	xfl.Cidname = cidname
-	if err = xfl.SaveReceptionReport(); err != nil {
-		sessionlog.Log(err)
-	}
+	/*if err = xfl.SaveReceptionReport(); err != nil {
+		logManager.Log(err)
+	}*/
 
 	// If reception failed:
 	// Check if softmodem fallback should be enabled on the next call
-	if gofaxlib.Config.Freeswitch.SoftmodemFallback && !result.Success {
+	if gofaxlib.Config.FreeSwitch.SoftmodemFallback && !result.Success {
 		var activateFallback bool
 
 		if result.NegotiateCount > 1 {
 			// Activate fallback if negotiation was repeated
-			sessionlog.Logf("Fax failed with %d negotiations, enabling softmodem fallback for calls from/to %s.", result.NegotiateCount, cidnum)
+			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				"FreeSwitch.EventServer",
+				"Faxing failed with %d negotiations, enabling softmodem fallback for calls from/to %s.",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": channelUUID.String()}, result.NegotiateCount, cidnum,
+			))
 			activateFallback = true
 		} else {
 			var badrows uint
@@ -349,7 +400,12 @@ EventLoop:
 			}
 			if badrows > 0 {
 				// Activate fallback if any bad rows were present
-				sessionlog.Logf("Fax failed with %d bad rows in %d pages, enabling softmodem fallback for calls from/to %s.", badrows, result.TransferredPages, cidnum)
+				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+					"FreeSwitch.EventServer",
+					"Faxing failed with %d bad rows in %d pages, enabling softmodem fallback for calls from/to %s.",
+					logrus.InfoLevel,
+					map[string]interface{}{"uuid": channelUUID.String()}, badrows, result.TransferredPages, cidnum,
+				))
 				activateFallback = true
 			}
 		}
@@ -357,14 +413,33 @@ EventLoop:
 		if activateFallback {
 			err = gofaxlib.SetSoftmodemFallback(nil, cidnum, true)
 			if err != nil {
-				sessionlog.Log(err)
+				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+					"FreeSwitch.EventServer",
+					err.Error(),
+					logrus.ErrorLevel,
+					map[string]interface{}{"uuid": channelUUID.String()},
+				))
 			}
 		}
 
 	}
+	if !result.Success {
+		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			"FreeSwitch.EventServer",
+			result.ResultText,
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": channelUUID.String()},
+		))
+	}
+	// todo pass the xfl to a channel for db saving and further routing
+
+	// todo check if it was from our primary gateways, if not,
+	// then we have to send it to the router for further processing
 
 	// Process received file
-	rcvdcmd := gofaxlib.Config.Gofaxd.FaxRcvdCmd
+	// todo send information to inbound channel for db saving, and further routing
+
+	/*rcvdcmd := gofaxlib.Config.Gofaxd.FaxRcvdCmd
 	if rcvdcmd == "" {
 		rcvdcmd = defaultFaxrcvdCmd
 	}
@@ -373,19 +448,19 @@ EventLoop:
 		errmsg = result.ResultText
 	}
 
-	cmd := exec.Command(rcvdcmd, filename, usedDevice, sessionlog.CommID(), errmsg, cidnum, cidname, recipient, gateway)
+	cmd := exec.Command(rcvdcmd, filename, usedDevice, logManager.CommID(), errmsg, cidnum, cidname, recipient, gateway)
 	extraEnv := []string{
 		fmt.Sprintf("HANGUPCAUSE=%s", result.Hangupcause),
 		fmt.Sprintf("TRANSFER_RATE=%d", result.TransferRate),
 	}
 	cmd.Env = append(os.Environ(), extraEnv...)
-	sessionlog.Log("Calling", cmd.Path, cmd.Args)
+	logManager.Log("Calling", cmd.Path, cmd.Args)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		sessionlog.Log(cmd.Path, "ended with", err)
-		sessionlog.Log(output)
+		logManager.Log(cmd.Path, "ended with", err)
+		logManager.Log(output)
 	} else {
-		sessionlog.Log(cmd.Path, "ended successfully")
-	}
+		logManager.Log(cmd.Path, "ended successfully")
+	}*/
 
 	return
 }

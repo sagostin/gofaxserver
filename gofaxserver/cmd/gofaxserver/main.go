@@ -20,15 +20,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/gonicus/gofaxip/gofaxlib"
+	"github.com/gonicus/gofaxip/gofaxlib/logger"
 	"github.com/gonicus/gofaxip/gofaxserver"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
-	"github.com/gonicus/gofaxip/gofaxlib"
-	"github.com/gonicus/gofaxip/gofaxlib/logger"
 )
 
 const (
@@ -37,7 +33,7 @@ const (
 )
 
 var (
-	configFile = flag.String("c", defaultConfigfile, "GOfax configuration file")
+	configFile = flag.String("c", defaultConfigfile, "gofaxserver configuration file")
 	// deviceID    = flag.String("m", "", "Virtual modem device ID")
 	showVersion = flag.Bool("version", false, "Show version information")
 
@@ -79,68 +75,9 @@ func main() {
 	logger.Logger.Printf("%v gofaxserver %v starting", productName, version)
 	gofaxlib.LoadConfig(*configFile)
 
-	// todo start rabbitmq connection??
-	// todo connect to the database
-	// todo start the web server
-
-	// todo what??
-	if err := os.Chdir(gofaxlib.Config.Hylafax.Spooldir); err != nil {
-		logger.Logger.Print(err)
-		log.Fatal(err)
-	}
-
-	// Shut down receiving lines when killed
-	sigchan := make(chan os.Signal, 1)
-	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
-
-	// Start modem device manager
-	/*var err error
-	devmanager, err = newManager(modemPrefix, gofaxlib.Config.Hylafax.Modems)
-	if err != nil {
-		logger.Logger.Fatal(err)
-	}*/
-
-	/* if *deviceID == "" || !(flag.NArg() > 0) {
-		logger.Logger.Print(usage)
-		log.Fatal(usage)
-	}*/
-
-	/*qfilename := flag.Arg(0)
-	if qfilename == "" {
-		logger.Logger.Fatalln("No qfile provided on command line")
-	}*/
-
-	/*devicefifo := filepath.Join(gofaxlib.Config.Hylafax.Spooldir, fifoPrefix+*deviceID)
-	gofaxlib.SendFIFO(devicefifo, "SB")
-
-	returned, err := gofaxserver.SendQfileFromDisk(qfilename, *deviceID)
-	if err != nil {
-		logger.Logger.Printf("Error processing qfile %v: %v", qfilename, err)
-		returned = gofaxserver.SendFailed
-	}*/
-
-	// gofaxlib.SendFIFO(devicefifo, "SR")
-
-	if len(flag.Args()) > 1 {
-		logger.Logger.Println("Batching not supported, only the first job was processed, all other jobs will be requeued. Please set 'MaxBatchJobs: 1' in /etc/hylafax/config")
-	}
-	/* logger.Logger.Print("Exiting with status ", returned)
-	os.Exit(int(returned))*/
-
 	// Start event socket server to handle incoming calls
-	server := gofaxserver.NewEventSocketServer()
-	server.Start()
+	server := gofaxserver.NewServer()
+	go server.Start()
 
-	// Block until something happens
-	select {
-	case err := <-server.Errors():
-		logger.Logger.Fatal(err)
-	case sig := <-sigchan:
-		logger.Logger.Print("Received ", sig, ", killing all channels")
-		server.Kill()
-		// devmanager.SetAllDown()
-		time.Sleep(3 * time.Second)
-		logger.Logger.Print("Terminating")
-		os.Exit(0)
-	}
+	select {}
 }

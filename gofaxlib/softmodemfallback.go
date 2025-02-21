@@ -19,7 +19,7 @@ func GetSoftmodemFallback(c *eventsocket.Connection, cidnum string) (bool, error
 
 	var err error
 	if c == nil {
-		c, err = eventsocket.Dial(Config.FreeSwitch.Socket, Config.FreeSwitch.Password)
+		c, err = eventsocket.Dial(Config.FreeSwitch.Socket, Config.FreeSwitch.EventClientSocketPassword)
 		if err != nil {
 			return false, err
 		}
@@ -43,7 +43,7 @@ func SetSoftmodemFallback(c *eventsocket.Connection, cidnum string, enabled bool
 
 	var err error
 	if c == nil {
-		c, err = eventsocket.Dial(Config.FreeSwitch.Socket, Config.FreeSwitch.Password)
+		c, err = eventsocket.Dial(Config.FreeSwitch.Socket, Config.FreeSwitch.EventClientSocketPassword)
 		if err != nil {
 			return err
 		}

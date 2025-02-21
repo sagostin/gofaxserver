@@ -1,19 +1,42 @@
 package gofaxserver
 
-import "github.com/gonicus/gofaxip/gofaxlib/logger"
+import (
+	"github.com/gonicus/gofaxip/gofaxlib"
+	"github.com/gonicus/gofaxip/gofaxlib/logger"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
 
 type Server struct {
-	fsSocket  *EventSocketServer
-	endpoints []string
+	fsSocket             *EventSocketServer
+	router               *Router
+	endpoints            []string
+	logManager           *gofaxlib.LogManager
+	fsInboundXFRecordCh  chan *gofaxlib.XFRecord
+	fsOutboundXFRecordCh chan *gofaxlib.XFRecord
 }
 
 func NewServer() *Server {
-	return &Server{}
+	return &Server{fsInboundXFRecordCh: make(chan *gofaxlib.XFRecord), fsOutboundXFRecordCh: make(chan *gofaxlib.XFRecord)}
 }
 
 func (s *Server) Start() {
+	logManager := gofaxlib.NewLogManager(gofaxlib.NewLokiClient())
+	logManager.LoadTemplates()
+	s.logManager = logManager
+
+	// Shut down receiving lines when killed
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
+
+	// start the router
+	router := NewRouter(s)
+	s.router = router
+
 	// start freeswitch inbound event socket server
-	fsSocket := NewEventSocketServer()
+	fsSocket := NewEventSocketServer(s)
 	fsSocket.Start()
 	go func() {
 		select {
@@ -26,6 +49,11 @@ func (s *Server) Start() {
 	// start web server
 	// todo
 
-	// start loki logger channel / client
-	// todo
+	select {
+	case sig := <-sigchan:
+		logger.Logger.Print("Received ", sig, ", killing all channels")
+		time.Sleep(3 * time.Second)
+		logger.Logger.Print("Terminating")
+		os.Exit(0)
+	}
 }

@@ -1,39 +1,40 @@
 {
-  "Freeswitch": {
-    "Socket": "127.0.0.1:8021",
-    "Password": "ClueCon",
-    "Gateway": ["default"],
-    "Ident": "+1 337",
-    "Header": "GONICUS LABS",
-    "Verbose": false,
-    "SoftmodemFallback": true
+  "freeswitch": {
+    "event_client_socket": "127.0.0.1:8021",
+    "event_server_socket": "127.0.0.1:8022",
+    "password": "ClueCon",
+    "gateway": [
+      "default"
+    ],
+    "ident": "+1 337",
+    "header": "GONICUS LABS",
+    "verbose": false,
+    "softmodem_fallback": true
   },
-  "Hylafax": {
-    "Spooldir": "/var/spool/hylafax",
-    "Modems": 5,
-    "Xferfaxlog": "log/xferfaxlog"
-  },
-  "Gofaxd": {
-    "Socket": "127.0.0.1:8022",
-    "EnableT38": true,
-    "RequestT38": true,
-    "RecipientFromDiversionHeader": false,
-    "Answerafter": 2000,
-    "Waittime": 1000
-  },
-  "Gofaxsend": {
-    "EnableT38": true,
-    "RequestT38": true,
-    "FaxNumber": "4711",
-    "CallPrefix": "",
-    "DynamicConfig": "",
-    "DisableV17AfterRetry": "0",
-    "DisableECMAfterRetry": "0",
-    "CidName": "sender",
-    "FailedResponse": [
+  "faxing": {
+    "temp_dir": "/opt/gofaxip/tmp",
+    "enable_t38": true,
+    "request_t38": true,
+    "recipient_from_diversion_header": false,
+    "answer_after": 2000,
+    "wait_time": 1000,
+    "disable_v17_after_retry": "0",
+    "disable_ecm_after_retry": "0",
+    "failed_response": [
       "UNALLOCATED_NUMBER",
       "CALL_REJECTED"
-    ],
-    "FailedResponseMap": {}
+    ]
+  },
+  "database": {
+    "host": "localhost",
+    "port": "5432",
+    "user": "gofax",
+    "password": "gofaxpassword",
+    "database": "gofaxdb"
+  },
+  "loki": {
+    "push_url": "http://loki-server:3100/loki/api/v1/push",
+    "username": "lokiuser",
+    "password": "lokipassword"
   }
 }
