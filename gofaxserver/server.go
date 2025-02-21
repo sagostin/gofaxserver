@@ -3,23 +3,39 @@ package gofaxserver
 import (
 	"github.com/gonicus/gofaxip/gofaxlib"
 	"github.com/gonicus/gofaxip/gofaxlib/logger"
+	"gorm.io/gorm"
 	"os"
 	"os/signal"
+	"regexp"
+	"sync"
 	"syscall"
 	"time"
 )
 
 type Server struct {
-	fsSocket             *EventSocketServer
-	router               *Router
-	endpoints            []string
-	logManager           *gofaxlib.LogManager
-	fsInboundXFRecordCh  chan *gofaxlib.XFRecord
-	fsOutboundXFRecordCh chan *gofaxlib.XFRecord
+	fsSocket        *EventSocketServer
+	router          *Router
+	logManager      *gofaxlib.LogManager
+	dialplanManager *DialplanManager
+	faxJobRouting   chan *FaxJob
+	dB              *gorm.DB
+	// In-memory maps for Tenants and TenantNumbers.
+	mu            sync.RWMutex
+	tenants       map[uint]*Tenant         // keyed by Tenant.ID
+	tenantNumbers map[string]*TenantNumber // keyed by the phone number string
+	// Endpoints assigned directly to a tenant (keyed by tenant ID).
+	tenantEndpoints map[uint][]*Endpoint
+	// Endpoints assigned to a specific number (keyed by the phone number string).
+	numberEndpoints map[string][]*Endpoint
 }
 
 func NewServer() *Server {
-	return &Server{fsInboundXFRecordCh: make(chan *gofaxlib.XFRecord), fsOutboundXFRecordCh: make(chan *gofaxlib.XFRecord)}
+	return &Server{faxJobRouting: make(chan *FaxJob),
+		tenants:         make(map[uint]*Tenant),
+		tenantNumbers:   make(map[string]*TenantNumber),
+		tenantEndpoints: make(map[uint][]*Endpoint),
+		numberEndpoints: make(map[string][]*Endpoint),
+	}
 }
 
 func (s *Server) Start() {
@@ -27,12 +43,16 @@ func (s *Server) Start() {
 	logManager.LoadTemplates()
 	s.logManager = logManager
 
+	s.dialplanManager = loadDialplan()
+
 	// Shut down receiving lines when killed
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
 	// start the router
 	router := NewRouter(s)
+	router.Start()
+
 	s.router = router
 
 	// start freeswitch inbound event socket server
@@ -56,4 +76,21 @@ func (s *Server) Start() {
 		logger.Logger.Print("Terminating")
 		os.Exit(0)
 	}
+}
+
+func loadDialplan() *DialplanManager {
+	// Define transformation rules:
+	rule1 := TransformationRule{
+		Pattern:     regexp.MustCompile(`^1(\d{10})$`),
+		Replacement: "$1",
+	}
+
+	// Rule 2: If the number starts with "001", remove the leading "00"
+	rule2 := TransformationRule{
+		Pattern:     regexp.MustCompile(`^(\d{10})$`),
+		Replacement: "$1",
+	}
+
+	// Initialize the DialplanManager with tenant numbers and transformation rules.
+	return NewDialplanManager([]TransformationRule{rule1, rule2})
 }

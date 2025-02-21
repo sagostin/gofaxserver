@@ -30,24 +30,24 @@ const (
 
 // XFRecord holds all data for a HylaFAX xferfaxlog record
 type XFRecord struct {
-	Ts       time.Time
-	Commid   string
-	Modem    string
-	Jobid    uint
-	Jobtag   string
-	Filename string
-	Sender   string
-	Destnum  string
-	RemoteID string
-	Params   uint
-	Pages    uint
-	Jobtime  time.Duration
-	Conntime time.Duration
-	Reason   string
-	Cidname  string
-	Cidnum   string
-	Owner    string
-	Dcs      string
+	Ts       time.Time     `json:"ts"`
+	Commid   string        `json:"commid,omitempty"`
+	Modem    string        `json:"modem,omitempty"`
+	Jobid    uint          `json:"jobid,omitempty"`
+	Jobtag   string        `json:"jobtag,omitempty"`
+	Filename string        `json:"filename,omitempty"`
+	Sender   string        `json:"sender,omitempty"`
+	Destnum  string        `json:"destnum,omitempty"`
+	RemoteID string        `json:"remote_id,omitempty"`
+	Params   uint          `json:"params,omitempty"`
+	Pages    uint          `json:"pages,omitempty"`
+	Jobtime  time.Duration `json:"jobtime,omitempty"`
+	Conntime time.Duration `json:"conntime,omitempty"`
+	Reason   string        `json:"reason,omitempty"`
+	Cidname  string        `json:"cidname,omitempty"`
+	Cidnum   string        `json:"cidnum,omitempty"`
+	Owner    string        `json:"owner,omitempty"`
+	Dcs      string        `json:"dcs,omitempty"`
 }
 
 // SetResult populates xferfaxlog record fields from a FaxResult

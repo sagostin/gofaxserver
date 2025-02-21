@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/gonicus/gofaxip/gofaxlib"
 	"github.com/gonicus/gofaxip/gofaxlib/logger"
@@ -156,6 +157,8 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	}*/
 
 	csi := gofaxlib.Config.FreeSwitch.Ident
+
+	// todo pre router, we need to check if the number is in the database??!??!? or should we just block based on outbound
 
 	// Query DynamicConfig
 	/*if dcCmd := gofaxlib.Config.Faxing.DynamicConfig; dcCmd != "" {
@@ -315,7 +318,7 @@ EventLoop:
 				//break EventLoop
 			} else {
 				result.AddEvent(ev)
-				if result.Hangupcause != "" {
+				if result.HangupCause != "" {
 					c.Close()
 					break EventLoop
 				}
@@ -364,17 +367,8 @@ EventLoop:
 		"FreeSwitch.EventServer",
 		"Success: %v, Hangup Cause: %v, Result: %v",
 		logrus.InfoLevel,
-		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.Hangupcause, result.ResultText,
+		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
 	))
-
-	xfl := &gofaxlib.XFRecord{}
-	xfl.Commid = channelUUID.String()
-	xfl.SetResult(result)
-	xfl.Modem = gateway // parse this better?
-	xfl.Filename = filename
-	xfl.Destnum = recipient
-	xfl.Cidnum = cidnum
-	xfl.Cidname = cidname
 	/*if err = xfl.SaveReceptionReport(); err != nil {
 		logManager.Log(err)
 	}*/
@@ -433,6 +427,24 @@ EventLoop:
 	}
 	// todo pass the xfl to a channel for db saving and further routing
 
+	faxjob := &FaxJob{
+		UUID:           channelUUID, // reuse the UUID from the freeswitch channel
+		CalleeNumber:   recipient,
+		CallerIdNumber: cidnum,
+		CallerIdName:   cidname,
+		FileName:       filename,
+		UseECM:         true, // set this by default
+		DisableV17:     false,
+		Result:         result,
+		SourceRoutingInformation: SourceRoutingInformation{
+			Timestamp:  time.Now(),
+			SourceType: "gateway", // gateway is freeswitch
+			Source:     gateway,
+		},
+	}
+
+	e.server.faxJobRouting <- faxjob
+
 	// todo check if it was from our primary gateways, if not,
 	// then we have to send it to the router for further processing
 
@@ -450,7 +462,7 @@ EventLoop:
 
 	cmd := exec.Command(rcvdcmd, filename, usedDevice, logManager.CommID(), errmsg, cidnum, cidname, recipient, gateway)
 	extraEnv := []string{
-		fmt.Sprintf("HANGUPCAUSE=%s", result.Hangupcause),
+		fmt.Sprintf("HANGUPCAUSE=%s", result.HangupCause),
 		fmt.Sprintf("TRANSFER_RATE=%d", result.TransferRate),
 	}
 	cmd.Env = append(os.Environ(), extraEnv...)

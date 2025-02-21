@@ -84,7 +84,7 @@ type FaxResult struct {
 	StartTs time.Time `json:"start_ts"`
 	EndTs   time.Time `json:"end_ts"`
 
-	Hangupcause string `json:"hangupcause,omitempty"`
+	HangupCause string `json:"hangupcause,omitempty"`
 
 	TotalPages       uint   `json:"total_pages,omitempty"`
 	TransferredPages uint   `json:"transferred_pages,omitempty"`
@@ -120,7 +120,7 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 		}
 		if callstate == "HANGUP" {
 			f.EndTs = time.Now()
-			f.Hangupcause = ev.Get("Hangup-Cause")
+			f.HangupCause = ev.Get("Hangup-Cause")
 		}
 
 	case "CUSTOM":

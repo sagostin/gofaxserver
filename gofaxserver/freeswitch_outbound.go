@@ -23,7 +23,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -61,10 +60,10 @@ func SendQfileFromDisk(filename, deviceID string) (SendResult, error) {
 }*/
 
 // SendFaxFS immediately tries to send the given qfile using FreeSWITCH
-func SendFaxFS(faxjob FaxJob, deviceID string) (returned SendResult, err error) {
+func (e *EventSocketServer) SendFax(faxjob FaxJob, deviceID string) (returned SendResult, err error) {
 	returned = SendFailed
 
-	/*var jobid uint
+	var jobid uint
 	if jobidstr := qf.GetString("jobid"); jobidstr != "" {
 		if i, err := strconv.Atoi(jobidstr); err == nil {
 			jobid = uint(i)
@@ -74,15 +73,15 @@ func SendFaxFS(faxjob FaxJob, deviceID string) (returned SendResult, err error) 
 	if jobid == 0 {
 		err = fmt.Errorf("Error parsing jobid")
 		return
-	}*/
+	}
 
 	// Create FaxJob structure
 	/*faxjob := NewFaxJob()*/
-	faxjob.Number = fmt.Sprint(gofaxlib.Config.Gofaxsend.CallPrefix, qf.GetString("external"))
-	faxjob.Cidnum = gofaxlib.Config.Gofaxsend.FaxNumber //qf.GetString("faxnumber")
-	faxjob.Ident = gofaxlib.Config.Freeswitch.Ident
-	faxjob.Header = gofaxlib.Config.Freeswitch.Header
-	faxjob.Gateways = gofaxlib.Config.Freeswitch.Gateway
+	faxjob.FreeSwitch.Number = fmt.Sprint(gofaxlib.Config.Gofaxsend.CallPrefix, qf.GetString("external"))
+	faxjob.FreeSwitch.Cidnum = gofaxlib.Config.Gofaxsend.FaxNumber //qf.GetString("faxnumber")
+	faxjob.FreeSwitch.Ident = gofaxlib.Config.Freeswitch.Ident
+	faxjob.FreeSwitch.Header = gofaxlib.Config.Freeswitch.Header
+	faxjob.FreeSwitch.Gateways = gofaxlib.Config.Freeswitch.Gateway
 
 	if ecmMode, err := qf.GetInt("desiredec"); err == nil {
 		faxjob.UseECM = ecmMode != 0
@@ -93,34 +92,15 @@ func SendFaxFS(faxjob FaxJob, deviceID string) (returned SendResult, err error) 
 			faxjob.DisableV17 = true
 		}
 	}
-
-	// Add TIFFs from queue file
-	faxparts := qf.GetAll("fax")
-	if len(faxparts) == 0 {
-		err = fmt.Errorf("No fax file(s) found in qfile")
-		return
-	}
-	faxfile := FaxFile{}
-	for _, fileentry := range faxparts {
-		err = faxfile.AddItem(fileentry)
-		if err != nil {
-			return
-		}
-	}
-
-	// Merge TIFFs
-	faxjob.Filename = filepath.Join(os.TempDir(), "gofaxsend_"+faxjob.UUID.String()+".tif")
-	defer os.Remove(faxjob.Filename)
-	if err = faxfile.WriteTo(faxjob.Filename); err != nil {
-		return
-	}
-
-	// Start communication session and open logfile
-	sessionlog, err := gofaxlib.NewSessionLogger(jobid)
-	if err != nil {
-		return
-	}
 	qf.Set("commid", sessionlog.CommID())
+
+	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		"FreeSwitch.SendFax",
+		"Kill reqeust received, destroying channel",
+		logrus.ErrorLevel,
+		map[string]interface{}{"uuid": channelUUID.String()},
+	))
+
 	sessionlog.Logf("Processing hylafax commid %s as freeswitch call %v", sessionlog.CommID(), faxjob.UUID)
 
 	// Query DynamicConfig
@@ -243,7 +223,7 @@ StatusLoop:
 			qf.Set("csi", result.RemoteID)
 
 			// Break if call is hung up
-			if result.Hangupcause != "" {
+			if result.HangupCause != "" {
 				// Faxing Finished
 				status = result.ResultText
 				if result.Success {
@@ -297,9 +277,9 @@ StatusLoop:
 
 	if result != nil {
 		if result.Success {
-			sessionlog.Logf("Faxing sent successfully. Hangup Cause: %v. Result: %v", result.Hangupcause, status)
+			sessionlog.Logf("Faxing sent successfully. Hangup Cause: %v. Result: %v", result.HangupCause, status)
 		} else {
-			sessionlog.Logf("Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v", returned == SendRetry, result.Hangupcause, status)
+			sessionlog.Logf("Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v", returned == SendRetry, result.HangupCause, status)
 		}
 		xfl.SetResult(result)
 	} else {
@@ -535,7 +515,7 @@ func (t *eventClient) start() {
 		select {
 		case ev := <-es.Events():
 			result.AddEvent(ev)
-			if result.Hangupcause != "" {
+			if result.HangupCause != "" {
 
 				// If eventClient failed:
 				// Check if softmodem fallback should be enabled on the next call
