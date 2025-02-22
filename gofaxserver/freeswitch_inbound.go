@@ -19,6 +19,7 @@ package gofaxserver
 
 import (
 	"fmt"
+	"github.com/gonicus/gofaxip/gofaxlib/logger"
 	"github.com/sirupsen/logrus"
 	"path/filepath"
 	"regexp"
