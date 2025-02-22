@@ -24,18 +24,21 @@ type FaxJob struct {
 
 	Endpoints                []*Endpoint         `json:"gateways,omitempty"` // List of endpoints and such
 	Result                   *gofaxlib.FaxResult `json:"result,omitempty"`
-	SourceRoutingInformation FaxSourceInfo       `json:"source_routing_information,omitempty"` // Routing information for the fax
+	SourceRoutingInformation FaxSourceInfo       `json:"fax_source_info,omitempty"` // Routing information for the fax
 
 	// These fields may be updated later in the process:
-	NPages     int    `json:"npages,omitempty"`     // number of pages sent
-	DataFormat string `json:"dataformat,omitempty"` // encoding or data format for the fax
-	SignalRate int    `json:"signalrate,omitempty"` // signal rate (transfer rate)
-	CSI        string `json:"csi,omitempty"`        // remote Caller Station Identification
-	Status     string `json:"status,omitempty"`     // current status (e.g., "Dialing", "Completed", etc.)
-	Returned   string `json:"returned,omitempty"`   // returned result code (e.g., SendDone, SendRetry, SendFailed)
-	TotDials   int    `json:"totdials"`             // total attempted calls (as an int)
-	NDials     int    `json:"ndials"`               // consecutive failed call attempts
-	TotTries   int    `json:"tottries"`             // total answered or attempted calls
+	NPages     int           `json:"npages,omitempty"`     // number of pages sent
+	DataFormat string        `json:"dataformat,omitempty"` // encoding or data format for the fax
+	SignalRate int           `json:"signalrate,omitempty"` // signal rate (transfer rate)
+	CSI        string        `json:"csi,omitempty"`        // remote Caller Station Identification
+	Status     string        `json:"status,omitempty"`     // current status (e.g., "Dialing", "Completed", etc.)
+	Returned   string        `json:"returned,omitempty"`   // returned result code (e.g., SendDone, SendRetry, SendFailed)
+	TotDials   int           `json:"totdials"`             // total attempted calls (as an int)
+	NDials     int           `json:"ndials"`               // consecutive failed call attempts
+	TotTries   int           `json:"tottries"`             // total answered or attempted calls
+	JobTime    time.Duration `json:"jobtime,omitempty"`
+	ConnTime   time.Duration `json:"conntime,omitempty"`
+	Ts         time.Time     `json:"ts"` // timestamp of the job
 }
 
 type FaxSourceInfo struct {

@@ -20,6 +20,7 @@ package gofaxserver
 import (
 	"bytes"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
@@ -59,6 +60,8 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob) (returned SendResult, err err
 		err = fmt.Errorf("Error parsing jobid")
 		return
 	}*/
+
+	faxjob.UUID = uuid.New()
 
 	// Create FaxJob structure
 	/*faxjob := NewFaxJob()*/
@@ -265,16 +268,32 @@ StatusLoop:
 	if result != nil {
 		if result.Success {
 			returned = SendDone
-			sessionlog.Logf("Faxing sent successfully. Hangup Cause: %v. Result: %v", result.HangupCause, status)
+			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				"FreeSwitch.SendFax",
+				"Faxing sent successfully. Hangup Cause: %v. Result: %v",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": faxjob.UUID.String()}, result.HangupCause, status,
+			))
 		} else {
-			sessionlog.Logf("Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v", returned == SendRetry, result.HangupCause, status)
+			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				"FreeSwitch.SendFax",
+				"Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": faxjob.UUID.String()}, returned == SendRetry, result.HangupCause, status,
+			))
 		}
 		faxjob.Result = result
 	} else {
-		sessionlog.Logf("Call failed. Retry: %v. Result: %v", returned == SendRetry, status)
-		xfl.Reason = status
-		xfl.Ts = transmitTs
-		xfl.Jobtime = time.Now().Sub(transmitTs)
+		returned = SendRetry
+		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			"FreeSwitch.SendFax",
+			"Call failed. Retry: %v. Result: %v",
+			logrus.InfoLevel,
+			map[string]interface{}{"uuid": faxjob.UUID.String()}, returned == SendRetry, status,
+		))
+		faxjob.Status = status
+		faxjob.Ts = transmitTs
+		faxjob.JobTime = time.Now().Sub(transmitTs)
 		faxjob.Result = result
 	}
 
