@@ -20,6 +20,7 @@ package gofaxlib
 import (
 	"errors"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"strconv"
 	"strings"
 	"time"
@@ -114,7 +115,11 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 	case "CHANNEL_CALLSTATE":
 		// Call state has changed
 		callstate := ev.Get("Channel-Call-State")
-		f.sessionlog.Log("Call state change:", callstate)
+		f.logManager.SendLog(f.logManager.BuildLog(
+			"FreeSwitch.Transmit",
+			"Call state change: %v",
+			logrus.InfoLevel,
+			map[string]interface{}{}, callstate))
 		if callstate == "ACTIVE" {
 			f.StartTs = time.Now()
 		}
@@ -137,7 +142,11 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 			if rate, err := strconv.Atoi(ev.Get("Faxing-Transfer-Rate")); err == nil {
 				f.TransferRate = uint(rate)
 			}
-			f.sessionlog.Logf("Remote ID: \"%v\", Transfer Rate: %v, ECM=%v", f.RemoteID, f.TransferRate, f.Ecm)
+			f.logManager.SendLog(f.logManager.BuildLog(
+				"FreeSwitch.Transmit",
+				"Remote ID: \"%v\", Transfer Rate: %v, ECM=%v",
+				logrus.InfoLevel,
+				map[string]interface{}{}, f.RemoteID, f.TransferRate, f.Ecm))
 
 		case "spandsp::rxfaxpageresult":
 			action = "received"
@@ -178,7 +187,11 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 			}
 
 			f.PageResults = append(f.PageResults, *pr)
-			f.sessionlog.Logf("Page %d %v: %v", f.TransferredPages, action, *pr)
+			f.logManager.SendLog(f.logManager.BuildLog(
+				"FreeSwitch.Transmit",
+				"Page %d %v: %v",
+				logrus.InfoLevel,
+				map[string]interface{}{}, f.TransferredPages, action, *pr))
 
 		case "spandsp::rxfaxresult",
 			"spandsp::txfaxresult":

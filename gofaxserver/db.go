@@ -1,5 +1,11 @@
 package gofaxserver
 
+import (
+	"fmt"
+	"gofaxserver/gofaxlib"
+	"os"
+)
+
 func (s *Server) createIndexes() error {
 	// Create index on expires_at column
 	/*err := s.dB.Migrator().CreateIndex(&MediaFile{}, "ExpiresAt")
@@ -10,7 +16,7 @@ func (s *Server) createIndexes() error {
 }
 
 func (s *Server) migrateSchema() error {
-	if err := s.dB.AutoMigrate(&Tenant{}, &TenantNumber{}); err != nil {
+	if err := s.dB.AutoMigrate(&Tenant{}, &TenantNumber{}, &Endpoint{}); err != nil {
 		return err
 	}
 	err := s.createIndexes()
@@ -18,4 +24,36 @@ func (s *Server) migrateSchema() error {
 		return err
 	}
 	return nil
+}
+
+func getPostgresDSN() string {
+	host := gofaxlib.Config.Database.Host
+	if host == "" {
+		host = "localhost"
+	}
+
+	port := gofaxlib.Config.Database.Port
+	if port == "" {
+		port = "5432"
+	}
+
+	user := gofaxlib.Config.Database.User
+	password := gofaxlib.Config.Database.Password
+	dbName := gofaxlib.Config.Database.Database
+	sslMode := os.Getenv("POSTGRES_SSLMODE") // todo
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+
+	timeZone := os.Getenv("POSTGRES_TIMEZONE") // todo
+	if timeZone == "" {
+		timeZone = "America/Vancouver"
+	}
+
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=%s",
+		host, port, user, password, dbName, sslMode, timeZone,
+	)
+
+	return dsn
 }

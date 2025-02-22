@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/gonicus/gofaxip/gofaxlib/logger"
 	"gofaxserver/gofaxlib"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"os"
 	"os/signal"
@@ -50,6 +51,13 @@ func (s *Server) Start() {
 	// Shut down receiving lines when killed
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
+
+	db, err := gorm.Open(postgres.Open(getPostgresDSN()), &gorm.Config{})
+	if err != nil {
+		panic(fmt.Errorf("failed to connect to PostgreSQL: %v", err))
+	}
+
+	s.dB = db
 
 	// start the router
 	queue := NewQueue(s)
