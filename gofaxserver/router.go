@@ -72,7 +72,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 		// route to default gateway for freeswitch
 		var eps []*Endpoint
 		for _, ep := range gofaxlib.Config.FreeSwitch.Gateway {
-			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 0})
+			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
 		}
 		fax.Endpoints = eps
 		r.server.queue.Queue <- fax
