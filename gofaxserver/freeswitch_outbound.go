@@ -33,20 +33,6 @@ import (
 	"github.com/fiorix/go-eventsocket/eventsocket"
 )
 
-const (
-	// Return codes for Hylafax.
-	SendRetry SendResult = iota
-	SendFailed
-	SendDone
-	SendReformat
-	SendV34fail
-	SendV17fail
-	SendBatchfail
-	SendNobatch
-)
-
-type SendResult int
-
 /*// SendQfileFromDisk reads the qfile from disk and then immediately tries to send the given qfile using FreeSWITCH
 func SendQfileFromDisk(filename, deviceID string) (SendResult, error) {
 	// Open qfile
@@ -60,10 +46,9 @@ func SendQfileFromDisk(filename, deviceID string) (SendResult, error) {
 }*/
 
 // SendFaxFS immediately tries to send the given qfile using FreeSWITCH
-func (e *EventSocketServer) SendFax(faxjob FaxJob, deviceID string) (returned SendResult, err error) {
+func (e *EventSocketServer) SendFax(faxjob FaxJob) (returned SendResult, err error) {
 	returned = SendFailed
-
-	var jobid uint
+	/*var jobid uint
 	if jobidstr := qf.GetString("jobid"); jobidstr != "" {
 		if i, err := strconv.Atoi(jobidstr); err == nil {
 			jobid = uint(i)
@@ -73,17 +58,17 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob, deviceID string) (returned Se
 	if jobid == 0 {
 		err = fmt.Errorf("Error parsing jobid")
 		return
-	}
+	}*/
 
 	// Create FaxJob structure
 	/*faxjob := NewFaxJob()*/
-	faxjob.FreeSwitch.Number = fmt.Sprint(gofaxlib.Config.Gofaxsend.CallPrefix, qf.GetString("external"))
+	/*faxjob.FreeSwitch.Number = fmt.Sprint(gofaxlib.Config.Gofaxsend.CallPrefix, qf.GetString("external"))
 	faxjob.FreeSwitch.Cidnum = gofaxlib.Config.Gofaxsend.FaxNumber //qf.GetString("faxnumber")
 	faxjob.FreeSwitch.Ident = gofaxlib.Config.Freeswitch.Ident
 	faxjob.FreeSwitch.Header = gofaxlib.Config.Freeswitch.Header
-	faxjob.FreeSwitch.Gateways = gofaxlib.Config.Freeswitch.Gateway
+	faxjob.FreeSwitch.Gateways = gofaxlib.Config.Freeswitch.Gateway*/
 
-	if ecmMode, err := qf.GetInt("desiredec"); err == nil {
+	/*if ecmMode, err := qf.GetInt("desiredec"); err == nil {
 		faxjob.UseECM = ecmMode != 0
 	}
 
@@ -91,17 +76,15 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob, deviceID string) (returned Se
 		if brMode < 5 { // < 14400bps
 			faxjob.DisableV17 = true
 		}
-	}
-	qf.Set("commid", sessionlog.CommID())
+	}*/
+	/*qf.Set("commid", sessionlog.CommID())*/
 
 	e.server.logManager.SendLog(e.server.logManager.BuildLog(
 		"FreeSwitch.SendFax",
-		"Kill reqeust received, destroying channel",
+		"Processing faxjob %s as freeswitch call",
 		logrus.ErrorLevel,
-		map[string]interface{}{"uuid": channelUUID.String()},
+		map[string]interface{}{"uuid": faxjob.UUID},
 	))
-
-	sessionlog.Logf("Processing hylafax commid %s as freeswitch call %v", sessionlog.CommID(), faxjob.UUID)
 
 	// Query DynamicConfig
 	/*if dcCmd := gofaxlib.Config.Gofaxsend.DynamicConfig; dcCmd != "" {
@@ -154,7 +137,7 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob, deviceID string) (returned Se
 
 	}*/
 
-	switch gofaxlib.Config.Gofaxsend.CidName {
+	/*switch gofaxlib.Config.Gofaxsend.CidName {
 	case "sender":
 		faxjob.Cidname = qf.GetString("sender")
 	case "number":
@@ -163,21 +146,21 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob, deviceID string) (returned Se
 		faxjob.Cidname = faxjob.Cidnum
 	default:
 		faxjob.Cidname = gofaxlib.Config.FreeSwitch.CidName
-	}
+	}*/
 
 	// Total attempted calls
-	totdials, _ := qf.GetInt("totdials")
-	// Consecutive failed attempts to place a call
-	ndials, _ := qf.GetInt("ndials")
-	// Total answered calls
-	tottries, _ := qf.GetInt("tottries")
-
+	/*	totdials, _ := faxjob
+		// Consecutive failed attempts to place a call
+		ndials, _ := qf.GetInt("ndials")
+		// Total answered calls
+		tottries, _ := qf.GetInt("tottries")
+	*/
 	//Auto fallback to slow baudrate after to many tries
 	v17retry, err := strconv.Atoi(gofaxlib.Config.Faxing.DisableV17AfterRetry)
 	if err != nil {
 		v17retry = 0
 	}
-	if v17retry > 0 && tottries >= v17retry {
+	if v17retry > 0 && faxjob.TotTries >= v17retry {
 		faxjob.DisableV17 = true
 	}
 
@@ -186,24 +169,24 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob, deviceID string) (returned Se
 	if err != nil {
 		ecmretry = 0
 	}
-	if ecmretry > 0 && tottries >= ecmretry {
+	if ecmretry > 0 && faxjob.TotTries >= ecmretry {
 		faxjob.UseECM = false
 	}
 
 	// Update status
-	qf.Set("status", "Dialing")
-	totdials++
-	qf.Set("totdials", strconv.Itoa(totdials))
-	if err = qf.Write(); err != nil {
+	//qf.Set("status", "Dialing")
+	faxjob.TotDials++
+	//qf.Set("totdials", strconv.Itoa(totdials))
+	/*if err = qf.Write(); err != nil {
 		sessionlog.Log("Error updating qfile:", err)
 		return SendFailed, nil
-	}
+	}*/
 	// Default: Retry when eventClient fails
 	returned = SendRetry
 
 	// Start eventClient goroutine
 	transmitTs := time.Now()
-	t := newEventClient(faxjob, sessionlog)
+	t := newEventClient(faxjob, e.server.logManager)
 	var result *gofaxlib.FaxResult
 	var status string
 
@@ -212,22 +195,22 @@ StatusLoop:
 	for {
 		select {
 		case page := <-t.PageSent():
-			qf.Set("npages", strconv.Itoa(int(page.Page)))
-			qf.Set("dataformat", page.EncodingName)
+			faxjob.NPages = int(page.Page)
+			/*qf.Set("dataformat", page.EncodingName)
 			if err = qf.Write(); err != nil {
 				sessionlog.Log("Error updating qfile:", err)
-			}
+			}*/
 
 		case result = <-t.Result():
-			qf.Set("signalrate", strconv.Itoa(int(result.TransferRate)))
-			qf.Set("csi", result.RemoteID)
+			faxjob.SignalRate = int(result.TransferRate)
+			faxjob.CSI = result.RemoteID
 
 			// Break if call is hung up
 			if result.HangupCause != "" {
 				// Faxing Finished
 				status = result.ResultText
 				if result.Success {
-					returned = SendDone
+					faxjob.Result = result
 				}
 				break StatusLoop
 			}
@@ -238,18 +221,19 @@ StatusLoop:
 				negstatus = negstatus + "/ECM"
 			}
 			status = negstatus
-			tottries++
-			ndials = 0
-			qf.Set("status", status)
-			qf.Set("tottries", strconv.Itoa(tottries))
+			faxjob.TotTries++
+			faxjob.NDials = 0
+			faxjob.Status = status
+
+			/*qf.Set("tottries", strconv.Itoa(tottries))
 			qf.Set("ndials", strconv.Itoa(ndials))
 			if err = qf.Write(); err != nil {
 				sessionlog.Log("Error updating qfile:", err)
-			}
+			}*/
 
 		case faxerr := <-t.Errors():
-			ndials++
-			qf.Set("ndials", strconv.Itoa(ndials))
+			faxjob.NDials++
+			/*qf.Set("ndials", strconv.Itoa(ndials))*/
 			status = faxerr.Error()
 			if faxerr.Retry() {
 				returned = SendRetry
@@ -260,41 +244,60 @@ StatusLoop:
 		}
 	}
 
-	qf.Set("status", status)
+	faxjob.Status = status
+	faxjob.Returned = strconv.Itoa(int(returned))
+
+	/*qf.Set("status", status)
 	qf.Set("returned", strconv.Itoa(int(returned)))
 	if err = qf.Write(); err != nil {
 		sessionlog.Log("Error updating qfile:", err)
-	}
+	}*/
 
-	xfl := &gofaxlib.XFRecord{}
+	/*xfl := &gofaxlib.XFRecord{}
 	xfl.Commid = sessionlog.CommID()
 	xfl.Modem = deviceID
 	xfl.Jobid = uint(jobid)
 	xfl.Jobtag = qf.GetString("jobtag")
 	xfl.Sender = qf.GetString("mailaddr")
 	xfl.Destnum = qf.GetString("number")
-	xfl.Owner = qf.GetString("owner")
+	xfl.Owner = qf.GetString("owner")*/
 
 	if result != nil {
 		if result.Success {
+			returned = SendDone
 			sessionlog.Logf("Faxing sent successfully. Hangup Cause: %v. Result: %v", result.HangupCause, status)
 		} else {
 			sessionlog.Logf("Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v", returned == SendRetry, result.HangupCause, status)
 		}
-		xfl.SetResult(result)
+		faxjob.Result = result
 	} else {
 		sessionlog.Logf("Call failed. Retry: %v. Result: %v", returned == SendRetry, status)
 		xfl.Reason = status
 		xfl.Ts = transmitTs
 		xfl.Jobtime = time.Now().Sub(transmitTs)
+		faxjob.Result = result
 	}
 
-	if err = xfl.SaveTransmissionReport(); err != nil {
+	/*if err = xfl.SaveTransmissionReport(); err != nil {
 		sessionlog.Log(err)
-	}
+	}*/
 
 	return returned, nil
 }
+
+const (
+	// Return codes for Hylafax.
+	SendRetry SendResult = iota
+	SendFailed
+	SendDone
+	SendReformat
+	SendV34fail
+	SendV17fail
+	SendBatchfail
+	SendNobatch
+)
+
+type SendResult int
 
 type eventClient struct {
 	faxjob FaxJob
@@ -334,17 +337,17 @@ func (t *eventClient) Result() <-chan *gofaxlib.FaxResult {
 // Connect to FreeSWITCH and originate a txfax
 func (t *eventClient) start() {
 
-	if t.faxjob.Number == "" {
+	if t.faxjob.CalleeNumber == "" {
 		t.errorChan <- NewFaxError("Number to dial is empty", false)
 		return
 	}
 
-	if len(t.faxjob.Gateways) == 0 {
+	if len(t.faxjob.Endpoints) == 0 {
 		t.errorChan <- NewFaxError("Gateway not set", false)
 		return
 	}
 
-	if _, err := os.Stat(t.faxjob.Filename); err != nil {
+	if _, err := os.Stat(t.faxjob.FileName); err != nil {
 		t.errorChan <- NewFaxError(err.Error(), false)
 		return
 	}
@@ -373,7 +376,7 @@ func (t *eventClient) start() {
 	requestT38 := gofaxlib.Config.Faxing.RequestT38
 	enableT38 := gofaxlib.Config.Faxing.EnableT38
 
-	fallback, err := gofaxlib.GetSoftmodemFallback(t.conn, t.faxjob.Number)
+	fallback, err := gofaxlib.GetSoftmodemFallback(t.conn, t.faxjob.CallerIdNumber)
 	if err != nil {
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
@@ -387,7 +390,7 @@ func (t *eventClient) start() {
 			"EventClient",
 			"Softmodem fallback active for destination %s, disabling T.38",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": t.faxjob.UUID.String()}, t.faxjob.Number,
+			map[string]interface{}{"uuid": t.faxjob.UUID.String()}, t.faxjob.CalleeNumber,
 		))
 		enableT38 = false
 		requestT38 = false
@@ -397,9 +400,9 @@ func (t *eventClient) start() {
 	dsVariablesMap := map[string]string{
 		"ignore_early_media":           "true",
 		"origination_uuid":             t.faxjob.UUID.String(),
-		"origination_caller_id_number": t.faxjob.Cidnum,
-		"origination_caller_id_name":   t.faxjob.Cidname,
-		"fax_ident":                    t.faxjob.Ident,
+		"origination_caller_id_number": t.faxjob.CallerIdNumber,
+		"origination_caller_id_name":   t.faxjob.CallerIdName,
+		"fax_ident":                    t.faxjob.Identifier,
 		"fax_header":                   t.faxjob.Header,
 		"fax_use_ecm":                  strconv.FormatBool(t.faxjob.UseECM),
 		"fax_disable_v17":              strconv.FormatBool(t.faxjob.DisableV17),
@@ -409,7 +412,7 @@ func (t *eventClient) start() {
 	}
 
 	// Look up variable overrides for given number
-	overrideRealm := fmt.Sprintf("override-%s", t.faxjob.Number)
+	overrideRealm := fmt.Sprintf("override-%s", t.faxjob.CalleeNumber)
 	overrides, err := gofaxlib.FreeSwitchDBList(t.conn, overrideRealm)
 	if err != nil {
 		if strings.TrimSpace(err.Error()) != "no reply" {
@@ -454,13 +457,12 @@ func (t *eventClient) start() {
 		}
 		dsVariables.WriteString(fmt.Sprintf("%v='%v'", k, v))
 	}
-
 	// Try gateways in configured order
-	for _, gw := range t.faxjob.Gateways {
+	for _, gw := range t.faxjob.Endpoints {
 		if dsGateways.Len() > 0 {
 			dsGateways.WriteByte('|')
 		}
-		dsGateways.WriteString(fmt.Sprintf("sofia/gateway/%v/%v", gw, t.faxjob.Number))
+		dsGateways.WriteString(fmt.Sprintf("sofia/gateway/%v/%v", gw.Endpoint, t.faxjob.CalleeNumber))
 	}
 
 	dialstring := fmt.Sprintf("{%v}%v", dsVariables.String(), dsGateways.String())
@@ -474,11 +476,11 @@ func (t *eventClient) start() {
 	// Originate call
 	t.logManager.SendLog(t.logManager.BuildLog(
 		"EventClient",
-		"Originating channel to"+t.faxjob.Number+"using gateway"+strings.Join(t.faxjob.Gateways, ","),
+		"Originating channel to "+t.faxjob.CalleeNumber+" using gateway "+dialstring,
 		logrus.ErrorLevel,
 		map[string]interface{}{"uuid": t.faxjob.UUID.String()},
 	))
-	_, err = t.conn.Send(fmt.Sprintf("api originate %v, &txfax(%v)", dialstring, t.faxjob.Filename))
+	_, err = t.conn.Send(fmt.Sprintf("api originate %v, &txfax(%v)", dialstring, t.faxjob.FileName))
 	if err != nil {
 		t.conn.Send(fmt.Sprintf("uuid_dump %v", t.faxjob.UUID))
 		hangupcause := strings.TrimSpace(err.Error())
@@ -528,7 +530,7 @@ func (t *eventClient) start() {
 							"EventClient",
 							"Faxing failed with %d negotiations, enabling softmodem fallback for calls from/to %s.",
 							logrus.ErrorLevel,
-							map[string]interface{}{"uuid": t.faxjob.UUID.String()}, result.NegotiateCount, t.faxjob.Number,
+							map[string]interface{}{"uuid": t.faxjob.UUID.String()}, result.NegotiateCount, t.faxjob.CalleeNumber,
 						))
 						activateFallback = true
 					} else {
@@ -542,14 +544,14 @@ func (t *eventClient) start() {
 								"EventClient",
 								"Faxing failed with %d bad rows in %d pages, enabling softmodem fallback for calls from/to %s.",
 								logrus.ErrorLevel,
-								map[string]interface{}{"uuid": t.faxjob.UUID.String()}, badrows, result.TransferredPages, t.faxjob.Number,
+								map[string]interface{}{"uuid": t.faxjob.UUID.String()}, badrows, result.TransferredPages, t.faxjob.CalleeNumber,
 							))
 							activateFallback = true
 						}
 					}
 
 					if activateFallback {
-						err = gofaxlib.SetSoftmodemFallback(t.conn, t.faxjob.Number, true)
+						err = gofaxlib.SetSoftmodemFallback(t.conn, t.faxjob.CalleeNumber, true)
 						if err != nil {
 							t.logManager.SendLog(t.logManager.BuildLog(
 								"EventClient",

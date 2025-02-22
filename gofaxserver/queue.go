@@ -20,6 +20,8 @@ func (q *Queue) Start() {
 		// process this async?!??
 		go func(s *Server, f *FaxJob) {
 			// todo send based on endpoints and loop until success/fail with the endpoints based on priority
+			// when processing the thing, we only want to send to one or multiple endpoints with the same priority
+			// only when it is destined for the default freeswitch gateways, we include multiple
 
 		}(q.Server, fax)
 		// determine how to route them
