@@ -1,8 +1,9 @@
 package gofaxserver
 
 import (
-	"github.com/gonicus/gofaxip/gofaxlib"
+	"fmt"
 	"github.com/gonicus/gofaxip/gofaxlib/logger"
+	"gofaxserver/gofaxlib"
 	"gorm.io/gorm"
 	"os"
 	"os/signal"
@@ -76,9 +77,9 @@ func (s *Server) Start() {
 
 	select {
 	case sig := <-sigchan:
-		logger.Logger.Print("Received ", sig, ", killing all channels")
+		fmt.Print("Received ", sig, ", killing all channels")
 		time.Sleep(3 * time.Second)
-		logger.Logger.Print("Terminating")
+		//logger.Logger.Print("Terminating")
 		os.Exit(0)
 	}
 }

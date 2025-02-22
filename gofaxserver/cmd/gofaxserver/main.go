@@ -20,9 +20,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/gonicus/gofaxip/gofaxlib"
-	"github.com/gonicus/gofaxip/gofaxlib/logger"
-	"github.com/gonicus/gofaxip/gofaxserver"
+	"gofaxserver/gofaxlib"
+	"gofaxserver/gofaxserver"
 	"log"
 	"os"
 )
@@ -58,7 +57,6 @@ func init() {
 
 func logPanic() {
 	if r := recover(); r != nil {
-		logger.Logger.Print(r)
 		panic(r)
 	}
 }
@@ -72,7 +70,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Logger.Printf("%v gofaxserver %v starting", productName, version)
+	// logger.Logger.Printf("%v gofaxserver %v starting", productName, version)
 	gofaxlib.LoadConfig(*configFile)
 
 	// Start event socket server to handle incoming calls

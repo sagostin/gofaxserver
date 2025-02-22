@@ -25,8 +25,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gonicus/gofaxip/gofaxlib"
-	"github.com/gonicus/gofaxip/gofaxlib/logger"
+	"gofaxserver/gofaxlib"
 
 	"github.com/fiorix/go-eventsocket/eventsocket"
 	"github.com/google/uuid"

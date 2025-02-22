@@ -1,8 +1,8 @@
 package gofaxserver
 
 import (
-	"github.com/gonicus/gofaxip/gofaxlib"
 	"github.com/google/uuid"
+	"gofaxserver/gofaxlib"
 	"time"
 )
 

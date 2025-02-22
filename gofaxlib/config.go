@@ -22,8 +22,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-
-	_ "github.com/gonicus/gofaxip/gofaxlib/logger"
 )
 
 var (

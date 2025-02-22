@@ -20,18 +20,16 @@ package gofaxserver
 import (
 	"bytes"
 	"fmt"
+	"github.com/fiorix/go-eventsocket/eventsocket"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
+	"gofaxserver/gofaxlib"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/gonicus/gofaxip/gofaxlib"
-
-	"github.com/fiorix/go-eventsocket/eventsocket"
 )
 
 /*// SendQfileFromDisk reads the qfile from disk and then immediately tries to send the given qfile using FreeSWITCH

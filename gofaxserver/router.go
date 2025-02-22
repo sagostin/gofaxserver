@@ -1,7 +1,7 @@
 package gofaxserver
 
 import (
-	"github.com/gonicus/gofaxip/gofaxlib"
+	"gofaxserver/gofaxlib"
 )
 
 type Router struct {
