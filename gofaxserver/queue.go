@@ -95,10 +95,13 @@ func (q *Queue) processFax(f *FaxJob) {
 
 		// Process groups in order.
 		for _, prio := range prios {
+
 			group := prioMap[prio]
 			// Make a shallow copy of the fax job and assign the current group as its endpoints.
 			ff := *f
 			ff.Endpoints = group
+
+			fmt.Printf("DEBUG: %v", ff)
 
 			switch endpointType {
 			case "gateway":

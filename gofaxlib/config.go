@@ -31,14 +31,14 @@ var (
 
 type config struct {
 	FreeSwitch struct {
-		EventClientSocket         string   `json:"event_client_socket"`          // used for sending commands to freeswitch
-		EventClientSocketPassword string   `json:"event_client_socket_password"` // password for the event client socket
-		EventServerSocket         string   `json:"event_server_socket"`          // used for receiving events from freeswitch
-		Gateway                   []string `json:"gateway"`                      // default gateways for sending faxes / upstream trunk
-		Ident                     string   `json:"ident"`
-		Header                    string   `json:"header"`
-		Verbose                   bool     `json:"verbose"`
-		SoftmodemFallback         bool     `json:"softmodem_fallback"`
+		EventClientSocket         string `json:"event_client_socket"`          // used for sending commands to freeswitch
+		EventClientSocketPassword string `json:"event_client_socket_password"` // password for the event client socket
+		EventServerSocket         string `json:"event_server_socket"`          // used for receiving events from freeswitch
+		/*Gateway                   []string `json:"gateway"`                      // default gateways for sending faxes / upstream trunk*/
+		Ident             string `json:"ident"`
+		Header            string `json:"header"`
+		Verbose           bool   `json:"verbose"`
+		SoftmodemFallback bool   `json:"softmodem_fallback"`
 	} `json:"freeswitch"`
 	Faxing struct {
 		TempDir                      string          `json:"temp_dir"` // eg. /opt/gofaxip/tmp

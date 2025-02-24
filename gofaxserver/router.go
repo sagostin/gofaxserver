@@ -1,8 +1,6 @@
 package gofaxserver
 
-import (
-	"gofaxserver/gofaxlib"
-)
+import "fmt"
 
 type Router struct {
 	server   *Server
@@ -28,9 +26,11 @@ func (r *Router) routeFax(fax *FaxJob) {
 	srcNum := r.server.DialplanManager.ApplyTransformationRules(fax.CallerIdNumber)
 	dstNum := r.server.DialplanManager.ApplyTransformationRules(fax.CalleeNumber)
 
+	fmt.Println(fax)
+
 	switch srcType := fax.SourceRoutingInformation.SourceType; srcType {
 	case "gateway":
-		if contains(gofaxlib.Config.FreeSwitch.Gateway, fax.SourceRoutingInformation.Source) {
+		/*if contains(r.server.UpstreamFsGateways, fax.SourceRoutingInformation.Source) {
 			// we need to route the message to the appropriate gateway / check if the destination is valid,
 			// we could do pre-routing for this but, hey fuck it.
 
@@ -42,6 +42,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 			// configured on said number
 			ep, err := r.server.getEndpointsForNumber(dstNum)
 			if err != nil {
+				fmt.Print(err)
 				return // todo log error with no matching destination for fax from trunk
 			}
 			fax.Endpoints = ep
@@ -49,7 +50,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 			r.server.Queue.Queue <- fax
 			return
 		}
-
+		*/
 		// do we actually have to check src sending number? can we not just check destination?
 		// we could also validate that the sending / src address is coming from the right allowed endpoint?
 		// do we want that much control where you need matching source / destination endpoints?
@@ -71,7 +72,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 
 		// route to default gateway for freeswitch
 		var eps []*Endpoint
-		for _, ep := range gofaxlib.Config.FreeSwitch.Gateway {
+		for _, ep := range r.server.UpstreamFsGateways {
 			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
 		}
 		fax.Endpoints = eps

@@ -52,9 +52,15 @@ func (s *Server) loadEndpoints() error {
 		case "gateway":
 			// add any endpoints with type of gateway to the ACL list for allowed FS calls
 			s.GatewayEndpointsACL = append(s.GatewayEndpointsACL, ep.Endpoint)
+			s.UpstreamFsGateways = append(s.UpstreamFsGateways, ep.Endpoint)
 		}
 
 		switch epCopy.Type {
+		case "global":
+			switch epCopy.EndpointType {
+			case "gateway":
+				s.UpstreamFsGateways = append(s.UpstreamFsGateways, strings.Split(ep.Endpoint, ":")[0])
+			}
 		case "tenant":
 			s.TenantEndpoints[epCopy.TypeID] = append(s.TenantEndpoints[epCopy.TypeID], &epCopy)
 		case "number":

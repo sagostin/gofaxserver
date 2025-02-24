@@ -111,7 +111,7 @@ func NewFaxResult(uuid uuid.UUID, logManager *LogManager) *FaxResult {
 
 // AddEvent parses a FreeSWITCH EventSocket event and merges contained information into the FaxResult
 func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
-	fmt.Printf("DEBUG: %v", ev.String())
+	// fmt.Printf("DEBUG: %v", ev.String())
 
 	switch ev.Get("Event-Name") {
 	case "CHANNEL_CALLSTATE":

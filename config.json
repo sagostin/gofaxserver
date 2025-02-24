@@ -2,7 +2,7 @@
   "freeswitch": {
     "event_client_socket": "127.0.0.1:8021",
     "event_server_socket": "127.0.0.1:8022",
-    "password": "ClueCon",
+    "event_client_socket_password": "ClueCon",
     "gateway": [
       "default"
     ],
