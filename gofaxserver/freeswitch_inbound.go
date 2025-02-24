@@ -387,7 +387,7 @@ EventLoop:
 		case _ = <-e.killChan:
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.EventServer",
-				"Kill reqeust received, destroying channel",
+				"Kill request received, destroying channel",
 				logrus.ErrorLevel,
 				map[string]interface{}{"uuid": channelUUID.String()},
 			))
@@ -400,12 +400,6 @@ EventLoop:
 	/*if device != nil {
 		gofaxlib.Faxq.ReceiveStatus(device.Name, "D")
 	}*/
-	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-		"FreeSwitch.EventServer",
-		"Success: %v, Hangup Cause: %v, Result: %v",
-		logrus.InfoLevel,
-		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
-	))
 	/*if err = xfl.SaveReceptionReport(); err != nil {
 		logManager.Log(err)
 	}*/
@@ -454,7 +448,18 @@ EventLoop:
 		}
 
 	}
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+		"FreeSwitch.EventServer",
+		"Success: %v, Hangup Cause: %v, Result: %v",
+		logrus.InfoLevel,
+		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
+	))
+
 	if !result.Success {
+		return
+	}
+
+	/*if !result.Success {
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.EventServer",
 			result.ResultText,
@@ -462,7 +467,7 @@ EventLoop:
 			map[string]interface{}{"uuid": channelUUID.String()},
 		))
 		return
-	}
+	}*/
 	// todo pass the xfl to a channel for db saving and further routing
 
 	faxjob := &FaxJob{
