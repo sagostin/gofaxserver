@@ -21,11 +21,11 @@ type TenantNumber struct {
 	Header       string `json:"webhook"`                       // this is the name displayed at the top of the fax eg. "Company Faxing Relay"
 }
 
-// loadTenants loads tenants (with their associated numbers) from the database.
+// loadTenants loads Tenants (with their associated numbers) from the database.
 func (s *Server) loadTenants() error {
 	var tenants []Tenant
 	// Preload Numbers for each tenant.
-	if err := s.dB.Preload("Numbers").Find(&tenants).Error; err != nil {
+	if err := s.DB.Preload("Numbers").Find(&tenants).Error; err != nil {
 		return err
 	}
 
@@ -36,7 +36,7 @@ func (s *Server) loadTenants() error {
 	}
 
 	s.mu.Lock()
-	s.tenants = tenantMap
+	s.Tenants = tenantMap
 	s.mu.Unlock()
 	return nil
 }
@@ -44,7 +44,7 @@ func (s *Server) loadTenants() error {
 // loadTenantNumbers loads tenant numbers from the database.
 func (s *Server) loadTenantNumbers() error {
 	var numbers []TenantNumber
-	if err := s.dB.Find(&numbers).Error; err != nil {
+	if err := s.DB.Find(&numbers).Error; err != nil {
 		return err
 	}
 
@@ -55,12 +55,12 @@ func (s *Server) loadTenantNumbers() error {
 	}
 
 	s.mu.Lock()
-	s.tenantNumbers = numberMap
+	s.TenantNumbers = numberMap
 	s.mu.Unlock()
 	return nil
 }
 
-// reloadTenantsAndNumbers reloads tenants and tenant numbers.
+// reloadTenantsAndNumbers reloads Tenants and tenant numbers.
 func (s *Server) reloadTenantsAndNumbers() error {
 	if err := s.loadTenants(); err != nil {
 		return err
@@ -74,29 +74,29 @@ func (s *Server) reloadTenantsAndNumbers() error {
 // addTenantNumber adds a new number for a tenant.
 func (s *Server) addTenantNumber(tenantID uint, number *TenantNumber) error {
 	s.mu.RLock()
-	_, tenantExists := s.tenants[tenantID]
+	_, tenantExists := s.Tenants[tenantID]
 	s.mu.RUnlock()
 	if !tenantExists {
 		return fmt.Errorf("tenant with id %d does not exist", tenantID)
 	}
 
 	s.mu.RLock()
-	_, exists := s.tenantNumbers[number.Number]
+	_, exists := s.TenantNumbers[number.Number]
 	s.mu.RUnlock()
 	if exists {
 		return fmt.Errorf("number %s already exists", number.Number)
 	}
 
 	number.TenantID = tenantID
-	if err := s.dB.Create(number).Error; err != nil {
+	if err := s.DB.Create(number).Error; err != nil {
 		return fmt.Errorf("failed to add number to database: %w", err)
 	}
 
 	s.mu.Lock()
-	s.tenantNumbers[number.Number] = number
+	s.TenantNumbers[number.Number] = number
 	s.mu.Unlock()
 
-	s.logManager.SendLog(s.logManager.BuildLog(
+	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"TenantNumber.Add",
 		fmt.Sprintf("Added number %s to tenant %d", number.Number, tenantID),
 		logrus.InfoLevel,
@@ -111,21 +111,21 @@ func (s *Server) addTenantNumber(tenantID uint, number *TenantNumber) error {
 // removeTenantNumber removes a tenant number based on tenant id and number string.
 func (s *Server) removeTenantNumber(tenantID uint, numberStr string) error {
 	s.mu.RLock()
-	number, exists := s.tenantNumbers[numberStr]
+	number, exists := s.TenantNumbers[numberStr]
 	s.mu.RUnlock()
 	if !exists || number.TenantID != tenantID {
 		return fmt.Errorf("number %s not found for tenant id %d", numberStr, tenantID)
 	}
 
-	if err := s.dB.Delete(&TenantNumber{}, number.ID).Error; err != nil {
+	if err := s.DB.Delete(&TenantNumber{}, number.ID).Error; err != nil {
 		return fmt.Errorf("failed to remove number from database: %w", err)
 	}
 
 	s.mu.Lock()
-	delete(s.tenantNumbers, numberStr)
+	delete(s.TenantNumbers, numberStr)
 	s.mu.Unlock()
 
-	s.logManager.SendLog(s.logManager.BuildLog(
+	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"TenantNumber.Remove",
 		fmt.Sprintf("Removed number %s from tenant %d", numberStr, tenantID),
 		logrus.InfoLevel,
@@ -142,12 +142,12 @@ func (s *Server) getTenantByNumber(number string) (*Tenant, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	tn, exists := s.tenantNumbers[number]
+	tn, exists := s.TenantNumbers[number]
 	if !exists {
 		return nil, fmt.Errorf("number %s not found", number)
 	}
 
-	tenant, exists := s.tenants[tn.TenantID]
+	tenant, exists := s.Tenants[tn.TenantID]
 	if !exists {
 		return nil, fmt.Errorf("tenant with id %d not found", tn.TenantID)
 	}
@@ -160,16 +160,16 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 	defer s.mu.RUnlock()
 
 	// First check for endpoints tied to the specific number.
-	if eps, exists := s.numberEndpoints[number]; exists && len(eps) > 0 {
+	if eps, exists := s.NumberEndpoints[number]; exists && len(eps) > 0 {
 		return eps, nil
 	}
 
 	// If no number-specific endpoints, get the tenant endpoints.
-	tn, exists := s.tenantNumbers[number]
+	tn, exists := s.TenantNumbers[number]
 	if !exists {
 		return nil, fmt.Errorf("number %s not found", number)
 	}
-	if eps, exists := s.tenantEndpoints[tn.TenantID]; exists {
+	if eps, exists := s.TenantEndpoints[tn.TenantID]; exists {
 		return eps, nil
 	}
 	return nil, fmt.Errorf("no endpoints found for number %s", number)

@@ -18,6 +18,8 @@ services:
     restart: always
     networks:
       - fax-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   gofaxserver:
     image: gofaxserver:latest

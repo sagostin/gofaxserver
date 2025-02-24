@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"gofaxserver/gofaxlib"
@@ -130,11 +131,39 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		recipient = connectev.Get("Variable_sip_to_user")
 	}
 
-	gateway := connectev.Get("Variable_sip_gateway")
+	// gateway := connectev.Get("Variable_sip_gateway")
+	// this shit doesn't work, so we need
+	// another way of determining the endpoints...
+	// we can store "allowed" IPs through the endpoints,
+	// and handle it that way
+	// for the "default" endpoints, we will need to store them in the DB with some random Tenant/Number ID?
+	//
+
 	cidname := connectev.Get("Channel-Caller-Id-Name")
 	cidnum := connectev.Get("Channel-Caller-Id-Number")
+	sourceip := connectev.Get("Variable_sip_network_ip")
 
-	logger.Logger.Printf("Incoming call to %v from %v <%v> via gateway %v", recipient, cidname, cidnum, gateway)
+	ep1, err := e.server.fsGatewayACL(sourceip)
+	if err != nil {
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+			"EventServer",
+			"invalid call %v from %v <%v> via gateway %v - ip: %v",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, ep1, sourceip,
+		))
+		c.Execute("respond", "404", true)
+		c.Send("exit")
+		return
+	}
+
+	var gateway = strings.Split(ep1, ":")[0]
+
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+		"EventServer",
+		"Incoming call to %v from %v <%v> via gateway %v",
+		logrus.InfoLevel,
+		map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway,
+	))
 
 	/*var device *Device
 	if gofaxlib.Config.Faxing.AllocateInboundDevices {
@@ -190,7 +219,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		return
 	}*/
 
-	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 		"EventServer",
 		"Inbound channel UUID: %s",
 		logrus.InfoLevel,
@@ -203,7 +232,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	fallback, err := gofaxlib.GetSoftmodemFallback(nil, cidnum)
 	if err != nil {
-		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"EventServer",
 			err.Error(),
 			logrus.ErrorLevel,
@@ -211,7 +240,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		))
 	}
 	if fallback {
-		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"EventServer",
 			"Softmodem fallback active for caller %s, disabling T.38",
 			logrus.WarnLevel,
@@ -220,7 +249,15 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		enableT38 = false
 		requestT38 = false
 	}
-	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+
+	/*if gateway == "" {
+		logger.Logger.Println("invalid gateway, rejecting call")
+		c.Execute("respond", "404", true)
+		c.Send("exit")
+		return
+	}*/
+
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 		"FreeSwitch.EventServer",
 		"Accepting call to %v from %v <%v> via gateway %v with commid %v",
 		logrus.InfoLevel,
@@ -259,7 +296,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	// todo can we require to a database instead or just in memory and pass to a channel?
 	filename := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, channelUUID.String()))
 
-	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 		"FreeSwitch.EventServer",
 		"Rxfax to %s",
 		logrus.DebugLevel,
@@ -297,7 +334,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	c.Execute("rxfax", filename, true)
 	c.Execute("hangup", "", true)
 
-	result := gofaxlib.NewFaxResult(channelUUID, e.server.logManager)
+	result := gofaxlib.NewFaxResult(channelUUID, e.server.LogManager)
 	es := gofaxlib.NewEventStream(c)
 
 	pages := result.TransferredPages
@@ -308,7 +345,7 @@ EventLoop:
 		select {
 		case ev := <-es.Events():
 			if ev.Get("Content-Type") == "text/disconnect-notice" {
-				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 					"FreeSwitch.EventServer",
 					"Received disconnect message",
 					logrus.WarnLevel,
@@ -332,14 +369,14 @@ EventLoop:
 			}
 		case err := <-es.Errors():
 			if err.Error() == "EOF" {
-				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 					"FreeSwitch.EventServer",
 					"Event socket client disconnected",
 					logrus.ErrorLevel,
 					map[string]interface{}{"uuid": channelUUID.String()},
 				))
 			} else {
-				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 					"FreeSwitch.EventServer",
 					"Error: %v",
 					logrus.ErrorLevel,
@@ -348,7 +385,7 @@ EventLoop:
 			}
 			break EventLoop
 		case _ = <-e.killChan:
-			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.EventServer",
 				"Kill reqeust received, destroying channel",
 				logrus.ErrorLevel,
@@ -363,7 +400,7 @@ EventLoop:
 	/*if device != nil {
 		gofaxlib.Faxq.ReceiveStatus(device.Name, "D")
 	}*/
-	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 		"FreeSwitch.EventServer",
 		"Success: %v, Hangup Cause: %v, Result: %v",
 		logrus.InfoLevel,
@@ -380,7 +417,7 @@ EventLoop:
 
 		if result.NegotiateCount > 1 {
 			// Activate fallback if negotiation was repeated
-			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.EventServer",
 				"Faxing failed with %d negotiations, enabling softmodem fallback for calls from/to %s.",
 				logrus.InfoLevel,
@@ -394,7 +431,7 @@ EventLoop:
 			}
 			if badrows > 0 {
 				// Activate fallback if any bad rows were present
-				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 					"FreeSwitch.EventServer",
 					"Faxing failed with %d bad rows in %d pages, enabling softmodem fallback for calls from/to %s.",
 					logrus.InfoLevel,
@@ -407,7 +444,7 @@ EventLoop:
 		if activateFallback {
 			err = gofaxlib.SetSoftmodemFallback(nil, cidnum, true)
 			if err != nil {
-				e.server.logManager.SendLog(e.server.logManager.BuildLog(
+				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 					"FreeSwitch.EventServer",
 					err.Error(),
 					logrus.ErrorLevel,
@@ -418,12 +455,13 @@ EventLoop:
 
 	}
 	if !result.Success {
-		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.EventServer",
 			result.ResultText,
 			logrus.ErrorLevel,
 			map[string]interface{}{"uuid": channelUUID.String()},
 		))
+		return
 	}
 	// todo pass the xfl to a channel for db saving and further routing
 
@@ -444,7 +482,7 @@ EventLoop:
 		},
 	}
 
-	e.server.faxJobRouting <- faxjob
+	e.server.FaxJobRouting <- faxjob
 
 	// todo check if it was from our primary gateways, if not,
 	// then we have to send it to the router for further processing

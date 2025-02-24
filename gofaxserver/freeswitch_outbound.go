@@ -80,7 +80,7 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob) (returned SendResult, err err
 	}*/
 	/*qf.Set("commid", sessionlog.CommID())*/
 
-	e.server.logManager.SendLog(e.server.logManager.BuildLog(
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 		"FreeSwitch.SendFax",
 		"Processing faxjob %s as freeswitch call",
 		logrus.ErrorLevel,
@@ -187,7 +187,7 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob) (returned SendResult, err err
 
 	// Start eventClient goroutine
 	transmitTs := time.Now()
-	t := newEventClient(faxjob, e.server.logManager)
+	t := newEventClient(faxjob, e.server.LogManager)
 	var result *gofaxlib.FaxResult
 	var status string
 
@@ -266,14 +266,14 @@ StatusLoop:
 	if result != nil {
 		if result.Success {
 			returned = SendDone
-			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.SendFax",
 				"Faxing sent successfully. Hangup Cause: %v. Result: %v",
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": faxjob.UUID.String()}, result.HangupCause, status,
 			))
 		} else {
-			e.server.logManager.SendLog(e.server.logManager.BuildLog(
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.SendFax",
 				"Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v",
 				logrus.InfoLevel,
@@ -283,7 +283,7 @@ StatusLoop:
 		faxjob.Result = result
 	} else {
 		returned = SendRetry
-		e.server.logManager.SendLog(e.server.logManager.BuildLog(
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.SendFax",
 			"Call failed. Retry: %v. Result: %v",
 			logrus.InfoLevel,

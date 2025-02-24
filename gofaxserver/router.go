@@ -18,15 +18,15 @@ func (r *Router) Start() {
 	// we will have multiple channels to route messages to/from freeswitch, along with channels for the inbound webhook requests, etc.
 	for {
 		// these are inbound messages from freeswitch (carrier trunks, vs pbx trunks)
-		fax := <-r.server.faxJobRouting
+		fax := <-r.server.FaxJobRouting
 		go r.routeFax(fax)
 	}
 	// todo
 }
 
 func (r *Router) routeFax(fax *FaxJob) {
-	srcNum := r.server.dialplanManager.ApplyTransformationRules(fax.CallerIdNumber)
-	dstNum := r.server.dialplanManager.ApplyTransformationRules(fax.CalleeNumber)
+	srcNum := r.server.DialplanManager.ApplyTransformationRules(fax.CallerIdNumber)
+	dstNum := r.server.DialplanManager.ApplyTransformationRules(fax.CalleeNumber)
 
 	switch srcType := fax.SourceRoutingInformation.SourceType; srcType {
 	case "gateway":
@@ -46,7 +46,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 			}
 			fax.Endpoints = ep
 
-			r.server.queue.Queue <- fax
+			r.server.Queue.Queue <- fax
 			return
 		}
 
@@ -65,7 +65,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 		endpoints, err := r.server.getEndpointsForNumber(dstNum)
 		if err == nil {
 			fax.Endpoints = endpoints
-			r.server.queue.Queue <- fax
+			r.server.Queue.Queue <- fax
 			return
 		}
 
@@ -75,7 +75,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
 		}
 		fax.Endpoints = eps
-		r.server.queue.Queue <- fax
+		r.server.Queue.Queue <- fax
 		return
 	case "webhook":
 	// todo for webhooks, we will need to validate sending number to prevent abuse and such.

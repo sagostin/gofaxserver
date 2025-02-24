@@ -82,7 +82,7 @@ func (q *Queue) processFax(f *FaxJob) {
 		for prio := range prioMap {
 			prios = append(prios, prio)
 		}
-		// Sort ascending, except that priority 666 always goes last.
+		// Sort ascending, except that priority 999 always goes last.
 		sort.Slice(prios, func(i, j int) bool {
 			a, b := prios[i], prios[j]
 			if a == 999 && b != 999 {
@@ -108,7 +108,7 @@ func (q *Queue) processFax(f *FaxJob) {
 				delay := 2 * time.Second
 				success := false
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
-					_, err := q.Server.fsSocket.SendFax(ff)
+					_, err := q.Server.FsSocket.SendFax(ff)
 					if err != nil {
 						fmt.Printf("Attempt %d: Error sending fax via gateway group (priority %d): %v\n", attempt, prio, err)
 					} else if f.Result.Success {
@@ -132,7 +132,7 @@ func (q *Queue) processFax(f *FaxJob) {
 			default:
 				// For other endpoint types (e.g. "webhook"), send concurrently (without retries).
 				go func(job FaxJob, etype string, prio uint) {
-					_, err := q.Server.fsSocket.SendFax(job)
+					_, err := q.Server.FsSocket.SendFax(job)
 					if err != nil {
 						fmt.Printf("Error sending fax via %s group (priority %d): %v\n", etype, prio, err)
 					} else if f.Result.Success {

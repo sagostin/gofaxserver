@@ -3,7 +3,7 @@
 # Script to build the Docker image
 
 # Variables
-IMAGE_NAME="fax"
+IMAGE_NAME="gofaxserver"
 IMAGE_TAG="latest"
 DOCKERFILE="Dockerfile"
 BUILD_CONTEXT="."

@@ -15,38 +15,43 @@ import (
 )
 
 type Server struct {
-	fsSocket        *EventSocketServer
-	router          *Router
-	queue           *Queue
-	logManager      *gofaxlib.LogManager
-	dialplanManager *DialplanManager
-	faxJobRouting   chan *FaxJob
-	dB              *gorm.DB
+	FsSocket        *EventSocketServer   `json:"fs_socket,omitempty"`
+	Router          *Router              `json:"router,omitempty"`
+	Queue           *Queue               `json:"queue,omitempty"`
+	LogManager      *gofaxlib.LogManager `json:"log_manager,omitempty"`
+	DialplanManager *DialplanManager     `json:"dialplan_manager,omitempty"`
+	FaxJobRouting   chan *FaxJob         `json:"fax_job_routing,omitempty"`
+	DB              *gorm.DB             `json:"d_b,omitempty"`
 	// In-memory maps for Tenants and TenantNumbers.
 	mu            sync.RWMutex
-	tenants       map[uint]*Tenant         // keyed by Tenant.ID
-	tenantNumbers map[string]*TenantNumber // keyed by the phone number string
+	Tenants       map[uint]*Tenant         `json:"tenants,omitempty"`        // keyed by Tenant.ID
+	TenantNumbers map[string]*TenantNumber `json:"tenant_numbers,omitempty"` // keyed by the phone number string
 	// Endpoints assigned directly to a tenant (keyed by tenant ID).
-	tenantEndpoints map[uint][]*Endpoint
+	TenantEndpoints map[uint][]*Endpoint `json:"tenant_endpoints,omitempty"`
 	// Endpoints assigned to a specific number (keyed by the phone number string).
-	numberEndpoints map[string][]*Endpoint
+	NumberEndpoints     map[string][]*Endpoint `json:"number_endpoints,omitempty"`
+	GatewayEndpointsACL []string               `json:"gateway_endpoint_acl,omitempty"`
 }
 
 func NewServer() *Server {
-	return &Server{faxJobRouting: make(chan *FaxJob),
-		tenants:         make(map[uint]*Tenant),
-		tenantNumbers:   make(map[string]*TenantNumber),
-		tenantEndpoints: make(map[uint][]*Endpoint),
-		numberEndpoints: make(map[string][]*Endpoint),
+	return &Server{FaxJobRouting: make(chan *FaxJob),
+		Tenants:         make(map[uint]*Tenant),
+		TenantNumbers:   make(map[string]*TenantNumber),
+		TenantEndpoints: make(map[uint][]*Endpoint),
+		NumberEndpoints: make(map[string][]*Endpoint),
 	}
 }
 
 func (s *Server) Start() {
+	fmt.Print("starting gofaxserver")
+
+	gofaxlib.Config.Loki.Job = "faxserver"
+
 	logManager := gofaxlib.NewLogManager(gofaxlib.NewLokiClient())
 	logManager.LoadTemplates()
-	s.logManager = logManager
+	s.LogManager = logManager
 
-	s.dialplanManager = loadDialplan()
+	s.DialplanManager = loadDialplan()
 
 	// Shut down receiving lines when killed
 	sigchan := make(chan os.Signal, 1)
@@ -57,7 +62,12 @@ func (s *Server) Start() {
 		panic(fmt.Errorf("failed to connect to PostgreSQL: %v", err))
 	}
 
-	s.dB = db
+	s.DB = db
+
+	err = s.migrateSchema()
+	if err != nil {
+		return
+	}
 
 	// start the router
 	queue := NewQueue(s)
@@ -66,8 +76,13 @@ func (s *Server) Start() {
 	router := NewRouter(s)
 	go router.Start()
 
-	s.router = router
-	s.queue = queue
+	s.Router = router
+	s.Queue = queue
+
+	err = s.loadEndpoints()
+	if err != nil {
+		return
+	}
 
 	// start freeswitch inbound event socket server
 	fsSocket := NewEventSocketServer(s)
@@ -78,7 +93,7 @@ func (s *Server) Start() {
 			logger.Logger.Fatal(err)
 		}
 	}()
-	s.fsSocket = fsSocket
+	s.FsSocket = fsSocket
 
 	// start web server
 	// todo
