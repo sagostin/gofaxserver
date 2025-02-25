@@ -45,7 +45,7 @@ func SendQfileFromDisk(filename, deviceID string) (SendResult, error) {
 }*/
 
 // SendFaxFS immediately tries to send the given qfile using FreeSWITCH
-func (e *EventSocketServer) SendFax(faxjob FaxJob) (returned SendResult, err error) {
+func (e *EventSocketServer) SendFax(faxjob *FaxJob) (returned SendResult, err error) {
 	returned = SendFailed
 	/*var jobid uint
 	if jobidstr := qf.GetString("jobid"); jobidstr != "" {
@@ -83,7 +83,7 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob) (returned SendResult, err err
 	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 		"FreeSwitch.SendFax",
 		"Processing faxjob %s as freeswitch call",
-		logrus.ErrorLevel,
+		logrus.InfoLevel,
 		map[string]interface{}{"uuid": faxjob.UUID}, faxjob.UUID,
 	))
 
@@ -318,7 +318,7 @@ const (
 type SendResult int
 
 type eventClient struct {
-	faxjob FaxJob
+	faxjob *FaxJob
 	conn   *eventsocket.Connection
 
 	pageChan   chan *gofaxlib.PageResult
@@ -328,7 +328,7 @@ type eventClient struct {
 	logManager *gofaxlib.LogManager
 }
 
-func newEventClient(faxjob FaxJob, logManager *gofaxlib.LogManager) *eventClient {
+func newEventClient(faxjob *FaxJob, logManager *gofaxlib.LogManager) *eventClient {
 	t := &eventClient{
 		faxjob:     faxjob,
 		pageChan:   make(chan *gofaxlib.PageResult),
@@ -520,7 +520,7 @@ func (t *eventClient) start() {
 	t.logManager.SendLog(t.logManager.BuildLog(
 		"EventClient",
 		"Originate successful",
-		logrus.ErrorLevel,
+		logrus.InfoLevel,
 		map[string]interface{}{"uuid": t.faxjob.UUID.String()},
 	))
 

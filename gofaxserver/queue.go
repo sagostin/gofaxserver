@@ -1,9 +1,9 @@
 package gofaxserver
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -13,19 +13,16 @@ func sortEndpoints(eps []*Endpoint) {
 	sort.Slice(eps, func(i, j int) bool {
 		a := eps[i].Priority
 		b := eps[j].Priority
-		// If one is 666 and the other is not, the one that is not 666 comes first.
 		if a == 666 && b != 666 {
 			return false
 		} else if b == 666 && a != 666 {
 			return true
 		}
-		// Otherwise, sort in ascending order.
 		return a < b
 	})
 }
 
 // groupEndpoints groups a sorted slice of endpoints by their priority.
-// Each group is a slice of endpoints sharing the same Priority.
 func groupEndpoints(eps []*Endpoint) [][]*Endpoint {
 	var groups [][]*Endpoint
 	i := 0
@@ -41,33 +38,46 @@ func groupEndpoints(eps []*Endpoint) [][]*Endpoint {
 	return groups
 }
 
-// Queue represents a fax job processing queue.
-type Queue struct {
-	Queue  chan *FaxJob
-	Server *Server
+// QueueFaxResult holds the result of a fax send attempt for a specific endpoint group.
+type QueueFaxResult struct {
+	Job      *FaxJob     `json:"job"`
+	Success  bool        `json:"success"`
+	Response interface{} `json:"response"`
+	Err      error       `json:"error,omitempty"`
 }
 
+// Queue represents a fax job processing queue.
+type Queue struct {
+	Queue          chan *FaxJob
+	Server         *Server
+	QueueFaxResult chan QueueFaxResult
+}
+
+// NewQueue creates a new Queue.
 func NewQueue(s *Server) *Queue {
 	return &Queue{
-		Queue:  make(chan *FaxJob),
-		Server: s,
+		Queue:          make(chan *FaxJob),
+		QueueFaxResult: make(chan QueueFaxResult),
+		Server:         s,
 	}
 }
 
-// Start processes fax jobs from the queue.
+// Start pulls fax jobs from the Queue and processes each asynchronously.
 func (q *Queue) Start() {
+	go q.startQueueResults()
+
 	for {
 		fax := <-q.Queue
-		// Process each fax asynchronously.
 		go q.processFax(fax)
 	}
 }
 
-// processFax groups endpoints by type and then by priority,
-// then processes each group according to the rules described.
+// processFax processes each endpoint type concurrently. For each endpoint type, it iterates
+// over its priority groups (ordered so that 999 comes last) and sends the fax using the endpoints
+// in that group. A shallow copy (ff) of the original fax job is made per group and reused for retries,
+// so that modifications made by SendFax persist.
 func (q *Queue) processFax(f *FaxJob) {
-	// Build a nested map:
-	// groupMap[endpointType][priority] = []*Endpoint
+	// Build a nested map: groupMap[endpointType][priority] = []*Endpoint
 	groupMap := make(map[string]map[uint][]*Endpoint)
 	for _, ep := range f.Endpoints {
 		if groupMap[ep.EndpointType] == nil {
@@ -76,91 +86,92 @@ func (q *Queue) processFax(f *FaxJob) {
 		groupMap[ep.EndpointType][ep.Priority] = append(groupMap[ep.EndpointType][ep.Priority], ep)
 	}
 
-	// Process each endpoint type independently.
+	var wg sync.WaitGroup
+
+	// Process each endpoint type concurrently.
 	for endpointType, prioMap := range groupMap {
-		// Extract and sort priorities.
-		var prios []uint
-		for prio := range prioMap {
-			prios = append(prios, prio)
-		}
-		// Sort ascending, except that priority 999 always goes last.
-		sort.Slice(prios, func(i, j int) bool {
-			a, b := prios[i], prios[j]
-			if a == 999 && b != 999 {
-				return false
-			} else if b == 999 && a != 999 {
-				return true
+		wg.Add(1)
+		go func(endpointType string, prioMap map[uint][]*Endpoint) {
+			defer wg.Done()
+
+			// Extract and sort priorities (with 999 always last).
+			var prios []uint
+			for prio := range prioMap {
+				prios = append(prios, prio)
 			}
-			return a < b
-		})
-
-		// Process groups in order.
-		for _, prio := range prios {
-
-			group := prioMap[prio]
-			// Make a shallow copy of the fax job and assign the current group as its endpoints.
-			ff := *f
-			ff.Endpoints = group
-
-			// DEBUG
-			marshal, err := json.Marshal(ff)
-			if err != nil {
-				return
-			}
-			fmt.Printf("DEBUG 1: %s", marshal)
-
-			// DEBUG
-			marshal1, err := json.Marshal(group)
-			if err != nil {
-				return
-			}
-			fmt.Printf("DEBUG 2: %s", marshal1)
-
-			switch endpointType {
-			case "gateway":
-				// For gateways, we use retries if the priority is not 666.
-				// For non-default gateway endpoints, retry the entire group a configurable number of times.
-				const maxAttempts = 3
-				delay := 2 * time.Second
-				success := false
-
-				for attempt := 1; attempt <= maxAttempts; attempt++ {
-					returned, err := q.Server.FsSocket.SendFax(ff)
-					if err != nil {
-						fmt.Printf("Error sending fax (priority %d): %v\n", prio, err)
-					} else if ff.Result.Success {
-						fmt.Printf("Fax sent successfully via gateway group (priority %d) on attempt %d\n returned: %v", prio, attempt, returned)
-						success = true
-						break
-					} else {
-						fmt.Printf("Attempt %d: Fax send failed via gateway group (priority %d), result: %s\n", attempt, prio, ff.Result.ResultText)
-					}
-					time.Sleep(delay)
-					// Optionally increase delay for the next attempt.
-					delay = delay * 2
+			sort.Slice(prios, func(i, j int) bool {
+				a, b := prios[i], prios[j]
+				if a == 999 && b != 999 {
+					return false
+				} else if b == 999 && a != 999 {
+					return true
 				}
-				if success {
-					return // fax sent – exit processing
-				} else {
-					// After exhausting attempts, you might notify the contact on file.
-					fmt.Printf("All attempts failed for gateway group (priority %d). Notifying contact...\n", prio)
-					// Notification logic here...
-				}
-			default:
-				// For other endpoint types (e.g. "webhook"), send concurrently (without retries).
-				/*go func(job FaxJob, etype string, prio uint) {
-					_, err := q.Server.FsSocket.SendFax(job)
-					if err != nil {
-						fmt.Printf("Error sending fax via %s group (priority %d): %v\n", etype, prio, err)
-					} else if f.Result.Success {
-						fmt.Printf("Fax sent successfully via %s group (priority %d)\n", etype, prio)
-					} else {
-						fmt.Printf("Fax send failed via %s group (priority %d), result: %s\n", etype, prio, f.Result.ResultText)
+				return a < b
+			})
+
+			// Process each priority group sequentially.
+			for _, prio := range prios {
+				group := prioMap[prio]
+				// Create one copy of the fax job for this group.
+				ff := *f
+				ff.Endpoints = group
+
+				var result QueueFaxResult
+
+				switch endpointType {
+				case "gateway":
+					// For gateways, retry up to three times.
+					const maxAttempts = 3
+					delay := 2 * time.Second
+					for attempt := 1; attempt <= maxAttempts; attempt++ {
+						ret, err := q.Server.FsSocket.SendFax(&ff)
+						if err != nil {
+							fmt.Printf("Error sending fax (gateway, priority %d, attempt %d): %v\n", prio, attempt, err)
+						} else if ff.Result.Success {
+							result.Success = true
+							result.Response = ret
+							result.Job = &ff
+							break
+						} else {
+							fmt.Printf("Attempt %d: Fax send failed via gateway (priority %d), result: %s\n", attempt, prio, ff.Result.ResultText)
+						}
+						time.Sleep(delay)
+						delay *= 2
 					}
-				}(ff, endpointType, prio)*/
+					if !result.Success {
+						result.Response = ff.Result.ResultText
+					}
+				default:
+					// Uncomment and implement for additional endpoint types if needed.
+					/*
+						ret, err := q.Server.FsSocket.SendFax(&ff)
+						if err != nil {
+							result.Err = err
+							fmt.Printf("Error sending fax via %s (priority %d): %v\n", endpointType, prio, err)
+						} else if ff.Result.Success {
+							result.Success = true
+							result.Response = ret
+						} else {
+							result.Response = ff.Result.ResultText
+							fmt.Printf("Fax send failed via %s (priority %d), result: %s\n", endpointType, prio, ff.Result.ResultText)
+						}
+					*/
+				}
+				// Send the result for this endpoint group to the global results channel.
+				q.QueueFaxResult <- result
 			}
-		}
+		}(endpointType, prioMap)
 	}
-	// If none of the endpoint groups succeeded, handle overall failure.
-	fmt.Printf("All endpoint attempts failed for fax job %v\n", f.UUID)
+
+	// Wait for all endpoint type goroutines to finish.
+	wg.Wait()
+}
+
+// startQueueResults processes results from the QueueFaxResult channel asynchronously.
+// In the future, you can add logic here to persist results to a database, etc.
+func (q *Queue) startQueueResults() {
+	for result := range q.QueueFaxResult {
+		// TODO: Process each result asynchronously (e.g., add to DB).
+		fmt.Printf("Processing result for job %v: %+v\n", result.Job.UUID, result)
+	}
 }

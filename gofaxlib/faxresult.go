@@ -118,7 +118,7 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 		// Call state has changed
 		callstate := ev.Get("Channel-Call-State")
 		f.logManager.SendLog(f.logManager.BuildLog(
-			"FreeSwitch.Transmit",
+			"FaxResult",
 			"Call state change: %v",
 			logrus.InfoLevel,
 			map[string]interface{}{}, callstate))
@@ -145,7 +145,7 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 				f.TransferRate = uint(rate)
 			}
 			f.logManager.SendLog(f.logManager.BuildLog(
-				"FreeSwitch.Transmit",
+				"FaxResult",
 				"Remote ID: \"%v\", Transfer Rate: %v, ECM=%v",
 				logrus.InfoLevel,
 				map[string]interface{}{}, f.RemoteID, f.TransferRate, f.Ecm))
@@ -190,7 +190,7 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 
 			f.PageResults = append(f.PageResults, *pr)
 			f.logManager.SendLog(f.logManager.BuildLog(
-				"FreeSwitch.Transmit",
+				"FaxResult",
 				"Page %d %v: %v",
 				logrus.InfoLevel,
 				map[string]interface{}{}, f.TransferredPages, action, *pr))
