@@ -33,7 +33,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 
 	switch srcType := fax.SourceRoutingInformation.SourceType; srcType {
 	case "gateway":
-		/*if contains(r.server.UpstreamFsGateways, fax.SourceRoutingInformation.Source) {
+		if contains(r.server.UpstreamFsGateways, fax.SourceRoutingInformation.Source) {
 			// we need to route the message to the appropriate gateway / check if the destination is valid,
 			// we could do pre-routing for this but, hey fuck it.
 
@@ -45,7 +45,12 @@ func (r *Router) routeFax(fax *FaxJob) {
 			// configured on said number
 			ep, err := r.server.getEndpointsForNumber(dstNum)
 			if err != nil {
-				fmt.Print(err)
+				r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
+					"Router",
+					"failed to route from upstream to endpoint - caller: %s - callee: %s - err: %s",
+					logrus.ErrorLevel,
+					map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, err,
+				))
 				return // todo log error with no matching destination for fax from trunk
 			}
 			fax.Endpoints = ep
@@ -53,7 +58,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 			r.server.Queue.Queue <- fax
 			return
 		}
-		*/
+
 		// do we actually have to check src sending number? can we not just check destination?
 		// we could also validate that the sending / src address is coming from the right allowed endpoint?
 		// do we want that much control where you need matching source / destination endpoints?
@@ -71,26 +76,19 @@ func (r *Router) routeFax(fax *FaxJob) {
 			fax.Endpoints = endpoints
 			r.server.Queue.Queue <- fax
 			return
-		} else {
-			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
-				"EventServer",
-				"fax routing internal endpoint %v - %v - err: %v",
-				logrus.InfoLevel,
-				map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err,
-			))
 		}
 
 		// route to default gateway for freeswitch
 		var eps []*Endpoint
-		for n, ep := range r.server.UpstreamFsGateways {
+		for _, ep := range r.server.UpstreamFsGateways {
 			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
 
-			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
-				"EventServer",
-				"fax routing internal endpoint %v - %v - err: %v -- %v",
-				logrus.InfoLevel,
-				map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err, n,
-			))
+			/*			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
+						"EventServer",
+						"fax routing internal endpoint %v - %v - err: %v -- %v",
+						logrus.InfoLevel,
+						map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err, n,
+					))*/
 		}
 		fax.Endpoints = eps
 		r.server.Queue.Queue <- fax

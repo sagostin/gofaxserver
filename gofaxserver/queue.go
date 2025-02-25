@@ -2,6 +2,7 @@ package gofaxserver
 
 import (
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"sort"
 	"sync"
 	"time"
@@ -49,7 +50,7 @@ type QueueFaxResult struct {
 // Queue represents a fax job processing queue.
 type Queue struct {
 	Queue          chan *FaxJob
-	Server         *Server
+	server         *Server
 	QueueFaxResult chan QueueFaxResult
 }
 
@@ -58,7 +59,7 @@ func NewQueue(s *Server) *Queue {
 	return &Queue{
 		Queue:          make(chan *FaxJob),
 		QueueFaxResult: make(chan QueueFaxResult),
-		Server:         s,
+		server:         s,
 	}
 }
 
@@ -124,19 +125,30 @@ func (q *Queue) processFax(f *FaxJob) {
 					const maxAttempts = 3
 					delay := 2 * time.Second
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
-						ret, err := q.Server.FsSocket.SendFax(&ff)
+						ret, err := q.server.FsSocket.SendFax(&ff)
 						if err != nil {
-							fmt.Printf("Error sending fax (gateway, priority %d, attempt %d): %v\n", prio, attempt, err)
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Queue",
+								"error sending fax - %v - %v - err: %v -- %v",
+								logrus.ErrorLevel,
+								map[string]interface{}{"uuid": ff.UUID.String()}, ff.CalleeNumber, ff.CallerIdName, err, ff.Endpoints,
+							))
 						} else if ff.Result.Success {
 							result.Success = true
 							result.Response = ret
 							result.Job = &ff
 							break
 						} else {
-							fmt.Printf("Attempt %d: Fax send failed via gateway (priority %d), result: %s\n", attempt, prio, ff.Result.ResultText)
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Queue",
+								"attempt %d - priority %d - %v - %v - err: %v -- %v -- result: %v",
+								logrus.ErrorLevel,
+								map[string]interface{}{"uuid": ff.UUID.String()}, attempt, prio, ff.CalleeNumber, ff.CallerIdName, err, ff.Endpoints, ff.Result.ResultText,
+							))
 						}
 						time.Sleep(delay)
 						delay *= 2
+						q.QueueFaxResult <- result
 					}
 					if !result.Success {
 						result.Response = ff.Result.ResultText
@@ -144,7 +156,7 @@ func (q *Queue) processFax(f *FaxJob) {
 				default:
 					// Uncomment and implement for additional endpoint types if needed.
 					/*
-						ret, err := q.Server.FsSocket.SendFax(&ff)
+						ret, err := q.server.FsSocket.SendFax(&ff)
 						if err != nil {
 							result.Err = err
 							fmt.Printf("Error sending fax via %s (priority %d): %v\n", endpointType, prio, err)
