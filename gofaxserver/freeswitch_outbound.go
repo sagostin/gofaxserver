@@ -84,7 +84,7 @@ func (e *EventSocketServer) SendFax(faxjob FaxJob) (returned SendResult, err err
 		"FreeSwitch.SendFax",
 		"Processing faxjob %s as freeswitch call",
 		logrus.ErrorLevel,
-		map[string]interface{}{"uuid": faxjob.UUID},
+		map[string]interface{}{"uuid": faxjob.UUID}, faxjob.UUID,
 	))
 
 	// Query DynamicConfig
@@ -272,6 +272,7 @@ StatusLoop:
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": faxjob.UUID.String()}, result.HangupCause, status,
 			))
+			err = nil
 		} else {
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.SendFax",
@@ -479,7 +480,9 @@ func (t *eventClient) start() {
 		if dsGateways.Len() > 0 {
 			dsGateways.WriteByte('|')
 		}
-		dsGateways.WriteString(fmt.Sprintf("sofia/gateway/%v/%v", gw.Endpoint, t.faxjob.CalleeNumber))
+		gateway := strings.Split(gw.Endpoint, ":")[0]
+
+		dsGateways.WriteString(fmt.Sprintf("sofia/gateway/%v/%v", gateway, t.faxjob.CalleeNumber))
 	}
 
 	dialstring := fmt.Sprintf("{%v}%v", dsVariables.String(), dsGateways.String())
@@ -503,7 +506,7 @@ func (t *eventClient) start() {
 		hangupcause := strings.TrimSpace(err.Error())
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
-			"Originate failed with hangup cause"+hangupcause,
+			"Originate failed with hangup cause "+hangupcause,
 			logrus.ErrorLevel,
 			map[string]interface{}{"uuid": t.faxjob.UUID.String()},
 		))

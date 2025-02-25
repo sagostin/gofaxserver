@@ -75,7 +75,7 @@ func main() {
 
 	// Start event socket server to handle incoming calls
 	server := gofaxserver.NewServer()
-	server.Start()
+	go server.Start()
 
 	select {}
 }

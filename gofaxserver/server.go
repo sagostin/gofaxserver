@@ -80,6 +80,15 @@ func (s *Server) Start() {
 	s.Router = router
 	s.Queue = queue
 
+	err = s.loadTenantNumbers()
+	if err != nil {
+		return
+	}
+	err = s.loadTenants()
+	if err != nil {
+		return
+	}
+
 	err = s.loadEndpoints()
 	if err != nil {
 		return

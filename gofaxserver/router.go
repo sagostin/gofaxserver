@@ -1,6 +1,9 @@
 package gofaxserver
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/sirupsen/logrus"
+)
 
 type Router struct {
 	server   *Server
@@ -68,12 +71,26 @@ func (r *Router) routeFax(fax *FaxJob) {
 			fax.Endpoints = endpoints
 			r.server.Queue.Queue <- fax
 			return
+		} else {
+			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
+				"EventServer",
+				"fax routing internal endpoint %v - %v - err: %v",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err,
+			))
 		}
 
 		// route to default gateway for freeswitch
 		var eps []*Endpoint
-		for _, ep := range r.server.UpstreamFsGateways {
+		for n, ep := range r.server.UpstreamFsGateways {
 			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
+
+			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
+				"EventServer",
+				"fax routing internal endpoint %v - %v - err: %v -- %v",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err, n,
+			))
 		}
 		fax.Endpoints = eps
 		r.server.Queue.Queue <- fax

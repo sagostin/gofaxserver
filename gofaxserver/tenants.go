@@ -1,6 +1,7 @@
 package gofaxserver
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/sirupsen/logrus"
 )
@@ -164,7 +165,12 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 		return eps, nil
 	}
 
+	// DEBUG
+	marshal, _ := json.Marshal(s.TenantNumbers)
+	fmt.Printf("DEBUG 333: %s", marshal)
+
 	// If no number-specific endpoints, get the tenant endpoints.
+
 	tn, exists := s.TenantNumbers[number]
 	if !exists {
 		return nil, fmt.Errorf("number %s not found", number)

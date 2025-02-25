@@ -1,6 +1,7 @@
 package gofaxserver
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -101,7 +102,19 @@ func (q *Queue) processFax(f *FaxJob) {
 			ff := *f
 			ff.Endpoints = group
 
-			fmt.Printf("DEBUG: %v", ff)
+			// DEBUG
+			marshal, err := json.Marshal(ff)
+			if err != nil {
+				return
+			}
+			fmt.Printf("DEBUG 1: %s", marshal)
+
+			// DEBUG
+			marshal1, err := json.Marshal(group)
+			if err != nil {
+				return
+			}
+			fmt.Printf("DEBUG 2: %s", marshal1)
 
 			switch endpointType {
 			case "gateway":
@@ -110,16 +123,17 @@ func (q *Queue) processFax(f *FaxJob) {
 				const maxAttempts = 3
 				delay := 2 * time.Second
 				success := false
+
 				for attempt := 1; attempt <= maxAttempts; attempt++ {
-					_, err := q.Server.FsSocket.SendFax(ff)
+					returned, err := q.Server.FsSocket.SendFax(ff)
 					if err != nil {
-						fmt.Printf("Attempt %d: Error sending fax via gateway group (priority %d): %v\n", attempt, prio, err)
-					} else if f.Result.Success {
-						fmt.Printf("Fax sent successfully via gateway group (priority %d) on attempt %d\n", prio, attempt)
+						fmt.Printf("Error sending fax (priority %d): %v\n", prio, err)
+					} else if ff.Result.Success {
+						fmt.Printf("Fax sent successfully via gateway group (priority %d) on attempt %d\n returned: %v", prio, attempt, returned)
 						success = true
 						break
 					} else {
-						fmt.Printf("Attempt %d: Fax send failed via gateway group (priority %d), result: %s\n", attempt, prio, f.Result.ResultText)
+						fmt.Printf("Attempt %d: Fax send failed via gateway group (priority %d), result: %s\n", attempt, prio, ff.Result.ResultText)
 					}
 					time.Sleep(delay)
 					// Optionally increase delay for the next attempt.
@@ -134,7 +148,7 @@ func (q *Queue) processFax(f *FaxJob) {
 				}
 			default:
 				// For other endpoint types (e.g. "webhook"), send concurrently (without retries).
-				go func(job FaxJob, etype string, prio uint) {
+				/*go func(job FaxJob, etype string, prio uint) {
 					_, err := q.Server.FsSocket.SendFax(job)
 					if err != nil {
 						fmt.Printf("Error sending fax via %s group (priority %d): %v\n", etype, prio, err)
@@ -143,7 +157,7 @@ func (q *Queue) processFax(f *FaxJob) {
 					} else {
 						fmt.Printf("Fax send failed via %s group (priority %d), result: %s\n", etype, prio, f.Result.ResultText)
 					}
-				}(ff, endpointType, prio)
+				}(ff, endpointType, prio)*/
 			}
 		}
 	}

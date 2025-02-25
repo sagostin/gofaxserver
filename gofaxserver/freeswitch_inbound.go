@@ -147,9 +147,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	if err != nil {
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"EventServer",
-			"invalid call %v from %v <%v> via gateway %v - ip: %v",
+			"invalid call, failed to match ACLs - ip: %v",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, ep1, sourceip,
+			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, sourceip,
 		))
 		c.Execute("respond", "404", true)
 		c.Send("exit")
