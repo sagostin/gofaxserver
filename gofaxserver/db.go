@@ -16,7 +16,7 @@ func (s *Server) createIndexes() error {
 }
 
 func (s *Server) migrateSchema() error {
-	if err := s.DB.AutoMigrate(&Tenant{}, &TenantNumber{}, &Endpoint{}); err != nil {
+	if err := s.DB.AutoMigrate(&Tenant{}, &TenantNumber{}, &Endpoint{}, &FaxJobResultRecord{}); err != nil {
 		return err
 	}
 	err := s.createIndexes()

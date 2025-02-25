@@ -19,6 +19,7 @@ package gofaxserver
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/fiorix/go-eventsocket/eventsocket"
 	"github.com/google/uuid"
@@ -59,9 +60,9 @@ func (e *EventSocketServer) SendFax(faxjob *FaxJob) (returned SendResult, err er
 		return
 	}*/
 
-	faxjob.UUID = uuid.New()
+	faxjob.CallUUID = uuid.New()
 
-	// Create FaxJob structure
+	// Create Job structure
 	/*faxjob := NewFaxJob()*/
 	/*faxjob.FreeSwitch.Number = fmt.Sprint(gofaxlib.Config.Gofaxsend.CallPrefix, qf.GetString("external"))
 	faxjob.FreeSwitch.Cidnum = gofaxlib.Config.Gofaxsend.FaxNumber //qf.GetString("faxnumber")
@@ -188,7 +189,7 @@ func (e *EventSocketServer) SendFax(faxjob *FaxJob) (returned SendResult, err er
 	// Start eventClient goroutine
 	transmitTs := time.Now()
 	t := newEventClient(faxjob, e.server.LogManager)
-	var result *gofaxlib.FaxResult
+	result := &gofaxlib.FaxResult{}
 	var status string
 
 	// Wait for events
@@ -272,6 +273,7 @@ StatusLoop:
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": faxjob.UUID.String()}, result.HangupCause, status,
 			))
+			faxjob.Result = result
 			err = nil
 		} else {
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
@@ -280,27 +282,28 @@ StatusLoop:
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": faxjob.UUID.String()}, returned == SendRetry, result.HangupCause, status,
 			))
+			faxjob.Result = result
+			err = errors.New("faxing failed")
 		}
-		faxjob.Result = result
 	} else {
 		returned = SendRetry
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.SendFax",
 			"Call failed. Retry: %v. Result: %v",
-			logrus.InfoLevel,
+			logrus.ErrorLevel,
 			map[string]interface{}{"uuid": faxjob.UUID.String()}, returned == SendRetry, status,
 		))
 		faxjob.Status = status
 		faxjob.Ts = transmitTs
 		faxjob.JobTime = time.Now().Sub(transmitTs)
-		faxjob.Result = result
+		err = errors.New("call failed")
 	}
 
 	/*if err = xfl.SaveTransmissionReport(); err != nil {
 		sessionlog.Log(err)
 	}*/
 
-	return returned, nil
+	return returned, err
 }
 
 const (

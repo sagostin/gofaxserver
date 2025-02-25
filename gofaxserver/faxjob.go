@@ -9,7 +9,8 @@ import (
 // FaxJob contains everything FreeSWITCH needs to send a fax.
 type FaxJob struct {
 	// FreeSWITCH Channel UUID (generated when the job is created, or when we receive it)
-	UUID uuid.UUID `json:"uuid,omitempty"`
+	UUID     uuid.UUID `json:"uuid,omitempty"`
+	CallUUID uuid.UUID `json:"call_uuid"`
 
 	/*File string	`json:"file,omitempty"` // PDF or TIFF to send - will need to be converted to TIFF if PDF*/
 	// FreeSwitch-specific information
@@ -22,7 +23,7 @@ type FaxJob struct {
 	Identifier     string `json:"ident,omitempty"`        // Faxing ident
 	Header         string `json:"header,omitempty"`       // Header (e.g., sender company name)
 
-	Endpoints                []*Endpoint         `json:"gateways,omitempty"` // List of endpoints and such
+	Endpoints                []*Endpoint         `json:"endpoints,omitempty"` // List of endpoints and such
 	Result                   *gofaxlib.FaxResult `json:"result,omitempty"`
 	SourceRoutingInformation FaxSourceInfo       `json:"fax_source_info,omitempty"` // Routing information for the fax
 
@@ -42,10 +43,10 @@ type FaxJob struct {
 }
 
 type FaxSourceInfo struct {
-	Timestamp  time.Time
-	SourceType string // the source of the message, could be a carrier, or a webhook, etc, or gateway
-	Source     string // name of gateway, or webhook api key id or something
-	SourceID   string // id of the source, could be the carrier id, or the webhook id, or uuid of channel id
+	Timestamp  time.Time `json:"timestamp"`
+	SourceType string    `json:"source_type,omitempty"` // the source of the message, could be a carrier, or a webhook, etc, or gateway
+	Source     string    `json:"source,omitempty"`      // name of gateway, or webhook api key id or something
+	SourceID   string    `json:"source_id,omitempty"`   // id of the source, could be the carrier id, or the webhook id, or uuid of channel id
 }
 
 // NewFaxJob initializes a new FaxJob with a random UUID and default FreeSwitch settings.

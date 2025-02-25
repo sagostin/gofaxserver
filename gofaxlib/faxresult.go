@@ -121,7 +121,7 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 			"FaxResult",
 			"Call state change: %v",
 			logrus.InfoLevel,
-			map[string]interface{}{}, callstate))
+			map[string]interface{}{"uuid": f.UUID.String()}, callstate))
 		if callstate == "ACTIVE" {
 			f.StartTs = time.Now()
 		}
@@ -148,7 +148,7 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 				"FaxResult",
 				"Remote ID: \"%v\", Transfer Rate: %v, ECM=%v",
 				logrus.InfoLevel,
-				map[string]interface{}{}, f.RemoteID, f.TransferRate, f.Ecm))
+				map[string]interface{}{"uuid": f.UUID.String()}, f.RemoteID, f.TransferRate, f.Ecm))
 
 		case "spandsp::rxfaxpageresult":
 			action = "received"
@@ -193,7 +193,7 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 				"FaxResult",
 				"Page %d %v: %v",
 				logrus.InfoLevel,
-				map[string]interface{}{}, f.TransferredPages, action, *pr))
+				map[string]interface{}{"uuid": f.UUID.String()}, f.TransferredPages, action, *pr))
 
 		case "spandsp::rxfaxresult",
 			"spandsp::txfaxresult":
