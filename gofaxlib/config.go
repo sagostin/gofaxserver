@@ -65,6 +65,9 @@ type config struct {
 		Password string `json:"password"`
 		Job      string `json:"job"`
 	} `json:"loki"`
+	Web struct {
+		Listen string `json:"listen"`
+	} `json:"web"`
 }
 
 // LoadConfig loads the configuration from a JSON file.

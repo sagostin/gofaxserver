@@ -3,6 +3,9 @@ package gofaxserver
 import (
 	"fmt"
 	"github.com/gonicus/gofaxip/gofaxlib/logger"
+	"github.com/joho/godotenv"
+	"github.com/kataras/iris/v12"
+	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -47,6 +50,11 @@ func (s *Server) Start() {
 	fmt.Print("starting gofaxserver")
 
 	gofaxlib.Config.Loki.Job = "faxserver"
+
+	err := godotenv.Load()
+	if err != nil {
+		return
+	}
 
 	logManager := gofaxlib.NewLogManager(gofaxlib.NewLokiClient())
 	logManager.LoadTemplates()
@@ -107,6 +115,29 @@ func (s *Server) Start() {
 
 	// start web server
 	// todo
+
+	webIris := iris.New()
+
+	s.loadWebPaths(webIris)
+	webIris.Get("/health", func(ctx iris.Context) {
+		ctx.StatusCode(200)
+		return
+	})
+
+	err = webIris.Listen(gofaxlib.Config.Web.Listen)
+	if err != nil {
+		var lm = s.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Server.Web",
+			"GenericError",
+			logrus.ErrorLevel,
+			/*		map[string]interface{}{
+					"module": "Configuration",
+				},*/
+			nil,
+			err,
+		))
+	}
 
 	select {
 	case sig := <-sigchan:

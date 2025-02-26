@@ -1,41 +1,13 @@
 package gofaxserver
 
 import (
+	"os"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
-
-// sortEndpoints sorts endpoints so that non‑666 priorities come first (ascending)
-// and endpoints with priority 666 are grouped at the end.
-func sortEndpoints(eps []*Endpoint) {
-	sort.Slice(eps, func(i, j int) bool {
-		a, b := eps[i].Priority, eps[j].Priority
-		if a == 666 && b != 666 {
-			return false
-		} else if b == 666 && a != 666 {
-			return true
-		}
-		return a < b
-	})
-}
-
-// groupEndpoints groups a sorted slice of endpoints by their priority.
-func groupEndpoints(eps []*Endpoint) [][]*Endpoint {
-	var groups [][]*Endpoint
-	for i := 0; i < len(eps); {
-		currentPriority := eps[i].Priority
-		j := i
-		for j < len(eps) && eps[j].Priority == currentPriority {
-			j++
-		}
-		groups = append(groups, eps[i:j])
-		i = j
-	}
-	return groups
-}
 
 // QueueFaxResult holds the result of a fax send attempt for a specific endpoint group.
 type QueueFaxResult struct {
@@ -160,4 +132,16 @@ func (q *Queue) processFax(f *FaxJob) {
 		}(endpointType, prioMap)
 	}
 	wg.Wait()
+
+	// todo remove the file after processing
+	err := os.Remove(f.FileName)
+	if err != nil {
+		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+			"Queue",
+			"failed to remove fax file",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": f.UUID.String()},
+		))
+		return
+	}
 }

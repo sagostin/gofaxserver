@@ -94,7 +94,36 @@ func (r *Router) routeFax(fax *FaxJob) {
 		r.server.Queue.Queue <- fax
 		return
 	case "webhook":
-	// todo for webhooks, we will need to validate sending number to prevent abuse and such.
+		// todo for webhooks, we will need to validate sending number to prevent abuse and such.
+		_, err := r.server.getTenantByNumber(srcNum)
+		// todo route to other tenant by dst number based on endpoint then send to queue
+		if err != nil {
+			// todo throw error cuz not valid sending number
+		}
+
+		// we'll just check for destination
+		// this will only output if it's a valid tenant to tenant fax, otherwise, we will needa send to default gateway(s)
+		endpoints, err := r.server.getEndpointsForNumber(dstNum)
+		if err == nil {
+			fax.Endpoints = endpoints
+			r.server.Queue.Queue <- fax
+			return
+		}
+
+		// route to default gateway for freeswitch
+		var eps []*Endpoint
+		for _, ep := range r.server.UpstreamFsGateways {
+			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
+
+			/*			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
+						"EventServer",
+						"fax routing internal endpoint %v - %v - err: %v -- %v",
+						logrus.InfoLevel,
+						map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err, n,
+					))*/
+		}
+		fax.Endpoints = eps
+		r.server.Queue.Queue <- fax
 	default:
 		return // drop the fax and just return - we should delete the file...
 		// todo

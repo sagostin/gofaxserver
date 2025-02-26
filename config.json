@@ -36,5 +36,8 @@
     "push_url": "http://loki-server:3100/loki/api/v1/push",
     "username": "lokiuser",
     "password": "lokipassword"
+  },
+  "web": {
+    "listen": ":3000"
   }
 }
