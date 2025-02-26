@@ -17,24 +17,72 @@ import (
 	"time"
 )
 
-// HTTP handler to authenticate a tenant user. Expects JSON payload with "username" and "password".
+// loadWebPaths sets up the HTTP routes for tenant user management.
+func (s *Server) loadWebPaths(app *iris.Application) {
+	admin := app.Party("/admin", s.basicAuthMiddleware)
+	{
+		// Tenant management endpoints.
+		admin.Post("/tenant", s.handleAddTenant)
+		admin.Put("/tenant/{id}", s.handleUpdateTenant)
+		admin.Delete("/tenant/{id}", s.handleDeleteTenant)
+
+		// Tenant Numbers management.
+		admin.Post("/number", s.handleAddTenantNumber)
+		admin.Put("/number/{id}", s.handleUpdateTenantNumber)
+		admin.Delete("/number", s.handleDeleteTenantNumber)
+
+		// Endpoints management.
+		admin.Post("/endpoint", s.handleAddEndpoint)
+		admin.Put("/endpoint/{id}", s.handleUpdateEndpoint)
+		admin.Delete("/endpoint/{id}", s.handleDeleteEndpoint)
+
+		admin.Post("/user", s.handleAddTenantUser)
+		admin.Put("/user/{id}", s.handleAddTenantUser)
+		admin.Delete("/user/{id}", s.handleDeleteTenantUser)
+	}
+
+	fax := app.Party("/fax", s.basicTenantUserAuthMiddleware)
+	{
+		fax.Post("/send", s.handleDocumentUpload)
+		// New endpoint to retrieve fax logs by job UUID.
+		fax.Get("/status", s.getFaxLogByUUID)
+	}
+}
+
+// -------------------------
+// Tenant User Web Handlers
+// -------------------------
+
+// handleAuthenticateTenantUser authenticates a tenant user using Basic Auth.
+// The credentials are expected to be in the Authorization header in the format "Basic username:password".
+// On successful authentication, the handler returns a JSON with a success message, API key, user ID, and tenant ID.
 func (s *Server) handleAuthenticateTenantUser(ctx iris.Context) {
-	var credentials struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := ctx.ReadJSON(&credentials); err != nil {
-		ctx.StatusCode(http.StatusBadRequest)
-		ctx.JSON(iris.Map{"error": "invalid credentials format: " + err.Error()})
+	const prefix = "Basic "
+	authHeader := ctx.GetHeader("Authorization")
+	if len(authHeader) < len(prefix) || authHeader[:len(prefix)] != prefix {
+		unauthorized(ctx, s, "Missing or invalid Authorization header")
 		return
 	}
-	user, err := s.AuthenticateTenantUser(credentials.Username, credentials.Password)
+	encodedCredentials := authHeader[len(prefix):]
+	decodedBytes, err := base64.StdEncoding.DecodeString(encodedCredentials)
 	if err != nil {
-		ctx.StatusCode(http.StatusUnauthorized)
-		ctx.JSON(iris.Map{"error": "authentication failed: " + err.Error()})
+		unauthorized(ctx, s, "Failed to decode credentials")
 		return
 	}
-	// Return the API key (or any token) as part of the successful authentication.
+	credentials := string(decodedBytes)
+	colonIndex := indexOf(credentials, ':')
+	if colonIndex < 0 {
+		unauthorized(ctx, s, "Invalid credentials format")
+		return
+	}
+	username := credentials[:colonIndex]
+	password := credentials[colonIndex+1:]
+	user, err := s.AuthenticateTenantUser(username, password)
+	if err != nil {
+		unauthorized(ctx, s, "Authentication failed: "+err.Error())
+		return
+	}
+	// Authentication successful.
 	ctx.JSON(iris.Map{
 		"message":   "authentication successful",
 		"api_key":   user.APIKey,
@@ -43,18 +91,8 @@ func (s *Server) handleAuthenticateTenantUser(ctx iris.Context) {
 	})
 }
 
-// loadTenantUserPaths sets up the HTTP routes for tenant user management.
-func (s *Server) loadTenantUserPaths(app *iris.Application) {
-	tenantParty := app.Party("/tenant/user", s.basicAuthMiddleware)
-	{
-		tenantParty.Post("/", s.handleAddTenantUser)
-		tenantParty.Put("/{id}", s.handleUpdateTenantUser)
-		tenantParty.Delete("/{id}", s.handleDeleteTenantUser)
-		tenantParty.Post("/authenticate", s.handleAuthenticateTenantUser)
-	}
-}
-
-// HTTP handler to add a tenant user. Expects JSON payload.
+// handleAddTenantUser reads a JSON payload for a new tenant user, creates the user (encrypting the password),
+// and returns the created user.
 func (s *Server) handleAddTenantUser(ctx iris.Context) {
 	var user TenantUser
 	if err := ctx.ReadJSON(&user); err != nil {
@@ -70,7 +108,7 @@ func (s *Server) handleAddTenantUser(ctx iris.Context) {
 	ctx.JSON(user)
 }
 
-// HTTP handler to update a tenant user. The user ID is provided in the URL.
+// handleUpdateTenantUser updates an existing tenant user using the ID provided in the URL.
 func (s *Server) handleUpdateTenantUser(ctx iris.Context) {
 	idStr := ctx.Params().Get("id")
 	id, err := strconv.Atoi(idStr)
@@ -94,7 +132,7 @@ func (s *Server) handleUpdateTenantUser(ctx iris.Context) {
 	ctx.JSON(user)
 }
 
-// HTTP handler to delete a tenant user by ID.
+// handleDeleteTenantUser deletes a tenant user by its ID.
 func (s *Server) handleDeleteTenantUser(ctx iris.Context) {
 	idStr := ctx.Params().Get("id")
 	id, err := strconv.Atoi(idStr)
@@ -108,20 +146,262 @@ func (s *Server) handleDeleteTenantUser(ctx iris.Context) {
 		ctx.JSON(iris.Map{"error": "failed to delete tenant user: " + err.Error()})
 		return
 	}
-	ctx.JSON(iris.Map{"message": "user deleted successfully"})
+	ctx.JSON(iris.Map{"message": "tenant user deleted successfully"})
 }
 
-// loadWebPaths sets up HTTP routes.
-func (s *Server) loadWebPaths(app *iris.Application) {
-	party := app.Party("/send", s.basicAuthMiddleware)
-	{
-		party.Get("/", func(ctx iris.Context) {
-			ctx.JSON(iris.Map{"message": "send endpoint"})
-		})
-		party.Post("/document", s.handleDocumentUpload)
-		// New endpoint to retrieve fax logs by job UUID.
-		party.Get("/fax/log", s.getFaxLogByUUID)
+// getTenantUsers retrieves all tenant users. Optionally, you might filter these by tenant ID.
+func (s *Server) getTenantUsers(ctx iris.Context) {
+	var users []TenantUser
+	if err := s.DB.Find(&users).Error; err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to retrieve tenant users: " + err.Error()})
+		return
 	}
+	ctx.JSON(users)
+}
+
+// -------------------------
+// Middleware for Tenant User Authentication
+// -------------------------
+
+// basicTenantUserAuthMiddleware authenticates tenant users using Basic Auth.
+// If authentication fails, it logs the attempt and responds with 401.
+/*func (s *Server) basicTenantUserAuthMiddleware(ctx iris.Context) {
+	const prefix = "Basic "
+	authHeader := ctx.GetHeader("Authorization")
+	if len(authHeader) < len(prefix) || authHeader[:len(prefix)] != prefix {
+		unauthorized(ctx, s, "Missing or invalid Authorization header")
+		return
+	}
+	encodedCredentials := authHeader[len(prefix):]
+	decodedBytes, err := base64.StdEncoding.DecodeString(encodedCredentials)
+	if err != nil {
+		unauthorized(ctx, s, "Failed to decode credentials")
+		return
+	}
+	credentials := string(decodedBytes)
+	colonIndex := indexOf(credentials, ':')
+	if colonIndex < 0 {
+		unauthorized(ctx, s, "Invalid credentials format")
+		return
+	}
+	username := credentials[:colonIndex]
+	password := credentials[colonIndex+1:]
+	user, err := s.AuthenticateTenantUser(username, password)
+	if err != nil {
+		unauthorized(ctx, s, "Authentication failed: "+err.Error())
+		return
+	}
+	// Store the authenticated tenant user in context for downstream handlers.
+	ctx.Values().Set("tenantUser", user)
+	ctx.Next()
+}*/
+
+// -------------------------
+// Admin Handlers for Tenant Management
+// -------------------------
+
+// handleAddTenant creates a new tenant.
+func (s *Server) handleAddTenant(ctx iris.Context) {
+	var tenant Tenant
+	if err := ctx.ReadJSON(&tenant); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	if err := s.DB.Create(&tenant).Error; err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to add tenant: " + err.Error()})
+		return
+	}
+	// Update in-memory map.
+	s.mu.Lock()
+	if s.Tenants == nil {
+		s.Tenants = make(map[uint]*Tenant)
+	}
+	s.Tenants[tenant.ID] = &tenant
+	s.mu.Unlock()
+	ctx.JSON(tenant)
+}
+
+// handleUpdateTenant updates an existing tenant using tenant ID from the URL.
+func (s *Server) handleUpdateTenant(ctx iris.Context) {
+	idStr := ctx.Params().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid tenant id"})
+		return
+	}
+	var tenant Tenant
+	if err := ctx.ReadJSON(&tenant); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	tenant.ID = uint(id)
+	if err := s.DB.Save(&tenant).Error; err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to update tenant: " + err.Error()})
+		return
+	}
+	s.mu.Lock()
+	s.Tenants[tenant.ID] = &tenant
+	s.mu.Unlock()
+	ctx.JSON(tenant)
+}
+
+// handleDeleteTenant deletes a tenant by its ID.
+func (s *Server) handleDeleteTenant(ctx iris.Context) {
+	idStr := ctx.Params().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid tenant id"})
+		return
+	}
+	if err := s.DB.Delete(&Tenant{}, id).Error; err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to delete tenant: " + err.Error()})
+		return
+	}
+	s.mu.Lock()
+	delete(s.Tenants, uint(id))
+	s.mu.Unlock()
+	ctx.JSON(iris.Map{"message": "tenant deleted successfully"})
+}
+
+// -------------------------
+// Admin Handlers for Tenant Number Management
+// -------------------------
+
+// handleAddTenantNumber reads a JSON payload and calls addTenantNumber to persist the new tenant number.
+func (s *Server) handleAddTenantNumber(ctx iris.Context) {
+	var tn TenantNumber
+	if err := ctx.ReadJSON(&tn); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	if err := s.addTenantNumber(tn.TenantID, &tn); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to add tenant number: " + err.Error()})
+		return
+	}
+	ctx.JSON(tn)
+}
+
+// handleUpdateTenantNumber updates an existing tenant number.
+func (s *Server) handleUpdateTenantNumber(ctx iris.Context) {
+	idStr := ctx.Params().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid tenant number id"})
+		return
+	}
+	var tn TenantNumber
+	if err := ctx.ReadJSON(&tn); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	tn.ID = uint(id)
+	if err := s.DB.Save(&tn).Error; err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to update tenant number: " + err.Error()})
+		return
+	}
+	// Update in-memory map.
+	s.mu.Lock()
+	s.TenantNumbers[tn.Number] = &tn
+	s.mu.Unlock()
+	ctx.JSON(tn)
+}
+
+// handleDeleteTenantNumber deletes a tenant number.
+// Expects query parameters: ?number=...&tenant_id=...
+func (s *Server) handleDeleteTenantNumber(ctx iris.Context) {
+	numberStr := ctx.URLParam("number")
+	tenantIDStr := ctx.URLParam("tenant_id")
+	if numberStr == "" || tenantIDStr == "" {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "both number and tenant_id are required"})
+		return
+	}
+	tenantID, err := strconv.Atoi(tenantIDStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid tenant_id"})
+		return
+	}
+	if err := s.removeTenantNumber(uint(tenantID), numberStr); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to delete tenant number: " + err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"message": "tenant number deleted successfully"})
+}
+
+// -------------------------
+// Admin Handlers for Endpoint Management
+// -------------------------
+
+// handleAddEndpoint reads a JSON payload and persists a new endpoint.
+func (s *Server) handleAddEndpoint(ctx iris.Context) {
+	var ep Endpoint
+	if err := ctx.ReadJSON(&ep); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	if err := s.addEndpointToDB(&ep); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to add endpoint: " + err.Error()})
+		return
+	}
+	ctx.JSON(ep)
+}
+
+// handleUpdateEndpoint updates an existing endpoint using the ID from the URL.
+func (s *Server) handleUpdateEndpoint(ctx iris.Context) {
+	idStr := ctx.Params().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid endpoint id"})
+		return
+	}
+	var ep Endpoint
+	if err := ctx.ReadJSON(&ep); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	ep.ID = uint(id)
+	if err := s.updateEndpoint(&ep); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to update endpoint: " + err.Error()})
+		return
+	}
+	ctx.JSON(ep)
+}
+
+// handleDeleteEndpoint deletes an endpoint based on the ID provided in the URL.
+func (s *Server) handleDeleteEndpoint(ctx iris.Context) {
+	idStr := ctx.Params().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid endpoint id"})
+		return
+	}
+	if err := s.removeEndpointFromDB(uint(id)); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to delete endpoint: " + err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"message": "endpoint deleted successfully"})
 }
 
 // handleDocumentUpload receives an uploaded file, validates its type, converts it to TIFF using ImageMagick, and saves it.
@@ -131,7 +411,7 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 // and enqueues a FaxJob for processing. It also extracts the source/destination numbers from the request.
 func (s *Server) handleDocumentUpload(ctx iris.Context) {
 	// Retrieve the file from the form (field name "document")
-	file, fileHeader, err := ctx.FormFile("document")
+	file, fileHeader, err := ctx.FormFile("file")
 	if err != nil {
 		ctx.StatusCode(iris.StatusBadRequest)
 		ctx.JSON(iris.Map{"error": "failed to get document: " + err.Error()})
@@ -254,13 +534,6 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		Ts: time.Now(),
 	}
 
-	/*// Enqueue the fax job for processing.
-	s.Queue.QueueFaxResult <- QueueFaxResult{
-		Job:      faxjob,
-		Success:  faxjob.Result.Success,
-		Response: faxjob.Result.ResultText,
-	}*/
-
 	s.FaxJobRouting <- faxjob
 
 	// Respond to the HTTP request.
@@ -268,6 +541,44 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		"message":  "fax enqueued",
 		"job_uuid": faxjob.UUID.String(),
 	})
+}
+
+// basicTenantUserAuthMiddleware authenticates tenant users using Basic Auth.
+// It expects the credentials to be in the format "username:password" in the Authorization header.
+func (s *Server) basicTenantUserAuthMiddleware(ctx iris.Context) {
+	const prefix = "Basic "
+	authHeader := ctx.GetHeader("Authorization")
+	if len(authHeader) < len(prefix) || authHeader[:len(prefix)] != prefix {
+		unauthorized(ctx, s, "Missing or invalid Authorization header")
+		return
+	}
+
+	encodedCredentials := authHeader[len(prefix):]
+	decodedBytes, err := base64.StdEncoding.DecodeString(encodedCredentials)
+	if err != nil {
+		unauthorized(ctx, s, "Failed to decode credentials")
+		return
+	}
+
+	credentials := string(decodedBytes)
+	colonIndex := indexOf(credentials, ':')
+	if colonIndex < 0 {
+		unauthorized(ctx, s, "Invalid credentials format")
+		return
+	}
+
+	username := credentials[:colonIndex]
+	password := credentials[colonIndex+1:]
+
+	user, err := s.AuthenticateTenantUser(username, password)
+	if err != nil {
+		unauthorized(ctx, s, "Authentication failed: "+err.Error())
+		return
+	}
+
+	// Store the authenticated tenant user in context.
+	ctx.Values().Set("tenantUser", user)
+	ctx.Next()
 }
 
 // basicAuthMiddleware is a middleware that enforces Basic Authentication using an API key

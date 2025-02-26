@@ -13,6 +13,15 @@ type Tenant struct {
 	Numbers []TenantNumber `gorm:"foreignKey:TenantID" json:"numbers"`
 }
 
+// TenantUser represents an account for a tenant user.
+type TenantUser struct {
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	TenantID uint   `gorm:"index;not null" json:"tenant_id"`
+	Username string `gorm:"unique;not null" json:"username"`
+	Password string `json:"password"` // Stored encrypted.
+	APIKey   string `json:"api_key"`
+}
+
 type TenantNumber struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
 	TenantID     uint   `gorm:"index;not null" json:"tenant_id"`
@@ -40,6 +49,21 @@ func (s *Server) loadTenants() error {
 	s.Tenants = tenantMap
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *Server) AuthenticateTenantUser(username, password string) (*TenantUser, error) {
+	var user TenantUser
+	if err := s.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		return nil, fmt.Errorf("user not found")
+	}
+	decrypted, err := gofaxlib.Decrypt(user.Password, "test")
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt provided password: %w", err)
+	}
+	if password != decrypted {
+		return nil, fmt.Errorf("invalid password")
+	}
+	return &user, nil
 }
 
 // loadTenantNumbers loads tenant numbers from the database.
@@ -139,6 +163,18 @@ func (s *Server) removeTenantNumber(tenantID uint, numberStr string) error {
 }
 
 // getTenantByNumber returns the Tenant associated with a given phone number.
+func (s *Server) getNumber(number string) (*TenantNumber, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tn, exists := s.TenantNumbers[number]
+	if !exists {
+		return nil, fmt.Errorf("number %s not found", number)
+	}
+	return tn, nil
+}
+
+// getTenantByNumber returns the Tenant associated with a given phone number.
 func (s *Server) getTenantByNumber(number string) (*Tenant, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -181,15 +217,6 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 	return nil, fmt.Errorf("no endpoints found for number %s", number)
 }
 
-// TenantUser represents an account for a tenant user.
-type TenantUser struct {
-	ID       uint   `gorm:"primaryKey" json:"id"`
-	TenantID uint   `gorm:"index;not null" json:"tenant_id"`
-	Username string `gorm:"unique;not null" json:"username"`
-	Password string `json:"password"` // Stored encrypted.
-	APIKey   string `json:"api_key"`
-}
-
 // AddTenantUser adds a new tenant user to the database after encrypting the password.
 func (s *Server) AddTenantUser(user *TenantUser) error {
 	encrypted, err := gofaxlib.Encrypt(user.Password, "test")
@@ -224,21 +251,4 @@ func (s *Server) UpdateTenantUser(user *TenantUser) error {
 // DeleteTenantUser deletes a tenant user from the database by its ID.
 func (s *Server) DeleteTenantUser(id uint) error {
 	return s.DB.Delete(&TenantUser{}, id).Error
-}
-
-// AuthenticateTenantUser checks the provided username and password.
-// It retrieves the tenant user from the DB and compares the stored encrypted password.
-func (s *Server) AuthenticateTenantUser(username, password string) (*TenantUser, error) {
-	var user TenantUser
-	if err := s.DB.Where("username = ?", username).First(&user).Error; err != nil {
-		return nil, fmt.Errorf("user not found")
-	}
-	encrypted, err := gofaxlib.Encrypt(password, "test")
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt provided password: %w", err)
-	}
-	if user.Password != encrypted {
-		return nil, fmt.Errorf("invalid password")
-	}
-	return &user, nil
 }

@@ -423,8 +423,8 @@ func (t *eventClient) start() {
 		"origination_uuid":             t.faxjob.UUID.String(),
 		"origination_caller_id_number": t.faxjob.CallerIdNumber,
 		"origination_caller_id_name":   t.faxjob.CallerIdName,
-		"fax_ident":                    t.faxjob.CallerIdNumber, //t.faxjob.Identifier,
-		"fax_header":                   t.faxjob.CallerIdName,   // t.faxjob.Header
+		"fax_ident":                    t.faxjob.Identifier, // t.faxjob.CallerIdNumber,
+		"fax_header":                   t.faxjob.Header,     // t.faxjob.CallerIdName,
 		"fax_use_ecm":                  strconv.FormatBool(t.faxjob.UseECM),
 		"fax_disable_v17":              strconv.FormatBool(t.faxjob.DisableV17),
 		"fax_enable_t38":               strconv.FormatBool(enableT38),

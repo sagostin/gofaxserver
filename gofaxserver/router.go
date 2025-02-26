@@ -36,6 +36,14 @@ func (r *Router) routeFax(fax *FaxJob) {
 	srcTenant, _ := r.server.getTenantByNumber(srcNum)
 	if srcTenant != nil {
 		fax.SrcTenantID = strconv.Itoa(int(srcTenant.ID))
+
+		cid, _ := r.server.getNumber(srcNum)
+		if cid != nil {
+			fax.CallerIdName = cid.CID
+		}
+
+		fax.Header = fax.CallerIdName
+		fax.Identifier = fax.CallerIdNumber
 	}
 	dstTenant, _ := r.server.getTenantByNumber(dstNum)
 	if dstTenant != nil {
