@@ -24,6 +24,8 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 			ctx.JSON(iris.Map{"message": "send endpoint"})
 		})
 		party.Post("/document", s.handleDocumentUpload)
+		// New endpoint to retrieve fax logs by job UUID.
+		party.Get("/fax/log", s.getFaxLogByUUID)
 	}
 }
 
@@ -281,4 +283,31 @@ func unauthorized(ctx iris.Context, gateway *Server, message string) {
 	// Respond with 401 Unauthorized
 	ctx.StatusCode(http.StatusUnauthorized)
 	ctx.WriteString(message)
+}
+
+// getFaxLogByUUID retrieves all fax job result records that match the provided UUID query parameter.
+func (s *Server) getFaxLogByUUID(ctx iris.Context) {
+	uuidStr := ctx.URLParam("uuid")
+	if uuidStr == "" {
+		ctx.StatusCode(iris.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "uuid query parameter is required"})
+		return
+	}
+
+	// Parse the provided UUID string.
+	jobUUID, err := uuid.Parse(uuidStr)
+	if err != nil {
+		ctx.StatusCode(iris.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid uuid format: " + err.Error()})
+		return
+	}
+
+	var records []FaxJobResultRecord
+	if err := s.DB.Where("job_uuid = ?", jobUUID).Find(&records).Error; err != nil {
+		ctx.StatusCode(iris.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to retrieve fax logs: " + err.Error()})
+		return
+	}
+
+	ctx.JSON(records)
 }
