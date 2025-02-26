@@ -1,8 +1,8 @@
 package gofaxserver
 
 import (
-	"fmt"
 	"github.com/sirupsen/logrus"
+	"time"
 )
 
 type Router struct {
@@ -29,7 +29,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 	srcNum := r.server.DialplanManager.ApplyTransformationRules(fax.CallerIdNumber)
 	dstNum := r.server.DialplanManager.ApplyTransformationRules(fax.CalleeNumber)
 
-	fmt.Println(fax)
+	fax.Ts = time.Now() // time of start routing
 
 	switch srcType := fax.SourceRoutingInformation.SourceType; srcType {
 	case "gateway":

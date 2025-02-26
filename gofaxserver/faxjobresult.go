@@ -3,74 +3,128 @@ package gofaxserver
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"time"
 )
 
 // FaxJobResultRecord is a GORM model representing a stored fax job result.
 // It flattens the primary FaxJob fields (call UUID, callee/caller info) and summary FaxResult info
 // into dedicated columns, while nesting the full FaxJob and FaxResult JSON.
+// FaxJobResultRecord combines key fields from a FaxJob and its FaxResult.
 type FaxJobResultRecord struct {
-	ID             uint   `gorm:"primaryKey" json:"id"`
-	JobUUID        string `json:"job_uuid"`         // FaxJob.UUID
-	CallUUID       string `json:"call_uuid"`        // FaxJob.CallUUID
-	CalleeNumber   string `json:"callee_number"`    // FaxJob.CalleeNumber
-	CallerIdNumber string `json:"caller_id_number"` // FaxJob.CallerIdNumber
-	CallerIdName   string `json:"caller_id_name"`   // FaxJob.CallerIdName
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	JobUUID           uuid.UUID `json:"job_uuid"`
+	CallUUID          uuid.UUID `json:"call_uuid"`
+	CalleeNumber      string    `json:"callee_number"`
+	CallerIdNumber    string    `json:"caller_id_number"`
+	CallerIdName      string    `json:"caller_id_name"`
+	FileName          string    `json:"file_name"`
+	UseECM            bool      `json:"use_ecm"`
+	DisableV17        bool      `json:"disable_v17"`
+	Identifier        string    `json:"identifier"`
+	Header            string    `json:"header"`
+	Endpoints         string    `json:"endpoints"` // JSON-encoded endpoints slice
+	SourceRoutingInfo string    `json:"source_routing_info"`
 
-	FaxSuccess  bool   `json:"fax_success"`  // FaxResult.Success
-	HangupCause string `json:"hangup_cause"` // FaxResult.HangupCause
-	Status      string `json:"status"`
+	// FaxJob fields
+	NPages     int           `json:"npages"`
+	DataFormat string        `json:"data_format"`
+	SignalRate int           `json:"signal_rate"`
+	CSI        string        `json:"csi"`
+	Status     string        `json:"status"`
+	Returned   string        `json:"returned"`
+	TotDials   int           `json:"tot_dials"`
+	NDials     int           `json:"n_dials"`
+	TotTries   int           `json:"tot_tries"`
+	JobTime    time.Duration `json:"job_time"`
+	ConnTime   time.Duration `json:"conn_time"`
+	Ts         time.Time     `json:"ts"`
 
-	FaxJobJSON    string `json:"fax_job_json"`    // Nested JSON for the full FaxJob
-	FaxResultJSON string `json:"fax_result_json"` // Nested JSON for the full FaxResult
+	// FaxResult fields (from job.Result)
+	StartTs          time.Time `json:"start_ts"`
+	EndTs            time.Time `json:"end_ts"`
+	HangupCause      string    `json:"hangup_cause"`
+	TotalPages       uint      `json:"total_pages"`
+	TransferredPages uint      `json:"transferred_pages"`
+	ECM              bool      `json:"ecm"`
+	RemoteID         string    `json:"remote_id"`
+	ResultCode       int       `json:"result_code"`
+	ResultText       string    `json:"result_text"`
+	Success          bool      `json:"success"`
+	TransferRate     uint      `json:"transfer_rate"`
+	NegotiateCount   uint      `json:"negotiate_count"`
 
-	CreatedAt time.Time `json:"created_at"` // When the record was created.
-	ErrorMsg  string    `json:"error_msg"`  // Any error message encountered.
+	CreatedAt time.Time `json:"created_at"`
 }
 
-// storeQueueFaxResult converts a QueueFaxResult into a FaxJobResultRecord.
-// It extracts key fields from the FaxJob and FaxResult for flat columns, and nests the complete JSON.
-func (q *Queue) storeQueueFaxResult(result QueueFaxResult) error {
-	job := result.Job
-
-	// Marshal the full FaxJob.
-	jobData, err := json.Marshal(job)
-	if err != nil {
-		return fmt.Errorf("failed to marshal fax job: %w", err)
+// storeQueueFaxResult combines the FaxJob and FaxResult into a FaxJobResultRecord
+// and saves it using GORM. It marshals the Endpoints slice into JSON.
+func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
+	job := qFR.Job
+	if job == nil {
+		return fmt.Errorf("fax job is nil")
 	}
-	jobJSON := string(jobData)
 
-	// Marshal the FaxResult, if available.
-	var resultJSON string
-	if job.Result != nil {
-		data, err := json.Marshal(job.Result)
-		if err != nil {
-			return fmt.Errorf("failed to marshal fax result: %w", err)
+	// Marshal endpoints to JSON.
+	var endpointsJSON string
+	if len(job.Endpoints) > 0 {
+		if data, err := json.Marshal(job.Endpoints); err != nil {
+			endpointsJSON = ""
+		} else {
+			endpointsJSON = string(data)
 		}
-		resultJSON = string(data)
 	}
 
 	record := FaxJobResultRecord{
-		JobUUID:        job.UUID.String(),
-		CallUUID:       job.CallUUID.String(),
+		JobUUID:        job.UUID,
+		CallUUID:       job.CallUUID,
 		CalleeNumber:   job.CalleeNumber,
 		CallerIdNumber: job.CallerIdNumber,
 		CallerIdName:   job.CallerIdName,
+		FileName:       job.FileName,
+		UseECM:         job.UseECM,
+		DisableV17:     job.DisableV17,
+		Identifier:     job.Identifier,
+		Header:         job.Header,
+		Endpoints:      endpointsJSON,
 
-		FaxSuccess:  job.Result != nil && job.Result.Success,
-		Status:      job.Status,
-		HangupCause: "",
+		NPages:     job.NPages,
+		DataFormat: job.DataFormat,
+		SignalRate: job.SignalRate,
+		CSI:        job.CSI,
+		Status:     job.Status,
+		Returned:   job.Returned,
+		TotDials:   job.TotDials,
+		NDials:     job.NDials,
+		TotTries:   job.TotTries,
+		JobTime:    job.JobTime,
+		ConnTime:   job.ConnTime,
+		Ts:         job.Ts,
 
-		FaxJobJSON:    jobJSON,
-		FaxResultJSON: resultJSON,
-		CreatedAt:     time.Now(),
+		CreatedAt: time.Now(),
 	}
 
+	sourceRoutingInformation, err := json.Marshal(job.SourceRoutingInformation)
+	if err != nil {
+		return err
+	}
+
+	record.SourceRoutingInfo = string(sourceRoutingInformation)
+
+	// If a FaxResult exists, fill in its fields.
 	if job.Result != nil {
+		record.StartTs = job.Result.StartTs
+		record.EndTs = job.Result.EndTs
 		record.HangupCause = job.Result.HangupCause
-	}
-	if result.Err != nil {
-		record.ErrorMsg = result.Err.Error()
+		record.TotalPages = job.Result.TotalPages
+		record.TransferredPages = job.Result.TransferredPages
+		record.ECM = job.Result.Ecm
+		record.RemoteID = job.Result.RemoteID
+		record.ResultCode = job.Result.ResultCode
+		record.ResultText = job.Result.ResultText
+		record.Success = job.Result.Success
+		record.TransferRate = job.Result.TransferRate
+		record.NegotiateCount = job.Result.NegotiateCount
 	}
 
 	// q.server.DB is assumed to be an initialized *gorm.DB instance.
