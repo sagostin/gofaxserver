@@ -42,7 +42,7 @@ func (r Resolution) String() string {
 func parseResolution(resstr string) (*Resolution, error) {
 	parts := strings.SplitN(resstr, "x", 2)
 	if len(parts) != 2 {
-		return nil, errors.New("Error parsing resolution string")
+		return nil, errors.New("error parsing resolution string")
 	}
 	res := new(Resolution)
 	if x, err := strconv.Atoi(parts[0]); err == nil {

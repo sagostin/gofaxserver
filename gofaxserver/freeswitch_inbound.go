@@ -455,23 +455,8 @@ EventLoop:
 		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
 	))
 
-	if !result.Success {
-		return
-	}
-
-	/*if !result.Success {
-		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-			"FreeSwitch.EventServer",
-			result.ResultText,
-			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": channelUUID.String()},
-		))
-		return
-	}*/
-	// todo pass the xfl to a channel for db saving and further routing
-
 	faxjob := &FaxJob{
-		UUID:           channelUUID, // reuse the UUID from the freeswitch channel
+		UUID:           channelUUID,
 		CalleeNumber:   recipient,
 		CallerIdNumber: cidnum,
 		CallerIdName:   cidname,
@@ -486,6 +471,27 @@ EventLoop:
 			SourceID:   channelUUID.String(),
 		},
 	}
+
+	e.server.Queue.QueueFaxResult <- QueueFaxResult{
+		Job:      faxjob,
+		Success:  result.Success,
+		Response: faxjob.Result.ResultText,
+	}
+
+	if !result.Success {
+		return
+	}
+
+	/*if !result.Success {
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+			"FreeSwitch.EventServer",
+			result.ResultText,
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": channelUUID.String()},
+		))
+		return
+	}*/
+	// todo pass the xfl to a channel for db saving and further routing
 
 	e.server.FaxJobRouting <- faxjob
 
