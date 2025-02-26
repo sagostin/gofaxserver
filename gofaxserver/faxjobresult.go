@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	"time"
 )
 
@@ -136,9 +137,14 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 func (q *Queue) startQueueResults() {
 	for result := range q.QueueFaxResult {
 		go func(res QueueFaxResult) {
-			fmt.Printf("Processing result for job %v: %+v\n", res.Job.UUID, res)
+			//fmt.Printf("Processing result for job %v: %+v\n", res.Job.UUID, res)
 			if err := q.storeQueueFaxResult(res); err != nil {
-				fmt.Printf("Error storing fax job result: %v\n", err)
+				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+					"FaxJobResult",
+					"error storing fax job result: ",
+					logrus.ErrorLevel,
+					map[string]interface{}{"uuid": res.Job.UUID.String()}, err,
+				))
 			}
 		}(result)
 	}
