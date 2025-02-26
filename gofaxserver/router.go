@@ -2,6 +2,7 @@ package gofaxserver
 
 import (
 	"github.com/sirupsen/logrus"
+	"strconv"
 	"time"
 )
 
@@ -28,6 +29,24 @@ func (r *Router) Start() {
 func (r *Router) routeFax(fax *FaxJob) {
 	srcNum := r.server.DialplanManager.ApplyTransformationRules(fax.CallerIdNumber)
 	dstNum := r.server.DialplanManager.ApplyTransformationRules(fax.CalleeNumber)
+
+	fax.CalleeNumber = dstNum
+	fax.CallerIdNumber = srcNum
+
+	srcTenant, _ := r.server.getTenantByNumber(srcNum)
+	if srcTenant != nil {
+		fax.SrcTenantID = strconv.Itoa(int(srcTenant.ID))
+	}
+	dstTenant, _ := r.server.getTenantByNumber(dstNum)
+	if dstTenant != nil {
+		fax.DstTenantID = strconv.Itoa(int(dstTenant.ID))
+	}
+
+	r.server.Queue.QueueFaxResult <- QueueFaxResult{
+		Job:      fax,
+		Success:  fax.Result.Success,
+		Response: fax.Result.ResultText,
+	}
 
 	fax.Ts = time.Now() // time of start routing
 
@@ -63,12 +82,6 @@ func (r *Router) routeFax(fax *FaxJob) {
 		// we could also validate that the sending / src address is coming from the right allowed endpoint?
 		// do we want that much control where you need matching source / destination endpoints?
 
-		_, err := r.server.getTenantByNumber(srcNum)
-		// todo route to other tenant by dst number based on endpoint then send to queue
-		if err != nil {
-			// todo throw error cuz not valid sending number
-		}
-
 		// we'll just check for destination
 		// this will only output if it's a valid tenant to tenant fax, otherwise, we will needa send to default gateway(s)
 		endpoints, err := r.server.getEndpointsForNumber(dstNum)
@@ -94,12 +107,6 @@ func (r *Router) routeFax(fax *FaxJob) {
 		r.server.Queue.Queue <- fax
 		return
 	case "webhook":
-		// todo for webhooks, we will need to validate sending number to prevent abuse and such.
-		_, err := r.server.getTenantByNumber(srcNum)
-		// todo route to other tenant by dst number based on endpoint then send to queue
-		if err != nil {
-			// todo throw error cuz not valid sending number
-		}
 
 		// we'll just check for destination
 		// this will only output if it's a valid tenant to tenant fax, otherwise, we will needa send to default gateway(s)

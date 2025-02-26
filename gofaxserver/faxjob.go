@@ -12,6 +12,10 @@ type FaxJob struct {
 	UUID     uuid.UUID `json:"uuid,omitempty"`
 	CallUUID uuid.UUID `json:"call_uuid"`
 
+	// track src / dst tenant id for correlation / read access to logs and such
+	SrcTenantID string `json:"src_tenant_id"`
+	DstTenantID string `json:"dst_tenant_id"`
+
 	/*File string	`json:"file,omitempty"` // PDF or TIFF to send - will need to be converted to TIFF if PDF*/
 	// FreeSwitch-specific information
 	CalleeNumber   string `json:"number,omitempty"`       // Destination number

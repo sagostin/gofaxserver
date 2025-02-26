@@ -3,6 +3,7 @@ package gofaxserver
 import (
 	"fmt"
 	"github.com/sirupsen/logrus"
+	"gofaxserver/gofaxlib"
 )
 
 type Tenant struct {
@@ -178,4 +179,66 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 		return eps, nil
 	}
 	return nil, fmt.Errorf("no endpoints found for number %s", number)
+}
+
+// TenantUser represents an account for a tenant user.
+type TenantUser struct {
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	TenantID uint   `gorm:"index;not null" json:"tenant_id"`
+	Username string `gorm:"unique;not null" json:"username"`
+	Password string `json:"password"` // Stored encrypted.
+	APIKey   string `json:"api_key"`
+}
+
+// AddTenantUser adds a new tenant user to the database after encrypting the password.
+func (s *Server) AddTenantUser(user *TenantUser) error {
+	encrypted, err := gofaxlib.Encrypt(user.Password, "test")
+	if err != nil {
+		return fmt.Errorf("failed to encrypt password: %w", err)
+	}
+	user.Password = encrypted
+	return s.DB.Create(user).Error
+}
+
+// UpdateTenantUser updates an existing tenant user. If a new password is provided,
+// it is re-encrypted; otherwise, the password remains unchanged.
+func (s *Server) UpdateTenantUser(user *TenantUser) error {
+	if user.Password != "" {
+		encrypted, err := gofaxlib.Encrypt(user.Password, "test")
+		if err != nil {
+			return fmt.Errorf("failed to encrypt password: %w", err)
+		}
+		user.Password = encrypted
+		return s.DB.Save(user).Error
+	}
+	// If no new password is provided, update only other fields.
+	return s.DB.Model(&TenantUser{}).
+		Where("id = ?", user.ID).
+		Updates(map[string]interface{}{
+			"tenant_id": user.TenantID,
+			"username":  user.Username,
+			"api_key":   user.APIKey,
+		}).Error
+}
+
+// DeleteTenantUser deletes a tenant user from the database by its ID.
+func (s *Server) DeleteTenantUser(id uint) error {
+	return s.DB.Delete(&TenantUser{}, id).Error
+}
+
+// AuthenticateTenantUser checks the provided username and password.
+// It retrieves the tenant user from the DB and compares the stored encrypted password.
+func (s *Server) AuthenticateTenantUser(username, password string) (*TenantUser, error) {
+	var user TenantUser
+	if err := s.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		return nil, fmt.Errorf("user not found")
+	}
+	encrypted, err := gofaxlib.Encrypt(password, "test")
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt provided password: %w", err)
+	}
+	if user.Password != encrypted {
+		return nil, fmt.Errorf("invalid password")
+	}
+	return &user, nil
 }

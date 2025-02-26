@@ -12,9 +12,104 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// HTTP handler to authenticate a tenant user. Expects JSON payload with "username" and "password".
+func (s *Server) handleAuthenticateTenantUser(ctx iris.Context) {
+	var credentials struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := ctx.ReadJSON(&credentials); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid credentials format: " + err.Error()})
+		return
+	}
+	user, err := s.AuthenticateTenantUser(credentials.Username, credentials.Password)
+	if err != nil {
+		ctx.StatusCode(http.StatusUnauthorized)
+		ctx.JSON(iris.Map{"error": "authentication failed: " + err.Error()})
+		return
+	}
+	// Return the API key (or any token) as part of the successful authentication.
+	ctx.JSON(iris.Map{
+		"message":   "authentication successful",
+		"api_key":   user.APIKey,
+		"user_id":   user.ID,
+		"tenant_id": user.TenantID,
+	})
+}
+
+// loadTenantUserPaths sets up the HTTP routes for tenant user management.
+func (s *Server) loadTenantUserPaths(app *iris.Application) {
+	tenantParty := app.Party("/tenant/user", s.basicAuthMiddleware)
+	{
+		tenantParty.Post("/", s.handleAddTenantUser)
+		tenantParty.Put("/{id}", s.handleUpdateTenantUser)
+		tenantParty.Delete("/{id}", s.handleDeleteTenantUser)
+		tenantParty.Post("/authenticate", s.handleAuthenticateTenantUser)
+	}
+}
+
+// HTTP handler to add a tenant user. Expects JSON payload.
+func (s *Server) handleAddTenantUser(ctx iris.Context) {
+	var user TenantUser
+	if err := ctx.ReadJSON(&user); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid input: " + err.Error()})
+		return
+	}
+	if err := s.AddTenantUser(&user); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to add tenant user: " + err.Error()})
+		return
+	}
+	ctx.JSON(user)
+}
+
+// HTTP handler to update a tenant user. The user ID is provided in the URL.
+func (s *Server) handleUpdateTenantUser(ctx iris.Context) {
+	idStr := ctx.Params().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid user id"})
+		return
+	}
+	var user TenantUser
+	if err := ctx.ReadJSON(&user); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid input: " + err.Error()})
+		return
+	}
+	user.ID = uint(id)
+	if err := s.UpdateTenantUser(&user); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to update tenant user: " + err.Error()})
+		return
+	}
+	ctx.JSON(user)
+}
+
+// HTTP handler to delete a tenant user by ID.
+func (s *Server) handleDeleteTenantUser(ctx iris.Context) {
+	idStr := ctx.Params().Get("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid user id"})
+		return
+	}
+	if err := s.DeleteTenantUser(uint(id)); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to delete tenant user: " + err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"message": "user deleted successfully"})
+}
 
 // loadWebPaths sets up HTTP routes.
 func (s *Server) loadWebPaths(app *iris.Application) {
@@ -159,12 +254,12 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		Ts: time.Now(),
 	}
 
-	// Enqueue the fax job for processing.
+	/*// Enqueue the fax job for processing.
 	s.Queue.QueueFaxResult <- QueueFaxResult{
 		Job:      faxjob,
 		Success:  faxjob.Result.Success,
 		Response: faxjob.Result.ResultText,
-	}
+	}*/
 
 	s.FaxJobRouting <- faxjob
 

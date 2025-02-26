@@ -147,9 +147,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	if err != nil {
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"EventServer",
-			"invalid call, failed to match ACLs - ip: %v",
+			"invalid call (to: %s from: %s <%s>) failed to match ACLs - ip: %s",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, sourceip,
+			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidnum, cidname, sourceip,
 		))
 		c.Execute("respond", "404", true)
 		c.Send("exit")
@@ -470,12 +470,6 @@ EventLoop:
 			Source:     gateway,
 			SourceID:   channelUUID.String(),
 		},
-	}
-
-	e.server.Queue.QueueFaxResult <- QueueFaxResult{
-		Job:      faxjob,
-		Success:  result.Success,
-		Response: faxjob.Result.ResultText,
 	}
 
 	if !result.Success {
