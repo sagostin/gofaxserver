@@ -492,7 +492,7 @@ func (t *eventClient) start() {
 	t.logManager.SendLog(t.logManager.BuildLog(
 		"EventClient",
 		"Dialstring: %s",
-		logrus.ErrorLevel,
+		logrus.InfoLevel,
 		map[string]interface{}{"uuid": t.faxjob.UUID.String()}, dialstring,
 	))
 
@@ -500,7 +500,7 @@ func (t *eventClient) start() {
 	t.logManager.SendLog(t.logManager.BuildLog(
 		"EventClient",
 		"Originating channel to "+t.faxjob.CalleeNumber+" using gateway "+dialstring,
-		logrus.ErrorLevel,
+		logrus.InfoLevel,
 		map[string]interface{}{"uuid": t.faxjob.UUID.String()},
 	))
 	_, err = t.conn.Send(fmt.Sprintf("api originate %v, &txfax(%v)", dialstring, t.faxjob.FileName))
@@ -510,7 +510,7 @@ func (t *eventClient) start() {
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
 			"Originate failed with hangup cause "+hangupcause,
-			logrus.ErrorLevel,
+			logrus.InfoLevel,
 			map[string]interface{}{"uuid": t.faxjob.UUID.String()},
 		))
 		if gofaxlib.FailedHangUpCause(hangupcause) {

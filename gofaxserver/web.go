@@ -107,7 +107,11 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 	// Determine output path for TIFF.
 	destFile := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, docID))
 	// Convert the file to TIFF using ImageMagick's 'convert' command.
-	cmdStr := fmt.Sprintf("convert %s -density 204x196 -units pixelsperinch -resize '1728x2156!' -quality 100 -background white -alpha background -alpha off -compress Fax %s", tempFile, destFile)
+	//cmdStr := fmt.Sprintf("magick %s -density 204x196 -resize '1728x2156!' -background white -alpha background -compress Group4 %s", tempFile, destFile)
+	cmdStr := fmt.Sprintf(
+		"gs -q -r204x196 -g1728x2156 -dNOPAUSE -dBATCH -dSAFER -dPDFFitPage -sDEVICE=tiffg3 -sOutputFile=%s -- %s",
+		destFile, tempFile,
+	)
 	cmd := exec.Command("/bin/bash", "-c", cmdStr)
 	if err = cmd.Run(); err != nil {
 		ctx.StatusCode(iris.StatusInternalServerError)

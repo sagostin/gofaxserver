@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	tempFileFormat = "fax_%s.tif"
+	tempFileFormat = "fax_%s.tiff"
 	/*	recvqDir          = "recvq"
 		defaultFaxrcvdCmd = "bin/faxrcvd"
 		defaultDevice     = "freeswitch"*/
