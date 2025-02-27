@@ -556,7 +556,7 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 			ResultText: "OK",
 			Success:    true,
 		},
-		SourceRoutingInformation: FaxSourceInfo{
+		SourceInfo: FaxSourceInfo{
 			Timestamp:  time.Now(),
 			SourceType: "webhook",
 			Source:     "user",

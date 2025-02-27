@@ -464,7 +464,7 @@ EventLoop:
 		UseECM:         true, // set this by default
 		DisableV17:     false,
 		Result:         result,
-		SourceRoutingInformation: FaxSourceInfo{
+		SourceInfo: FaxSourceInfo{
 			Timestamp:  time.Now(),
 			SourceType: "gateway", // gateway means freeswitch
 			Source:     gateway,

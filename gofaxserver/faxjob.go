@@ -27,9 +27,9 @@ type FaxJob struct {
 	Identifier     string `json:"ident,omitempty"`        // Faxing ident
 	Header         string `json:"header,omitempty"`       // Header (e.g., sender company name)
 
-	Endpoints                []*Endpoint         `json:"endpoints,omitempty"` // List of endpoints and such
-	Result                   *gofaxlib.FaxResult `json:"result,omitempty"`
-	SourceRoutingInformation FaxSourceInfo       `json:"fax_source_info,omitempty"` // Routing information for the fax
+	Endpoints  []*Endpoint         `json:"endpoints,omitempty"` // List of endpoints and such
+	Result     *gofaxlib.FaxResult `json:"result,omitempty"`
+	SourceInfo FaxSourceInfo       `json:"fax_source_info,omitempty"` // Routing information for the fax
 
 	// These fields may be updated later in the process:
 	NPages     int           `json:"npages,omitempty"`     // number of pages sent

@@ -109,7 +109,7 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		CreatedAt: time.Now(),
 	}
 
-	sourceRoutingInformation, err := json.Marshal(job.SourceRoutingInformation)
+	sourceRoutingInformation, err := json.Marshal(job.SourceInfo)
 	if err != nil {
 		return err
 	}

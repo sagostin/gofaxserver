@@ -58,9 +58,9 @@ func (r *Router) routeFax(fax *FaxJob) {
 	}
 
 	// source type specific routing
-	switch srcType := fax.SourceRoutingInformation.SourceType; srcType {
+	switch srcType := fax.SourceInfo.SourceType; srcType {
 	case "gateway":
-		if contains(r.server.UpstreamFsGateways, fax.SourceRoutingInformation.Source) {
+		if contains(r.server.UpstreamFsGateways, fax.SourceInfo.Source) {
 			ep, err := r.server.getEndpointsForNumber(dstNum)
 			if err != nil {
 				r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
