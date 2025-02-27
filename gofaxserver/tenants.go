@@ -56,7 +56,7 @@ func (s *Server) AuthenticateTenantUser(username, password string) (*TenantUser,
 	if err := s.DB.Where("username = ?", username).First(&user).Error; err != nil {
 		return nil, fmt.Errorf("user not found")
 	}
-	decrypted, err := gofaxlib.Decrypt(user.Password, "test")
+	decrypted, err := gofaxlib.Decrypt(user.Password, gofaxlib.Config.PSK)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt provided password: %w", err)
 	}
@@ -219,7 +219,7 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 
 // AddTenantUser adds a new tenant user to the database after encrypting the password.
 func (s *Server) AddTenantUser(user *TenantUser) error {
-	encrypted, err := gofaxlib.Encrypt(user.Password, "test")
+	encrypted, err := gofaxlib.Encrypt(user.Password, gofaxlib.Config.PSK)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt password: %w", err)
 	}
@@ -231,7 +231,7 @@ func (s *Server) AddTenantUser(user *TenantUser) error {
 // it is re-encrypted; otherwise, the password remains unchanged.
 func (s *Server) UpdateTenantUser(user *TenantUser) error {
 	if user.Password != "" {
-		encrypted, err := gofaxlib.Encrypt(user.Password, "test")
+		encrypted, err := gofaxlib.Encrypt(user.Password, gofaxlib.Config.PSK)
 		if err != nil {
 			return fmt.Errorf("failed to encrypt password: %w", err)
 		}

@@ -68,6 +68,7 @@ type config struct {
 	Web struct {
 		Listen string `json:"listen"`
 	} `json:"web"`
+	PSK string `json:"psk"`
 }
 
 // LoadConfig loads the configuration from a JSON file.
