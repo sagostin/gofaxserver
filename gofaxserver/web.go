@@ -392,6 +392,14 @@ func (s *Server) handleUpdateEndpoint(ctx iris.Context) {
 		ctx.JSON(iris.Map{"error": "failed to update endpoint: " + err.Error()})
 		return
 	}
+
+	err = s.loadEndpoints()
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "added endpoint but failed to reload: " + err.Error()})
+		return
+	}
+
 	ctx.JSON(ep)
 }
 
@@ -409,6 +417,14 @@ func (s *Server) handleDeleteEndpoint(ctx iris.Context) {
 		ctx.JSON(iris.Map{"error": "failed to delete endpoint: " + err.Error()})
 		return
 	}
+
+	err = s.loadEndpoints()
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "added endpoint but failed to reload: " + err.Error()})
+		return
+	}
+
 	ctx.JSON(iris.Map{"message": "endpoint deleted successfully"})
 }
 
@@ -543,8 +559,8 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		SourceRoutingInformation: FaxSourceInfo{
 			Timestamp:  time.Now(),
 			SourceType: "webhook",
-			Source:     "placeholder1",
-			SourceID:   "placeholder2", // Placeholder – optionally extract from request.
+			Source:     "user",
+			SourceID:   ctx.Values().GetString("userID"), // Placeholder – optionally extract from request.
 		},
 		Ts: time.Now(),
 	}
@@ -593,6 +609,7 @@ func (s *Server) basicTenantUserAuthMiddleware(ctx iris.Context) {
 
 	// Store the authenticated tenant user in context.
 	ctx.Values().Set("tenantID", user.TenantID)
+	ctx.Values().Set("userID", user.ID)
 	ctx.Next()
 }
 
