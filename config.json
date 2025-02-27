@@ -38,7 +38,8 @@
     "password": "lokipassword"
   },
   "web": {
-    "listen": ":3000"
+    "listen": ":3000",
+    "api_key": "apikeyhere"
   },
   "psk": "test"
 }

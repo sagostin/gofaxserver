@@ -67,6 +67,7 @@ type config struct {
 	} `json:"loki"`
 	Web struct {
 		Listen string `json:"listen"`
+		APIKey string `json:"api_key"`
 	} `json:"web"`
 	PSK string `json:"psk"`
 }

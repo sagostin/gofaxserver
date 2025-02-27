@@ -593,7 +593,7 @@ func (s *Server) basicAuthMiddleware(ctx iris.Context) {
 	// Retrieve the expected API key from environment variables
 	var lm = s.LogManager
 
-	expectedAPIKey := os.Getenv("API_KEY")
+	expectedAPIKey := gofaxlib.Config.Web.APIKey
 	if expectedAPIKey == "" {
 		lm.SendLog(lm.BuildLog(
 			"Web.Auth",
