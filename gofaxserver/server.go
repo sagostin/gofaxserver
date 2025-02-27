@@ -47,8 +47,6 @@ func NewServer() *Server {
 }
 
 func (s *Server) Start() {
-	fmt.Print("starting gofaxserver")
-
 	gofaxlib.Config.Loki.Job = "faxserver"
 
 	err := godotenv.Load()
@@ -60,7 +58,20 @@ func (s *Server) Start() {
 	logManager.LoadTemplates()
 	s.LogManager = logManager
 
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Server",
+		fmt.Sprintf("starting gofaxserver"),
+		logrus.InfoLevel,
+		nil,
+	))
+
 	s.DialplanManager = loadDialplan()
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Server",
+		fmt.Sprintf("loaded dialplan and transformations"),
+		logrus.InfoLevel,
+		nil,
+	))
 
 	// Shut down receiving lines when killed
 	sigchan := make(chan os.Signal, 1)
@@ -70,23 +81,18 @@ func (s *Server) Start() {
 	if err != nil {
 		panic(fmt.Errorf("failed to connect to PostgreSQL: %v", err))
 	}
-
 	s.DB = db
 
 	err = s.migrateSchema()
 	if err != nil {
 		return
 	}
-
-	// start the router
-	queue := NewQueue(s)
-	go queue.Start()
-
-	router := NewRouter(s)
-	go router.Start()
-
-	s.Router = router
-	s.Queue = queue
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Server",
+		fmt.Sprintf("connected to database"),
+		logrus.InfoLevel,
+		nil,
+	))
 
 	err = s.loadTenantNumbers()
 	if err != nil {
@@ -101,6 +107,30 @@ func (s *Server) Start() {
 	if err != nil {
 		return
 	}
+
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Server",
+		fmt.Sprintf("loaded tenants, numbers, and endpoints"),
+		logrus.InfoLevel,
+		nil,
+	))
+
+	// start the router
+	queue := NewQueue(s)
+	go queue.Start()
+
+	router := NewRouter(s)
+	go router.Start()
+
+	s.Router = router
+	s.Queue = queue
+
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Server",
+		fmt.Sprintf("started queue and router"),
+		logrus.InfoLevel,
+		nil,
+	))
 
 	// start freeswitch inbound event socket server
 	fsSocket := NewEventSocketServer(s)
@@ -123,6 +153,13 @@ func (s *Server) Start() {
 		ctx.StatusCode(200)
 		return
 	})
+
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Server",
+		fmt.Sprintf("started web server on %s"),
+		logrus.InfoLevel,
+		nil, gofaxlib.Config.Web.Listen,
+	))
 
 	err = webIris.Listen(gofaxlib.Config.Web.Listen)
 	if err != nil {
