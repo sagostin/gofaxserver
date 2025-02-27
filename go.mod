@@ -6,9 +6,9 @@ toolchain go1.23.2
 
 require (
 	github.com/fiorix/go-eventsocket v0.0.0-20240904143901-40effc2c18a7
+	github.com/go-pdf/fpdf v0.9.0
 	github.com/gonicus/gofaxip v0.0.0-20240726092636-59a90a744c57
 	github.com/google/uuid v1.6.0
-	github.com/joho/godotenv v1.5.1
 	github.com/kataras/iris/v12 v12.2.11
 	github.com/sirupsen/logrus v1.9.3
 	gorm.io/driver/postgres v1.5.11
