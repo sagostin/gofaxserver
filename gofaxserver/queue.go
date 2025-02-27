@@ -5,9 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"gofaxserver/gofaxlib"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -16,10 +19,8 @@ import (
 
 // QueueFaxResult holds the result of a fax send attempt for a specific endpoint group.
 type QueueFaxResult struct {
-	Job      *FaxJob     `json:"job"`
-	Success  bool        `json:"success"`
-	Response interface{} `json:"response"`
-	Err      error       `json:"error,omitempty"`
+	Job *FaxJob `json:"job"`
+	Err error   `json:"error,omitempty"`
 }
 
 // Queue represents a fax job processing queue.
@@ -97,13 +98,13 @@ func (q *Queue) processFax(f *FaxJob) {
 				ff.Endpoints = group
 
 				// Helper to report an attempt.
-				sendResult := func(success bool, response interface{}) {
+				sendResult := func() {
 					q.QueueFaxResult <- QueueFaxResult{
-						Job:      &ff,
-						Success:  success,
-						Response: response,
+						Job: &ff,
 					}
 				}
+
+				ff.Result = &gofaxlib.FaxResult{}
 
 				switch epType {
 				case "gateway":
@@ -120,9 +121,10 @@ func (q *Queue) processFax(f *FaxJob) {
 								map[string]interface{}{"uuid": ff.UUID.String()},
 								attempt, prio, ff.CalleeNumber, ff.CallerIdName, err, ff.Endpoints,
 							))
-							sendResult(false, ff.Result.ResultText)
+							ff.Result.Success = false
+							sendResult()
 						} else if ff.Result.Success {
-							sendResult(true, ff.Result.ResultText)
+							sendResult()
 							break
 						} else {
 							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
@@ -132,7 +134,8 @@ func (q *Queue) processFax(f *FaxJob) {
 								map[string]interface{}{"uuid": ff.UUID.String()},
 								attempt, prio, ff.CalleeNumber, ff.CallerIdName, ff.Result.ResultText, ff.Endpoints,
 							))
-							sendResult(false, ff.Result.ResultText)
+							ff.Result.Success = false
+							sendResult()
 						}
 						time.Sleep(delay)
 						delay *= 2
@@ -148,7 +151,9 @@ func (q *Queue) processFax(f *FaxJob) {
 							logrus.ErrorLevel,
 							map[string]interface{}{"uuid": ff.UUID.String()},
 						))
-						sendResult(false, "failed to read fax file")
+						ff.Result.Success = false
+						ff.Status = "failed to read fax file"
+						sendResult()
 						break
 					}
 					fileData := base64.StdEncoding.EncodeToString(fileBytes)
@@ -161,6 +166,8 @@ func (q *Queue) processFax(f *FaxJob) {
 					const maxAttempts = 3
 					delay := 2 * time.Second
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
+						ff.CallUUID = uuid.New()
+
 						payload, err := json.Marshal(faxJobWithFile)
 						if err != nil {
 							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
@@ -169,7 +176,9 @@ func (q *Queue) processFax(f *FaxJob) {
 								logrus.ErrorLevel,
 								map[string]interface{}{"uuid": ff.UUID.String()},
 							))
-							sendResult(false, "failed to marshal fax job")
+							ff.Result.Success = false
+							ff.Status = "failed to marshal fax job"
+							sendResult()
 							break
 						}
 
@@ -183,7 +192,9 @@ func (q *Queue) processFax(f *FaxJob) {
 								logrus.ErrorLevel,
 								map[string]interface{}{"uuid": ff.UUID.String()},
 							))
-							sendResult(false, "failed to create request")
+							ff.Result.Success = false
+							ff.Status = "failed to create request"
+							sendResult()
 						} else {
 							req.Header.Set("Content-Type", "application/json")
 							client := &http.Client{Timeout: 10 * time.Second}
@@ -195,11 +206,16 @@ func (q *Queue) processFax(f *FaxJob) {
 									logrus.ErrorLevel,
 									map[string]interface{}{"uuid": ff.UUID.String()},
 								))
-								sendResult(false, "webhook request error")
+								ff.Result.Success = false
+								ff.Status = "webhook request error"
+								sendResult()
 							} else {
 								resp.Body.Close()
 								if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-									sendResult(true, fmt.Sprintf("webhook responded with status %d", resp.StatusCode))
+									ff.Result.Success = true
+									ff.Result.HangupCause = strconv.Itoa(resp.StatusCode)
+									ff.Status = fmt.Sprintf("webhook responded with status %d", resp.StatusCode)
+									sendResult()
 									break
 								} else {
 									q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
@@ -208,7 +224,10 @@ func (q *Queue) processFax(f *FaxJob) {
 										logrus.ErrorLevel,
 										map[string]interface{}{"uuid": ff.UUID.String()},
 									))
-									sendResult(false, fmt.Sprintf("webhook error: status %d", resp.StatusCode))
+									ff.Result.Success = false
+									ff.Result.HangupCause = strconv.Itoa(resp.StatusCode)
+									ff.Status = fmt.Sprintf("webhook error: status %d", resp.StatusCode)
+									sendResult()
 								}
 							}
 						}

@@ -8,26 +8,26 @@ import (
 	"time"
 )
 
-// FaxJobResultRecord is a GORM model representing a stored fax job result.
+// FaxJobResult is a GORM model representing a stored fax job result.
 // It flattens the primary FaxJob fields (call UUID, callee/caller info) and summary FaxResult info
 // into dedicated columns, while nesting the full FaxJob and FaxResult JSON.
-// FaxJobResultRecord combines key fields from a FaxJob and its FaxResult.
-type FaxJobResultRecord struct {
-	ID                uint      `gorm:"primaryKey" json:"id"`
-	SrcTenantID       string    `json:"src_tenant_id"`
-	DstTenantID       string    `json:"dst_tenant_id"`
-	JobUUID           uuid.UUID `json:"job_uuid"`
-	CallUUID          uuid.UUID `json:"call_uuid"`
-	CalleeNumber      string    `json:"callee_number"`
-	CallerIdNumber    string    `json:"caller_id_number"`
-	CallerIdName      string    `json:"caller_id_name"`
-	FileName          string    `json:"file_name"`
-	UseECM            bool      `json:"use_ecm"`
-	DisableV17        bool      `json:"disable_v17"`
-	Identifier        string    `json:"identifier"`
-	Header            string    `json:"header"`
-	Endpoints         string    `json:"endpoints"` // JSON-encoded endpoints slice
-	SourceRoutingInfo string    `json:"source_routing_info"`
+// FaxJobResult combines key fields from a FaxJob and its FaxResult.
+type FaxJobResult struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	SrcTenantID    string    `json:"src_tenant_id"`
+	DstTenantID    string    `json:"dst_tenant_id"`
+	JobUUID        uuid.UUID `json:"job_uuid"`
+	CallUUID       uuid.UUID `json:"call_uuid"`
+	CalleeNumber   string    `json:"callee_number"`
+	CallerIdNumber string    `json:"caller_id_number"`
+	CallerIdName   string    `json:"caller_id_name"`
+	FileName       string    `json:"file_name"`
+	UseECM         bool      `json:"use_ecm"`
+	DisableV17     bool      `json:"disable_v17"`
+	Identifier     string    `json:"identifier"`
+	Header         string    `json:"header"`
+	Endpoints      string    `json:"endpoints"` // JSON-encoded endpoints slice
+	SourceInfo     string    `json:"source_info"`
 
 	// FaxJob fields
 	NPages     int           `json:"npages"`
@@ -60,7 +60,7 @@ type FaxJobResultRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// storeQueueFaxResult combines the FaxJob and FaxResult into a FaxJobResultRecord
+// storeQueueFaxResult combines the FaxJob and FaxResult into a FaxJobResult
 // and saves it using GORM. It marshals the Endpoints slice into JSON.
 func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 	job := qFR.Job
@@ -78,7 +78,7 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		}
 	}
 
-	record := FaxJobResultRecord{
+	record := FaxJobResult{
 		JobUUID:        job.UUID,
 		SrcTenantID:    job.SrcTenantID,
 		DstTenantID:    job.DstTenantID,
@@ -114,7 +114,7 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		return err
 	}
 
-	record.SourceRoutingInfo = string(sourceRoutingInformation)
+	record.SourceInfo = string(sourceRoutingInformation)
 
 	// If a FaxResult exists, fill in its fields.
 	if job.Result != nil {

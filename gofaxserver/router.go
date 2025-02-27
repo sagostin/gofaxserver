@@ -52,9 +52,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 	}
 
 	r.server.Queue.QueueFaxResult <- QueueFaxResult{
-		Job:      fax,
-		Success:  fax.Result.Success,
-		Response: fax.Result.ResultText,
+		Job: fax,
 	}
 
 	// source type specific routing

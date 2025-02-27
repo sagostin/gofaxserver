@@ -547,6 +547,7 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		FileName:   destFile,
 		UseECM:     false,
 		DisableV17: false,
+		Status:     "WEBHOOK",
 		Result: &gofaxlib.FaxResult{
 			UUID:        uuid.New(),
 			StartTs:     time.Now(),
@@ -740,7 +741,7 @@ func (s *Server) getFaxLogByUUID(ctx iris.Context) {
 		return
 	}
 
-	var records []FaxJobResultRecord
+	var records []FaxJobResult
 	if err := s.DB.Where("job_uuid = ?", jobUUID).Find(&records).Error; err != nil {
 		ctx.StatusCode(iris.StatusInternalServerError)
 		ctx.JSON(iris.Map{"error": "failed to retrieve fax logs: " + err.Error()})
