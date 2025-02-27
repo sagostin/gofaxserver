@@ -23,7 +23,6 @@ func (r *Router) Start() {
 		fax := <-r.server.FaxJobRouting
 		go r.routeFax(fax)
 	}
-	// todo
 }
 
 func (r *Router) routeFax(fax *FaxJob) {
@@ -33,10 +32,11 @@ func (r *Router) routeFax(fax *FaxJob) {
 	fax.CalleeNumber = dstNum
 	fax.CallerIdNumber = srcNum
 
+	fax.Ts = time.Now() // time of start routing
+
 	srcTenant, _ := r.server.getTenantByNumber(srcNum)
 	if srcTenant != nil {
 		fax.SrcTenantID = strconv.Itoa(int(srcTenant.ID))
-
 		cid, _ := r.server.getNumber(srcNum)
 		if cid != nil {
 			fax.CallerIdName = cid.Name
@@ -57,20 +57,10 @@ func (r *Router) routeFax(fax *FaxJob) {
 		Response: fax.Result.ResultText,
 	}
 
-	fax.Ts = time.Now() // time of start routing
-
+	// source type specific routing
 	switch srcType := fax.SourceRoutingInformation.SourceType; srcType {
 	case "gateway":
 		if contains(r.server.UpstreamFsGateways, fax.SourceRoutingInformation.Source) {
-			// we need to route the message to the appropriate gateway / check if the destination is valid,
-			// we could do pre-routing for this but, hey fuck it.
-
-			// todo get endpoints for the fax based on destination number seen as it is from the carriers
-			// once we have the endpoints for said number, then we can pass it to the "queue" runner
-			// to start processing sending to the endpoints and such
-			// if it fails on an endpoint, then we will go through the endpoints by priority
-			// and if all endpoints fall, then we notify the destination tenant's notification email
-			// configured on said number
 			ep, err := r.server.getEndpointsForNumber(dstNum)
 			if err != nil {
 				r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
@@ -79,70 +69,29 @@ func (r *Router) routeFax(fax *FaxJob) {
 					logrus.ErrorLevel,
 					map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, err,
 				))
-				return // todo log error with no matching destination for fax from trunk
+				return
 			}
 			fax.Endpoints = ep
-
 			r.server.Queue.Queue <- fax
 			return
 		}
+	}
 
-		// do we actually have to check src sending number? can we not just check destination?
-		// we could also validate that the sending / src address is coming from the right allowed endpoint?
-		// do we want that much control where you need matching source / destination endpoints?
-
-		// we'll just check for destination
-		// this will only output if it's a valid tenant to tenant fax, otherwise, we will needa send to default gateway(s)
-		endpoints, err := r.server.getEndpointsForNumber(dstNum)
-		if err == nil {
-			fax.Endpoints = endpoints
-			r.server.Queue.Queue <- fax
-			return
-		}
-
-		// route to default gateway for freeswitch
-		var eps []*Endpoint
-		for _, ep := range r.server.UpstreamFsGateways {
-			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
-
-			/*			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
-						"EventServer",
-						"fax routing internal endpoint %v - %v - err: %v -- %v",
-						logrus.InfoLevel,
-						map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err, n,
-					))*/
-		}
-		fax.Endpoints = eps
+	// otherwise continue to the rest of the routing steps
+	endpoints, err := r.server.getEndpointsForNumber(dstNum)
+	if err == nil {
+		fax.Endpoints = endpoints
 		r.server.Queue.Queue <- fax
 		return
-	case "webhook":
-
-		// we'll just check for destination
-		// this will only output if it's a valid tenant to tenant fax, otherwise, we will needa send to default gateway(s)
-		endpoints, err := r.server.getEndpointsForNumber(dstNum)
-		if err == nil {
-			fax.Endpoints = endpoints
-			r.server.Queue.Queue <- fax
-			return
-		}
-
-		// route to default gateway for freeswitch
-		var eps []*Endpoint
-		for _, ep := range r.server.UpstreamFsGateways {
-			eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
-
-			/*			r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
-						"EventServer",
-						"fax routing internal endpoint %v - %v - err: %v -- %v",
-						logrus.InfoLevel,
-						map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, endpoints, err, n,
-					))*/
-		}
-		fax.Endpoints = eps
-		r.server.Queue.Queue <- fax
-	default:
-		return // drop the fax and just return - we should delete the file...
-		// todo
 	}
-	// todo
+
+	// route to default gateway for freeswitch
+	var eps []*Endpoint
+	for _, ep := range r.server.UpstreamFsGateways {
+		eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
+	}
+
+	// send to the queue
+	fax.Endpoints = eps
+	r.server.Queue.Queue <- fax
 }

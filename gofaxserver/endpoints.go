@@ -44,6 +44,7 @@ func (s *Server) loadEndpoints() error {
 	// Reset the endpoint maps.
 	s.TenantEndpoints = make(map[uint][]*Endpoint)
 	s.NumberEndpoints = make(map[string][]*Endpoint)
+	s.GatewayEndpointsACL = []string{}
 
 	// Process each endpoint and place it in the proper map.
 	for _, ep := range endpoints {

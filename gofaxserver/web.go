@@ -360,6 +360,14 @@ func (s *Server) handleAddEndpoint(ctx iris.Context) {
 		ctx.JSON(iris.Map{"error": "failed to add endpoint: " + err.Error()})
 		return
 	}
+
+	err := s.loadEndpoints()
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "added endpoint but failed to reload: " + err.Error()})
+		return
+	}
+
 	ctx.JSON(ep)
 }
 
