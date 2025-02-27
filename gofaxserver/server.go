@@ -2,7 +2,6 @@ package gofaxserver
 
 import (
 	"fmt"
-	"github.com/gonicus/gofaxip/gofaxlib/logger"
 	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
@@ -116,7 +115,7 @@ func (s *Server) Start() {
 		s.LogManager.SendLog(s.LogManager.BuildLog(
 			"Server.StartUp",
 			"failed to connect to load numbers: %v",
-			logrus.ErrorLevel,
+			logrus.FatalLevel,
 			/*		map[string]interface{}{
 					"module": "Configuration",
 				},*/
@@ -182,7 +181,13 @@ func (s *Server) Start() {
 	go func() {
 		select {
 		case err := <-fsSocket.Errors():
-			logger.Logger.Fatal(err)
+			s.LogManager.SendLog(s.LogManager.BuildLog(
+				"Server.StartUp",
+				"error received from fs socket: %v",
+				logrus.ErrorLevel,
+				nil,
+				err,
+			))
 		}
 	}()
 	s.FsSocket = fsSocket
@@ -210,7 +215,7 @@ func (s *Server) Start() {
 		s.LogManager.SendLog(s.LogManager.BuildLog(
 			"Server.Web",
 			"GenericError",
-			logrus.ErrorLevel,
+			logrus.FatalLevel,
 			/*		map[string]interface{}{
 					"module": "Configuration",
 				},*/
