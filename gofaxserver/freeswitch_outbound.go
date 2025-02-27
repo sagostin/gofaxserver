@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fiorix/go-eventsocket/eventsocket"
-	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
 	"os"
@@ -59,8 +58,6 @@ func (e *EventSocketServer) SendFax(faxjob *FaxJob) (returned SendResult, err er
 		err = fmt.Errorf("Error parsing jobid")
 		return
 	}*/
-
-	faxjob.CallUUID = uuid.New()
 
 	// Create Job structure
 	/*faxjob := NewFaxJob()*/
@@ -514,7 +511,7 @@ func (t *eventClient) start() {
 			map[string]interface{}{"uuid": t.faxjob.UUID.String()},
 		))
 		if gofaxlib.FailedHangUpCause(hangupcause) {
-			t.errorChan <- NewFaxError(hangupcause+" (retry disabled)", false)
+			t.errorChan <- NewFaxError(hangupcause, false)
 		} else {
 			t.errorChan <- NewFaxError(hangupcause, true)
 		}

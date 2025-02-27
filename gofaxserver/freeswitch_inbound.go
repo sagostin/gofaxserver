@@ -151,7 +151,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			logrus.ErrorLevel,
 			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidnum, cidname, sourceip,
 		))
-		c.Execute("respond", "404", true)
+		c.Execute("respond", "401", true)
 		c.Send("exit")
 		return
 	}

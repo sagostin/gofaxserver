@@ -7,10 +7,10 @@ import (
 )
 
 type Tenant struct {
-	ID      uint           `gorm:"primaryKey" json:"id"`
-	Name    string         `json:"name"`
-	Email   string         `json:"email"` // main contact email?
-	Numbers []TenantNumber `gorm:"foreignKey:TenantID" json:"numbers"`
+	ID           uint           `gorm:"primaryKey" json:"id"`
+	Name         string         `json:"name"`
+	NotifyEmails string         `json:"notify_emails"` // main contact email? in case stuff fails, and there isn't a notify email set on the number
+	Numbers      []TenantNumber `gorm:"foreignKey:TenantID" json:"numbers"`
 }
 
 // TenantUser represents an account for a tenant user.

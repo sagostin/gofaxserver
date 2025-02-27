@@ -9,8 +9,6 @@ import (
 	"gofaxserver/gofaxlib"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -484,42 +482,12 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 
 	docID := uuid.New()
 
-	fileFormat := "webhook_fax_%s%s"
-
-	// Save uploaded file to a temporary location.
-	tempFile := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(fileFormat, docID, ext))
-	tmpFile, err := os.Create(tempFile)
+	tiff, err := pdfToTiff(docID, ext, file, fileHeader)
 	if err != nil {
 		ctx.StatusCode(iris.StatusInternalServerError)
-		ctx.JSON(iris.Map{"error": "failed to create temp file: " + err.Error()})
+		ctx.JSON(iris.Map{"error": "failed to convert file using ghostscript: " + err.Error()})
 		return
 	}
-	defer func() {
-		tmpFile.Close()
-		// Optionally remove the temp file later.
-	}()
-
-	if _, err = io.Copy(tmpFile, file); err != nil {
-		ctx.StatusCode(iris.StatusInternalServerError)
-		ctx.JSON(iris.Map{"error": "failed to save document: " + err.Error()})
-		return
-	}
-
-	// Determine output path for TIFF.
-	destFile := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, docID))
-	// Convert the file to TIFF using ImageMagick's 'convert' command.
-	//cmdStr := fmt.Sprintf("magick %s -density 204x196 -resize '1728x2156!' -background white -alpha background -compress Group4 %s", tempFile, destFile)
-	cmdStr := fmt.Sprintf(
-		"gs -q -r204x196 -g1728x2156 -dNOPAUSE -dBATCH -dSAFER -dPDFFitPage -sDEVICE=tiffg3 -sOutputFile=%s -- %s",
-		destFile, tempFile,
-	)
-	cmd := exec.Command("/bin/bash", "-c", cmdStr)
-	if err = cmd.Run(); err != nil {
-		ctx.StatusCode(iris.StatusInternalServerError)
-		ctx.JSON(iris.Map{"error": "failed to convert document: " + err.Error()})
-		return
-	}
-	os.Remove(tempFile)
 
 	// Extract source/destination numbers and caller name from form fields.
 	// Use FormValue to get additional parameters from the request.
@@ -544,7 +512,7 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		CalleeNumber:   calleeNumber, // from request
 		CallerIdNumber: callerNumber, // from request
 		// CallerIdName:   callerIdName,   // from request
-		FileName:   destFile,
+		FileName:   tiff,
 		UseECM:     false,
 		DisableV17: false,
 		Status:     "WEBHOOK",

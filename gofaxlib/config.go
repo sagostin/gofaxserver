@@ -51,6 +51,8 @@ type config struct {
 		DisableECMAfterRetry         string          `json:"disable_ecm_after_retry"`
 		FailedResponse               []string        `json:"failed_response"`
 		FailedResponseMap            map[string]bool `json:"failed_response_map"`
+		RetryDelay                   string          `json:"retry_delay"`
+		RetryAttempts                string          `json:"retry_attempts"`
 	} `json:"faxing"`
 	Database struct { // this is a postgresql database
 		Host     string `json:"host"`
