@@ -39,10 +39,11 @@ func (r *Router) routeFax(fax *FaxJob) {
 
 		cid, _ := r.server.getNumber(srcNum)
 		if cid != nil {
-			fax.CallerIdName = cid.CID
+			fax.CallerIdName = cid.Name
+			fax.Header = cid.Header
+		} else {
+			fax.Header = fax.CallerIdName
 		}
-
-		fax.Header = fax.CallerIdName
 		fax.Identifier = fax.CallerIdNumber
 	}
 	dstTenant, _ := r.server.getTenantByNumber(dstNum)

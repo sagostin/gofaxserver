@@ -500,22 +500,29 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 	// Extract source/destination numbers and caller name from form fields.
 	// Use FormValue to get additional parameters from the request.
 	calleeNumber := ctx.FormValue("callee_number")
-	callerIdNumber := ctx.FormValue("caller_id_number")
-	callerIdName := ctx.FormValue("caller_id_name")
+	callerNumber := ctx.FormValue("caller_number")
+	//callerIdName := ctx.FormValue("caller_id_name")
 
 	// todo validate sender for tenants
 
 	// (Optionally, validate these values and return an error if missing.)
 
+	srcNum, err := s.getNumber(callerNumber)
+	if err != nil || srcNum.TenantID != ctx.Values().Get("tenantID") {
+		ctx.StatusCode(iris.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to validate caller number: " + err.Error()})
+		return
+	}
+
 	// Create a FaxJob using the converted TIFF and the request parameters.
 	faxjob := &FaxJob{
 		UUID:           docID,
-		CalleeNumber:   calleeNumber,   // from request
-		CallerIdNumber: callerIdNumber, // from request
-		CallerIdName:   callerIdName,   // from request
-		FileName:       destFile,
-		UseECM:         false,
-		DisableV17:     false,
+		CalleeNumber:   calleeNumber, // from request
+		CallerIdNumber: callerNumber, // from request
+		// CallerIdName:   callerIdName,   // from request
+		FileName:   destFile,
+		UseECM:     false,
+		DisableV17: false,
 		Result: &gofaxlib.FaxResult{
 			UUID:        uuid.New(),
 			StartTs:     time.Now(),
@@ -577,7 +584,7 @@ func (s *Server) basicTenantUserAuthMiddleware(ctx iris.Context) {
 	}
 
 	// Store the authenticated tenant user in context.
-	ctx.Values().Set("tenantUser", user)
+	ctx.Values().Set("tenantID", user.TenantID)
 	ctx.Next()
 }
 

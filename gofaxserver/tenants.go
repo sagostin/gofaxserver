@@ -26,9 +26,9 @@ type TenantNumber struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
 	TenantID     uint   `gorm:"index;not null" json:"tenant_id"`
 	Number       string `gorm:"unique;not null" json:"number"` // 10 digit or what ever format matches the transformation rules
+	Name         string `json:"name"`                          // caller id name that is displayed on the fax? eg. +1 555-555-5555
+	Header       string `json:"header"`                        // this is the name displayed at the top of the fax eg. "Company Faxing Relay"
 	NotifyEmails string `json:"notify_emails"`                 // email addresses to notify when a fax is received / failed, etc, if all other endpoint deliveries fail
-	CID          string `json:"cid"`                           // caller id that is displayed on the fax? eg. +1 555-555-5555
-	Header       string `json:"webhook"`                       // this is the name displayed at the top of the fax eg. "Company Faxing Relay"
 }
 
 // loadTenants loads Tenants (with their associated numbers) from the database.
