@@ -1,6 +1,11 @@
 package gofaxserver
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"sync"
@@ -42,6 +47,11 @@ func (q *Queue) Start() {
 	}
 }
 
+type FaxJobWithFile struct {
+	FaxJob
+	FileData string `json:"file_data"`
+}
+
 // processFax processes each endpoint type concurrently.
 // For each endpoint type, it iterates over its priority groups (with priority 999 always last)
 // and sends the fax using a copy of the fax job (ff) for that group. For "gateway" endpoints,
@@ -77,6 +87,8 @@ func (q *Queue) processFax(f *FaxJob) {
 				return a < b
 			})
 
+			// todo -> there should never be multiple gateway endpoints with the same priority
+			// todo -> unless it is the default gateway ones, otherwise send each at the same time but simultaneously
 			// Process each priority group sequentially.
 			for _, prio := range prios {
 				group := prioMap[prio]
@@ -95,8 +107,8 @@ func (q *Queue) processFax(f *FaxJob) {
 
 				switch epType {
 				case "gateway":
-					const maxAttempts = 3
-					delay := 2 * time.Second
+					const maxAttempts = 3    // todo max attempts config
+					delay := 2 * time.Second // todo config delay
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
 						_, err := q.server.FsSocket.SendFax(&ff)
 						// Always update the job pointer before reporting.
@@ -121,6 +133,84 @@ func (q *Queue) processFax(f *FaxJob) {
 								attempt, prio, ff.CalleeNumber, ff.CallerIdName, ff.Result.ResultText, ff.Endpoints,
 							))
 							sendResult(false, ff.Result.ResultText)
+						}
+						time.Sleep(delay)
+						delay *= 2
+					}
+				case "webhook":
+					// We'll attempt to send the fax job as a JSON payload to the webhook URL.
+					// Before marshalling, read the file from disk and embed its contents.
+					fileBytes, err := os.ReadFile(ff.FileName)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Queue",
+							fmt.Sprintf("failed to read fax file for webhook: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": ff.UUID.String()},
+						))
+						sendResult(false, "failed to read fax file")
+						break
+					}
+					fileData := base64.StdEncoding.EncodeToString(fileBytes)
+
+					// Create an augmented struct that embeds the fax job and includes the file data.
+					faxJobWithFile := FaxJobWithFile{
+						FaxJob:   ff,
+						FileData: fileData,
+					}
+					const maxAttempts = 3
+					delay := 2 * time.Second
+					for attempt := 1; attempt <= maxAttempts; attempt++ {
+						payload, err := json.Marshal(faxJobWithFile)
+						if err != nil {
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Queue",
+								fmt.Sprintf("failed to marshal fax job for webhook: %v", err),
+								logrus.ErrorLevel,
+								map[string]interface{}{"uuid": ff.UUID.String()},
+							))
+							sendResult(false, "failed to marshal fax job")
+							break
+						}
+
+						// Use the first endpoint's URL as the webhook URL.
+						webhookURL := ff.Endpoints[0].Endpoint
+						req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(payload))
+						if err != nil {
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Queue",
+								fmt.Sprintf("error creating POST request for webhook: %v", err),
+								logrus.ErrorLevel,
+								map[string]interface{}{"uuid": ff.UUID.String()},
+							))
+							sendResult(false, "failed to create request")
+						} else {
+							req.Header.Set("Content-Type", "application/json")
+							client := &http.Client{Timeout: 10 * time.Second}
+							resp, err := client.Do(req)
+							if err != nil {
+								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+									"Queue",
+									fmt.Sprintf("error sending POST request to webhook (attempt %d): %v", attempt, err),
+									logrus.ErrorLevel,
+									map[string]interface{}{"uuid": ff.UUID.String()},
+								))
+								sendResult(false, "webhook request error")
+							} else {
+								resp.Body.Close()
+								if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+									sendResult(true, fmt.Sprintf("webhook responded with status %d", resp.StatusCode))
+									break
+								} else {
+									q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+										"Queue",
+										fmt.Sprintf("webhook responded with status %d on attempt %d", resp.StatusCode, attempt),
+										logrus.ErrorLevel,
+										map[string]interface{}{"uuid": ff.UUID.String()},
+									))
+									sendResult(false, fmt.Sprintf("webhook error: status %d", resp.StatusCode))
+								}
+							}
 						}
 						time.Sleep(delay)
 						delay *= 2

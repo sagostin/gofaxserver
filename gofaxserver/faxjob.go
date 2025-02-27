@@ -52,13 +52,3 @@ type FaxSourceInfo struct {
 	Source     string    `json:"source,omitempty"`      // name of gateway, or webhook api key id or something
 	SourceID   string    `json:"source_id,omitempty"`   // id of the source, could be the carrier id, or the webhook id, or uuid of channel id
 }
-
-// NewFaxJob initializes a new FaxJob with a random UUID and default FreeSwitch settings.
-func NewFaxJob() *FaxJob {
-	jobUUID := uuid.New()
-
-	return &FaxJob{
-		UUID:   jobUUID,
-		UseECM: true, // Default: use ECM
-	}
-}
