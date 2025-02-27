@@ -3,7 +3,6 @@ package gofaxserver
 import (
 	"fmt"
 	"github.com/gonicus/gofaxip/gofaxlib/logger"
-	"github.com/joho/godotenv"
 	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
@@ -49,17 +48,17 @@ func NewServer() *Server {
 func (s *Server) Start() {
 	gofaxlib.Config.Loki.Job = "faxserver"
 
-	err := godotenv.Load()
+	/*err := godotenv.Load()
 	if err != nil {
 		return
-	}
+	}*/
 
 	logManager := gofaxlib.NewLogManager(gofaxlib.NewLokiClient())
 	logManager.LoadTemplates()
 	s.LogManager = logManager
 
 	s.LogManager.SendLog(s.LogManager.BuildLog(
-		"Server",
+		"Server.StartUp",
 		fmt.Sprintf("starting gofaxserver"),
 		logrus.InfoLevel,
 		nil,
@@ -67,7 +66,7 @@ func (s *Server) Start() {
 
 	s.DialplanManager = loadDialplan()
 	s.LogManager.SendLog(s.LogManager.BuildLog(
-		"Server",
+		"Server.StartUp",
 		fmt.Sprintf("loaded dialplan and transformations"),
 		logrus.InfoLevel,
 		nil,
@@ -79,16 +78,34 @@ func (s *Server) Start() {
 
 	db, err := gorm.Open(postgres.Open(getPostgresDSN()), &gorm.Config{})
 	if err != nil {
-		panic(fmt.Errorf("failed to connect to PostgreSQL: %v", err))
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			"failed to connect to database: %v",
+			logrus.ErrorLevel,
+			/*		map[string]interface{}{
+					"module": "Configuration",
+				},*/
+			nil,
+			err,
+		))
 	}
 	s.DB = db
 
 	err = s.migrateSchema()
 	if err != nil {
-		return
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			"failed to connect to migrate schema: %v",
+			logrus.ErrorLevel,
+			/*		map[string]interface{}{
+					"module": "Configuration",
+				},*/
+			nil,
+			err,
+		))
 	}
 	s.LogManager.SendLog(s.LogManager.BuildLog(
-		"Server",
+		"Server.StartUp",
 		fmt.Sprintf("connected to database"),
 		logrus.InfoLevel,
 		nil,
@@ -96,20 +113,47 @@ func (s *Server) Start() {
 
 	err = s.loadTenantNumbers()
 	if err != nil {
-		return
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			"failed to connect to load numbers: %v",
+			logrus.ErrorLevel,
+			/*		map[string]interface{}{
+					"module": "Configuration",
+				},*/
+			nil,
+			err,
+		))
 	}
 	err = s.loadTenants()
 	if err != nil {
-		return
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			"failed to connect to load tenants: %v",
+			logrus.FatalLevel,
+			/*		map[string]interface{}{
+					"module": "Configuration",
+				},*/
+			nil,
+			err,
+		))
 	}
 
 	err = s.loadEndpoints()
 	if err != nil {
-		return
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			"failed to connect to load endpoints: %v",
+			logrus.FatalLevel,
+			/*		map[string]interface{}{
+					"module": "Configuration",
+				},*/
+			nil,
+			err,
+		))
 	}
 
 	s.LogManager.SendLog(s.LogManager.BuildLog(
-		"Server",
+		"Server.StartUp",
 		fmt.Sprintf("loaded tenants, numbers, and endpoints"),
 		logrus.InfoLevel,
 		nil,
@@ -163,8 +207,7 @@ func (s *Server) Start() {
 
 	err = webIris.Listen(gofaxlib.Config.Web.Listen)
 	if err != nil {
-		var lm = s.LogManager
-		lm.SendLog(lm.BuildLog(
+		s.LogManager.SendLog(s.LogManager.BuildLog(
 			"Server.Web",
 			"GenericError",
 			logrus.ErrorLevel,
