@@ -41,5 +41,14 @@
     "listen": ":3000",
     "api_key": "apikeyhere"
   },
+  "smtp": {
+    "host": "smtp.example.com",
+    "port": 587,
+    "username": "smtpuser",
+    "password": "smtppassword",
+    "encryption": "tls",
+    "from_address": "noreply@example.com",
+    "from_name": "Fax Server"
+  },
   "psk": "test"
 }

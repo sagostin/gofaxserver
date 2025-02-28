@@ -2,6 +2,7 @@ package gofaxserver
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -131,76 +132,6 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 	return outputPath, err
 }
 
-// SendEmailWithAttachment sends an email with a plain text body and a file attachment.
-func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
-	// Read the attachment file from disk.
-	attachmentBytes, err := os.ReadFile(attachmentPath)
-	if err != nil {
-		return fmt.Errorf("failed to read attachment: %w", err)
-	}
-
-	// Encode the attachment in base64.
-	encodedAttachment := base64.StdEncoding.EncodeToString(attachmentBytes)
-
-	// Create a MIME boundary.
-	boundary := "myBoundary123456789"
-
-	// Build the email message.
-	// Use your SMTP config for the From field.
-	from := fmt.Sprintf("%s <%s>", gofaxlib.Config.SMTP.FromName, gofaxlib.Config.SMTP.FromAddress)
-
-	// Email headers.
-	headers := map[string]string{
-		"From":         from,
-		"To":           to,
-		"Subject":      subject,
-		"MIME-Version": "1.0",
-		"Content-Type": fmt.Sprintf("multipart/mixed; boundary=%s", boundary),
-	}
-
-	// Construct the header string.
-	var msg strings.Builder
-	for k, v := range headers {
-		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
-	}
-	msg.WriteString("\r\n") // End headers
-
-	// Plain text part.
-	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-	msg.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
-	msg.WriteString("Content-Transfer-Encoding: 7bit\r\n")
-	msg.WriteString("\r\n")
-	msg.WriteString(body + "\r\n")
-
-	// Attachment part.
-	filename := filepath.Base(attachmentPath)
-	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-	msg.WriteString(fmt.Sprintf("Content-Type: application/octet-stream; name=\"%s\"\r\n", filename))
-	msg.WriteString("Content-Transfer-Encoding: base64\r\n")
-	msg.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", filename))
-	msg.WriteString("\r\n")
-	// For better readability, split the base64 string into lines of 76 characters.
-	const maxLineLen = 76
-	for i := 0; i < len(encodedAttachment); i += maxLineLen {
-		end := i + maxLineLen
-		if end > len(encodedAttachment) {
-			end = len(encodedAttachment)
-		}
-		msg.WriteString(encodedAttachment[i:end] + "\r\n")
-	}
-	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
-
-	// Set up SMTP connection.
-	addr := fmt.Sprintf("%s:%d", gofaxlib.Config.SMTP.Host, gofaxlib.Config.SMTP.Port)
-	auth := smtp.PlainAuth("", gofaxlib.Config.SMTP.Username, gofaxlib.Config.SMTP.Password, gofaxlib.Config.SMTP.Host)
-
-	// Send the email.
-	if err := smtp.SendMail(addr, auth, gofaxlib.Config.SMTP.FromAddress, []string{to}, []byte(msg.String())); err != nil {
-		return fmt.Errorf("failed to send email: %w", err)
-	}
-	return nil
-}
-
 // fitText ensures that the given text fits within the specified width.
 // If the text is too long, it truncates it and appends an ellipsis.
 func fitText(pdf *fpdf.Fpdf, text string, width float64) string {
@@ -299,6 +230,122 @@ func parseNotifyString(notify string) ([]NotifyDestination, error) {
 	return destinations, nil
 }
 
+// SendEmailWithAttachment sends an email with a plain text body and a file attachment via SMTP.
+// If SMTP username is empty, it sends the email without authentication.
+func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
+	// Read the attachment file from disk.
+	attachmentBytes, err := os.ReadFile(attachmentPath)
+	if err != nil {
+		return fmt.Errorf("failed to read attachment: %w", err)
+	}
+
+	// Encode the attachment in base64.
+	encodedAttachment := base64.StdEncoding.EncodeToString(attachmentBytes)
+
+	// Create a MIME boundary.
+	boundary := "myBoundary123456789"
+
+	// Build the email message.
+	from := fmt.Sprintf("%s <%s>", gofaxlib.Config.SMTP.FromName, gofaxlib.Config.SMTP.FromAddress)
+	headers := map[string]string{
+		"From":         from,
+		"To":           to,
+		"Subject":      subject,
+		"MIME-Version": "1.0",
+		"Content-Type": fmt.Sprintf("multipart/mixed; boundary=%s", boundary),
+	}
+
+	var msg strings.Builder
+	for k, v := range headers {
+		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	}
+	msg.WriteString("\r\n") // End headers
+
+	// Plain text part.
+	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	msg.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
+	msg.WriteString("Content-Transfer-Encoding: 7bit\r\n")
+	msg.WriteString("\r\n")
+	msg.WriteString(body + "\r\n")
+
+	// Attachment part.
+	filename := filepath.Base(attachmentPath)
+	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	msg.WriteString(fmt.Sprintf("Content-Type: application/octet-stream; name=\"%s\"\r\n", filename))
+	msg.WriteString("Content-Transfer-Encoding: base64\r\n")
+	msg.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", filename))
+	msg.WriteString("\r\n")
+	const maxLineLen = 76
+	for i := 0; i < len(encodedAttachment); i += maxLineLen {
+		end := i + maxLineLen
+		if end > len(encodedAttachment) {
+			end = len(encodedAttachment)
+		}
+		msg.WriteString(encodedAttachment[i:end] + "\r\n")
+	}
+	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+
+	// SMTP connection setup.
+	addr := fmt.Sprintf("%s:%d", gofaxlib.Config.SMTP.Host, gofaxlib.Config.SMTP.Port)
+	// If Username is empty, do not set up auth.
+	var auth smtp.Auth
+	if gofaxlib.Config.SMTP.Username != "" {
+		auth = smtp.PlainAuth("", gofaxlib.Config.SMTP.Username, gofaxlib.Config.SMTP.Password, gofaxlib.Config.SMTP.Host)
+	}
+
+	// Check encryption type.
+	enc := strings.ToLower(gofaxlib.Config.SMTP.Encryption)
+	if enc == "tls" || enc == "ssl" {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: false, // adjust if necessary
+			ServerName:         gofaxlib.Config.SMTP.Host,
+		}
+
+		conn, err := tls.Dial("tcp", addr, tlsConfig)
+		if err != nil {
+			return fmt.Errorf("failed to dial TLS: %w", err)
+		}
+
+		client, err := smtp.NewClient(conn, gofaxlib.Config.SMTP.Host)
+		if err != nil {
+			return fmt.Errorf("failed to create SMTP client: %w", err)
+		}
+
+		// If auth is set, perform authentication.
+		if auth != nil {
+			if err = client.Auth(auth); err != nil {
+				return fmt.Errorf("failed to authenticate: %w", err)
+			}
+		}
+
+		if err = client.Mail(gofaxlib.Config.SMTP.FromAddress); err != nil {
+			return err
+		}
+		if err = client.Rcpt(to); err != nil {
+			return err
+		}
+		w, err := client.Data()
+		if err != nil {
+			return err
+		}
+		_, err = w.Write([]byte(msg.String()))
+		if err != nil {
+			return err
+		}
+		if err = w.Close(); err != nil {
+			return err
+		}
+		client.Quit()
+	} else {
+		// For plain SMTP (no TLS).
+		if err := smtp.SendMail(addr, auth, gofaxlib.Config.SMTP.FromAddress, []string{to}, []byte(msg.String())); err != nil {
+			return fmt.Errorf("failed to send email: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // processNotifyDestinationsAsync processes each NotifyDestination concurrently.
 func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destinations []NotifyDestination) {
 	var notifyWg sync.WaitGroup
@@ -324,9 +371,18 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 			// Process each destination based on its type.
 			switch dest.Type {
 			case "email":
-				// Example: send an email notification.
+				// Send an email notification with the PDF report attached.
 				fmt.Printf("Processing email destination: %s\n", dest.Destination)
-				// q.sendEmailNotification(dest) // replace with actual call.
+				subject := "Fax Report"
+				body := "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Please find the attached fax report."
+				if err := SendEmailWithAttachment(subject, dest.Destination, body, pdfPath); err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+				}
 			case "webhook":
 				// Read the fax file from disk.
 				fileBytes, err := os.ReadFile(pdfPath)
