@@ -14,8 +14,8 @@ import (
 // FaxJobResult combines key fields from a FaxJob and its FaxResult.
 type FaxJobResult struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
-	SrcTenantID    string    `json:"src_tenant_id"`
-	DstTenantID    string    `json:"dst_tenant_id"`
+	SrcTenantID    uint      `json:"src_tenant_id"`
+	DstTenantID    uint      `json:"dst_tenant_id"`
 	JobUUID        uuid.UUID `json:"job_uuid"`
 	CallUUID       uuid.UUID `json:"call_uuid"`
 	CalleeNumber   string    `json:"callee_number"`

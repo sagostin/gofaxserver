@@ -44,7 +44,7 @@ func SendQfileFromDisk(filename, deviceID string) (SendResult, error) {
 	return SendFaxFS(qf, deviceID)
 }*/
 
-// SendFaxFS immediately tries to send the given qfile using FreeSWITCH
+// SendFax immediately tries to send the given qfile using FreeSWITCH
 func (e *EventSocketServer) SendFax(faxjob *FaxJob) (returned SendResult, err error) {
 	returned = SendFailed
 	/*var jobid uint
