@@ -290,6 +290,17 @@ func (q *Queue) processFax(f *FaxJob) {
 		return
 	}
 
+	srcT := q.server.Tenants[f.SrcTenantID]
+	dstT := q.server.Tenants[f.DstTenantID]
+
+	if srcT != nil {
+		// todo process fax result and send to
+	}
+
+	if dstT != nil {
+
+	}
+
 	// Remove the fax file after processing.
 	if err := os.Remove(f.FileName); err != nil {
 		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(

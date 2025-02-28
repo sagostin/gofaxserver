@@ -2,7 +2,6 @@ package gofaxserver
 
 import (
 	"github.com/sirupsen/logrus"
-	"strconv"
 	"time"
 )
 
@@ -36,7 +35,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 
 	srcTenant, _ := r.server.getTenantByNumber(srcNum)
 	if srcTenant != nil {
-		fax.SrcTenantID = strconv.Itoa(int(srcTenant.ID))
+		fax.SrcTenantID = srcTenant.ID
 		cid, _ := r.server.getNumber(srcNum)
 		if cid != nil {
 			fax.CallerIdName = cid.Name
@@ -48,7 +47,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 	}
 	dstTenant, _ := r.server.getTenantByNumber(dstNum)
 	if dstTenant != nil {
-		fax.DstTenantID = strconv.Itoa(int(dstTenant.ID))
+		fax.DstTenantID = dstTenant.ID
 	}
 
 	r.server.Queue.QueueFaxResult <- QueueFaxResult{

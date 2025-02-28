@@ -1,10 +1,13 @@
 package gofaxserver
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/go-pdf/fpdf"
 	"gofaxserver/gofaxlib"
+	"net/smtp"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -116,6 +119,76 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 	// Output the PDF file.
 	err := pdf.OutputFileAndClose(outputPath)
 	return outputPath, err
+}
+
+// SendEmailWithAttachment sends an email with a plain text body and a file attachment.
+func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
+	// Read the attachment file from disk.
+	attachmentBytes, err := os.ReadFile(attachmentPath)
+	if err != nil {
+		return fmt.Errorf("failed to read attachment: %w", err)
+	}
+
+	// Encode the attachment in base64.
+	encodedAttachment := base64.StdEncoding.EncodeToString(attachmentBytes)
+
+	// Create a MIME boundary.
+	boundary := "myBoundary123456789"
+
+	// Build the email message.
+	// Use your SMTP config for the From field.
+	from := fmt.Sprintf("%s <%s>", gofaxlib.Config.SMTP.FromName, gofaxlib.Config.SMTP.FromAddress)
+
+	// Email headers.
+	headers := map[string]string{
+		"From":         from,
+		"To":           to,
+		"Subject":      subject,
+		"MIME-Version": "1.0",
+		"Content-Type": fmt.Sprintf("multipart/mixed; boundary=%s", boundary),
+	}
+
+	// Construct the header string.
+	var msg strings.Builder
+	for k, v := range headers {
+		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	}
+	msg.WriteString("\r\n") // End headers
+
+	// Plain text part.
+	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	msg.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
+	msg.WriteString("Content-Transfer-Encoding: 7bit\r\n")
+	msg.WriteString("\r\n")
+	msg.WriteString(body + "\r\n")
+
+	// Attachment part.
+	filename := filepath.Base(attachmentPath)
+	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	msg.WriteString(fmt.Sprintf("Content-Type: application/octet-stream; name=\"%s\"\r\n", filename))
+	msg.WriteString("Content-Transfer-Encoding: base64\r\n")
+	msg.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", filename))
+	msg.WriteString("\r\n")
+	// For better readability, split the base64 string into lines of 76 characters.
+	const maxLineLen = 76
+	for i := 0; i < len(encodedAttachment); i += maxLineLen {
+		end := i + maxLineLen
+		if end > len(encodedAttachment) {
+			end = len(encodedAttachment)
+		}
+		msg.WriteString(encodedAttachment[i:end] + "\r\n")
+	}
+	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+
+	// Set up SMTP connection.
+	addr := fmt.Sprintf("%s:%d", gofaxlib.Config.SMTP.Host, gofaxlib.Config.SMTP.Port)
+	auth := smtp.PlainAuth("", gofaxlib.Config.SMTP.Username, gofaxlib.Config.SMTP.Password, gofaxlib.Config.SMTP.Host)
+
+	// Send the email.
+	if err := smtp.SendMail(addr, auth, gofaxlib.Config.SMTP.FromAddress, []string{to}, []byte(msg.String())); err != nil {
+		return fmt.Errorf("failed to send email: %w", err)
+	}
+	return nil
 }
 
 // fitText ensures that the given text fits within the specified width.

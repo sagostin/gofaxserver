@@ -7,10 +7,10 @@ import (
 )
 
 type Tenant struct {
-	ID           uint           `gorm:"primaryKey" json:"id"`
-	Name         string         `json:"name"`
-	NotifyEmails string         `json:"notify_emails"` // main contact email? in case stuff fails, and there isn't a notify email set on the number
-	Numbers      []TenantNumber `gorm:"foreignKey:TenantID" json:"numbers"`
+	ID      uint           `gorm:"primaryKey" json:"id"`
+	Name    string         `json:"name"`
+	Notify  string         `json:"notify"` // notify list, seperated by commas, eg. email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://webhook.com/endpoint
+	Numbers []TenantNumber `gorm:"foreignKey:TenantID" json:"numbers"`
 }
 
 // TenantUser represents an account for a tenant user.
@@ -23,12 +23,12 @@ type TenantUser struct {
 }
 
 type TenantNumber struct {
-	ID           uint   `gorm:"primaryKey" json:"id"`
-	TenantID     uint   `gorm:"index;not null" json:"tenant_id"`
-	Number       string `gorm:"unique;not null" json:"number"` // 10 digit or what ever format matches the transformation rules
-	Name         string `json:"name"`                          // caller id name that is displayed on the fax? eg. +1 555-555-5555
-	Header       string `json:"header"`                        // this is the name displayed at the top of the fax eg. "Company Faxing Relay"
-	NotifyEmails string `json:"notify_emails"`                 // email addresses to notify when a fax is received / failed, etc, if all other endpoint deliveries fail
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	TenantID uint   `gorm:"index;not null" json:"tenant_id"`
+	Number   string `gorm:"unique;not null" json:"number"` // 10 digit or what ever format matches the transformation rules
+	Name     string `json:"name"`                          // caller id name that is displayed on the fax? eg. +1 555-555-5555
+	Header   string `json:"header"`                        // this is the name displayed at the top of the fax eg. "Company Faxing Relay"
+	Notify   string `json:"notify"`                        // notify list, seperated by commas, eg. email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://webhook.com/endpoint
 }
 
 // loadTenants loads Tenants (with their associated numbers) from the database.

@@ -71,6 +71,15 @@ type config struct {
 		Listen string `json:"listen"`
 		APIKey string `json:"api_key"`
 	} `json:"web"`
+	SMTP struct {
+		Host        string `json:"host,omitempty"`
+		Port        int    `json:"port,omitempty"`
+		Username    string `json:"username,omitempty"`
+		Password    string `json:"password,omitempty"`
+		Encryption  string `json:"encryption,omitempty"`
+		FromAddress string `json:"from_address,omitempty"`
+		FromName    string `json:"from_name,omitempty"`
+	} `json:"smtp"`
 	PSK string `json:"psk"`
 }
 
