@@ -1,21 +1,31 @@
 package gofaxserver
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/go-pdf/fpdf"
+	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
+	"net/http"
 	"net/smtp"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 type NotifyFaxResults struct {
 	Results map[string]*FaxJob `json:"results,omitempty"`
 	FaxJob  *FaxJob            `json:"fax_job,omitempty"`
+}
+
+type NotifyDestination struct {
+	Type        string `json:"type"`
+	Destination string `json:"destination"`
 }
 
 func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
@@ -202,4 +212,202 @@ func fitText(pdf *fpdf.Fpdf, text string, width float64) string {
 		text = text[:len(text)-1]
 	}
 	return text + ellipsis
+}
+
+func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error) {
+	var notifyDestinations []NotifyDestination
+
+	// Helper function to parse and append notify string if not empty.
+	appendNotify := func(notifyStr string) error {
+		if notifyStr != "" {
+			destinations, err := parseNotifyString(notifyStr)
+			if err != nil {
+				return fmt.Errorf("error parsing notify string: %w", err)
+			}
+			notifyDestinations = append(notifyDestinations, destinations...)
+			for _, d := range destinations {
+				fmt.Printf("Added Destination - Type: %s, Destination: %s\n", d.Type, d.Destination)
+			}
+		}
+		return nil
+	}
+
+	// Process source tenant (srcT)
+	srcT := q.server.Tenants[f.SrcTenantID]
+	if srcT != nil {
+		// Try getting notify settings from the number for the caller.
+		number, err := q.server.getNumber(f.CallerIdNumber)
+		if err != nil {
+		}
+		if number != nil && number.Notify != "" {
+			if err := appendNotify(number.Notify); err != nil {
+			}
+		} else if srcT.Notify != "" {
+			// Fallback to tenant-level notify settings.
+			if err := appendNotify(srcT.Notify); err != nil {
+			}
+		}
+	}
+
+	// Process destination tenant (dstT)
+	dstT := q.server.Tenants[f.DstTenantID]
+	if dstT != nil {
+		// Try getting notify settings from the number for the callee.
+		number, err := q.server.getNumber(f.CalleeNumber)
+		if err != nil {
+		}
+		if number != nil && number.Notify != "" {
+			if err := appendNotify(number.Notify); err != nil {
+			}
+		} else if dstT.Notify != "" {
+			// Fallback to tenant-level notify settings.
+			if err := appendNotify(dstT.Notify); err != nil {
+			}
+		}
+	}
+
+	return notifyDestinations, nil
+}
+
+// format of: email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://example.org/endpoint,gateway->TODO
+
+func parseNotifyString(notify string) ([]NotifyDestination, error) {
+	var destinations []NotifyDestination
+
+	// Split the string by commas to get individual segments.
+	segments := strings.Split(notify, ",")
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		// Split each segment into type and destination using "->".
+		parts := strings.SplitN(segment, "->", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid segment format: %s", segment)
+		}
+		destType := strings.TrimSpace(parts[0])
+		destValue := strings.TrimSpace(parts[1])
+		// Optionally, if multiple destinations are separated by semicolons, you could process them here.
+		// For now, we store the entire string in Destination.
+		destinations = append(destinations, NotifyDestination{
+			Type:        destType,
+			Destination: destValue,
+		})
+	}
+
+	return destinations, nil
+}
+
+// processNotifyDestinationsAsync processes each NotifyDestination concurrently.
+func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destinations []NotifyDestination) {
+	var notifyWg sync.WaitGroup
+
+	pdfPath, err := nFR.GenerateFaxResultsPDF()
+	if err != nil {
+		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+			"Notify",
+			"failed to save fax result report",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": nFR.FaxJob.UUID.String(), "pdf_path": pdfPath},
+		))
+		return
+	}
+
+	for _, nD := range destinations {
+		// Capture the loop variable.
+		dest := nD
+		notifyWg.Add(1)
+		go func() {
+			defer notifyWg.Done()
+
+			// Process each destination based on its type.
+			switch dest.Type {
+			case "email":
+				// Example: send an email notification.
+				fmt.Printf("Processing email destination: %s\n", dest.Destination)
+				// q.sendEmailNotification(dest) // replace with actual call.
+			case "webhook":
+				// Read the fax file from disk.
+				fileBytes, err := os.ReadFile(pdfPath)
+				if err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("failed to read fax file for webhook: %v", err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID},
+					))
+					break
+				}
+				fileData := base64.StdEncoding.EncodeToString(fileBytes)
+
+				// Generate the PDF report and read it.
+
+				// Build payload struct that includes fax job details, fax file data, and PDF data.
+				// todo improve the data format
+				type WebhookPayload struct {
+					NotifyFaxResults NotifyFaxResults `json:"fax_job_results"`
+					FileData         string           `json:"file_data"`
+				}
+				payloadStruct := WebhookPayload{
+					NotifyFaxResults: nFR,
+					FileData:         fileData,
+				}
+
+				payload, err := json.Marshal(payloadStruct)
+				if err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("failed to marshal payload for webhook: %v", err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+					break
+				}
+
+				webhookURL := dest.Destination
+				req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(payload))
+				if err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("error creating POST request for webhook: %v", err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+				} else {
+					req.Header.Set("Content-Type", "application/json")
+					client := &http.Client{Timeout: 10 * time.Second}
+					resp, err := client.Do(req)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("error sending POST request to webhook: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+					} else {
+						resp.Body.Close()
+						if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+							// todo success!
+						} else {
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Notify",
+								fmt.Sprintf("webhook responded with status %d", resp.StatusCode),
+								logrus.ErrorLevel,
+								map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+							))
+						}
+					}
+				}
+			case "gateway":
+				// Example: process a gateway notification.
+				fmt.Printf("Processing gateway destination: %s\n", dest.Destination)
+				// q.sendGatewayNotification(dest) // replace with actual call.
+			default:
+				fmt.Printf("Unknown destination type: %s, destination: %s\n", dest.Type, dest.Destination)
+			}
+		}()
+	}
+	notifyWg.Wait()
+	os.Remove(pdfPath)
 }

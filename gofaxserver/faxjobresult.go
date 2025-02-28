@@ -56,6 +56,7 @@ type FaxJobResult struct {
 	Success          bool      `json:"success"`
 	TransferRate     uint      `json:"transfer_rate"`
 	NegotiateCount   uint      `json:"negotiate_count"`
+	PageResults      string    `json:"page_results"`
 
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -130,6 +131,13 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		record.Success = job.Result.Success
 		record.TransferRate = job.Result.TransferRate
 		record.NegotiateCount = job.Result.NegotiateCount
+
+		pageR, err := json.Marshal(job.Result.PageResults)
+		if err != nil {
+			return err
+		}
+
+		record.PageResults = string(pageR)
 	}
 
 	// q.server.DB is assumed to be an initialized *gorm.DB instance.

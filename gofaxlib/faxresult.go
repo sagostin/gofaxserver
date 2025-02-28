@@ -188,6 +188,8 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 				pr.LongestBadRowRun = uint(badrowrun)
 			}
 
+			pr.Ts = time.Now()
+
 			f.PageResults = append(f.PageResults, *pr)
 			f.logManager.SendLog(f.logManager.BuildLog(
 				"FaxResult",

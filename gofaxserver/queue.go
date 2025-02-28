@@ -278,29 +278,6 @@ func (q *Queue) processFax(f *FaxJob) {
 	}
 	wg.Wait()
 
-	// Generate a PDF report with the fax results.
-	pdfPath, err := notifyFaxResults.GenerateFaxResultsPDF()
-	if err != nil {
-		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-			"Queue",
-			"failed to save fax result report",
-			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": f.UUID.String(), "pdf_path": pdfPath},
-		))
-		return
-	}
-
-	srcT := q.server.Tenants[f.SrcTenantID]
-	dstT := q.server.Tenants[f.DstTenantID]
-
-	if srcT != nil {
-		// todo process fax result and send to
-	}
-
-	if dstT != nil {
-
-	}
-
 	// Remove the fax file after processing.
 	if err := os.Remove(f.FileName); err != nil {
 		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
@@ -311,4 +288,27 @@ func (q *Queue) processFax(f *FaxJob) {
 		))
 		return
 	}
+
+	// notify of the results
+
+	// Generate a PDF report with the fax results.
+	/*pdfPath, err := notifyFaxResults.GenerateFaxResultsPDF()
+	if err != nil {
+		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+			"Queue",
+			"failed to save fax result report",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": f.UUID.String(), "pdf_path": pdfPath},
+		))
+		return
+	}*/
+
+	notifyDestinations, err := q.processNotifyDestinations(f)
+	if err != nil {
+		fmt.Println("Error processing notify destinations:", err)
+		return
+	}
+
+	q.processNotifyDestinationsAsync(notifyFaxResults, notifyDestinations)
+
 }
