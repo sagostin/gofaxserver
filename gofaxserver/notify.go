@@ -231,7 +231,8 @@ func parseNotifyString(notify string) ([]NotifyDestination, error) {
 }
 
 // SendEmailWithAttachment sends an email with a plain text body and a file attachment via SMTP.
-// If SMTP username is empty, it sends the email without authentication.
+// If the SMTP username is empty, it sends the email without authentication.
+// The "to" parameter can be a semicolon-separated list of email addresses.
 func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
 	// Read the attachment file from disk.
 	attachmentBytes, err := os.ReadFile(attachmentPath)
@@ -285,44 +286,45 @@ func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
 	}
 	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
 
-	// SMTP connection setup.
+	// Split the "to" field by semicolon and trim spaces.
+	recipients := strings.Split(to, ";")
+	for i, r := range recipients {
+		recipients[i] = strings.TrimSpace(r)
+	}
+
 	addr := fmt.Sprintf("%s:%d", gofaxlib.Config.SMTP.Host, gofaxlib.Config.SMTP.Port)
-	// If Username is empty, do not set up auth.
 	var auth smtp.Auth
 	if gofaxlib.Config.SMTP.Username != "" {
 		auth = smtp.PlainAuth("", gofaxlib.Config.SMTP.Username, gofaxlib.Config.SMTP.Password, gofaxlib.Config.SMTP.Host)
 	}
 
-	// Check encryption type.
 	enc := strings.ToLower(gofaxlib.Config.SMTP.Encryption)
 	if enc == "tls" || enc == "ssl" {
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: false, // adjust if necessary
 			ServerName:         gofaxlib.Config.SMTP.Host,
 		}
-
 		conn, err := tls.Dial("tcp", addr, tlsConfig)
 		if err != nil {
 			return fmt.Errorf("failed to dial TLS: %w", err)
 		}
-
 		client, err := smtp.NewClient(conn, gofaxlib.Config.SMTP.Host)
 		if err != nil {
 			return fmt.Errorf("failed to create SMTP client: %w", err)
 		}
-
-		// If auth is set, perform authentication.
 		if auth != nil {
 			if err = client.Auth(auth); err != nil {
 				return fmt.Errorf("failed to authenticate: %w", err)
 			}
 		}
-
 		if err = client.Mail(gofaxlib.Config.SMTP.FromAddress); err != nil {
 			return err
 		}
-		if err = client.Rcpt(to); err != nil {
-			return err
+		// Add each recipient.
+		for _, r := range recipients {
+			if err = client.Rcpt(r); err != nil {
+				return err
+			}
 		}
 		w, err := client.Data()
 		if err != nil {
@@ -337,8 +339,7 @@ func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
 		}
 		client.Quit()
 	} else {
-		// For plain SMTP (no TLS).
-		if err := smtp.SendMail(addr, auth, gofaxlib.Config.SMTP.FromAddress, []string{to}, []byte(msg.String())); err != nil {
+		if err := smtp.SendMail(addr, auth, gofaxlib.Config.SMTP.FromAddress, recipients, []byte(msg.String())); err != nil {
 			return fmt.Errorf("failed to send email: %w", err)
 		}
 	}
