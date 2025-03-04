@@ -191,11 +191,8 @@ func (q *Queue) processFax(f *FaxJob) {
 						sendResult()
 						break
 					}
+
 					fileData := base64.StdEncoding.EncodeToString(fileBytes)
-					faxJobWithFile := FaxJobWithFile{
-						FaxJob:   ff,
-						FileData: fileData,
-					}
 
 					const maxAttempts = 3
 					delay := 2 * time.Second
@@ -203,6 +200,11 @@ func (q *Queue) processFax(f *FaxJob) {
 						ff.Result = &gofaxlib.FaxResult{}
 						ff.CallUUID = uuid.New()
 						startTime := time.Now()
+
+						faxJobWithFile := FaxJobWithFile{
+							FaxJob:   ff,
+							FileData: fileData,
+						}
 						payload, err := json.Marshal(faxJobWithFile)
 						if err != nil {
 							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(

@@ -93,7 +93,7 @@ type FaxResult struct {
 	RemoteID         string `json:"remote_id,omitempty"`
 	ResultCode       int    `json:"result_code,omitempty"` // SpanDSP, not HylaFAX!
 	ResultText       string `json:"result_text,omitempty"`
-	Success          bool   `json:"success,omitempty"`
+	Success          bool   `json:"success"`
 	TransferRate     uint   `json:"transfer_rate,omitempty"`
 	NegotiateCount   uint   `json:"negotiate_count,omitempty"`
 
