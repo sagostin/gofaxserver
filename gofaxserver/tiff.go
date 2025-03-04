@@ -10,10 +10,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
+// tiffToPdf takes an input TIFF file path, converts it to a PDF using Ghostscript,
+// and returns the new PDF file's path. The original TIFF file is left unchanged.
+func tiffToPdf(inputTiff string) (pdfPath string, err error) {
+	// Derive the output PDF file name by replacing the TIFF extension with .pdf.
+	baseName := strings.TrimSuffix(inputTiff, filepath.Ext(inputTiff))
+	pdfPath = baseName + ".pdf"
+
+	// Construct the Ghostscript command to convert TIFF to PDF.
+	// The command used:
+	// gs -q -dNOPAUSE -dBATCH -sDEVICE=pdfwrite -sOutputFile=<pdfPath> <inputTiff>
+	cmdStr := fmt.Sprintf("magick %s %s", inputTiff, pdfPath)
+	cmd := exec.Command("/bin/bash", "-c", cmdStr)
+	if err = cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to convert TIFF to PDF: %w", err)
+	}
+
+	return pdfPath, nil
+}
+
 func pdfToTiff(docID uuid.UUID, fileExtension string, file multipart.File, fileHeader *multipart.FileHeader) (fileName string, err error) {
-	fileFormat := "webhook_fax_%s%s"
+	fileFormat := "temp_%s%s"
 
 	// Save uploaded file to a temporary location.
 	tempFile := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(fileFormat, docID, fileExtension))

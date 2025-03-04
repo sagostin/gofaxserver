@@ -154,12 +154,27 @@ func (q *Queue) processFax(f *FaxJob) {
 							ff.Result.HangupCause = ""
 							sendResult()
 						}
+						if attempt >= maxAttempts {
+							break
+						}
 						time.Sleep(delay)
 						delay *= 2
 					}
 				case "webhook":
 					// Read the file from disk.
-					fileBytes, err := os.ReadFile(ff.FileName)
+
+					// todo convert to pdf for sending to webhook, so we can assume pdf
+					pdf, err := tiffToPdf(ff.FileName)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Queue",
+							fmt.Sprintf("failed to convert tiff to pdf: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": ff.UUID.String()},
+						))
+					}
+
+					fileBytes, err := os.ReadFile(pdf)
 					if err != nil {
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Queue",
@@ -267,9 +282,14 @@ func (q *Queue) processFax(f *FaxJob) {
 								}
 							}
 						}
+						if attempt >= maxAttempts {
+							break
+						}
 						time.Sleep(delay)
 						delay *= 2
 					}
+
+					os.Remove(pdf) // remove temp pdf file that we converted from tiff
 				default:
 					// Handle additional endpoint types if needed.
 				}
