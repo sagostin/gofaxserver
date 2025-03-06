@@ -6,8 +6,8 @@
     "gateway": [
       "default"
     ],
-    "ident": "+1 337",
-    "header": "GONICUS LABS",
+    "ident": "_undef_",
+    "header": "Fax Server",
     "verbose": false,
     "softmodem_fallback": true
   },
