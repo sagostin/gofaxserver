@@ -1,0 +1,9 @@
+<include>
+    <gateway name="pbx_example">
+        <param name="realm" value="pbx.example.com"/>
+        <param name="extension" value="auto_to_user"/>
+        <param name="caller-id-in-from" value="true"/>
+        <param name="extension-in-contact" value="false"/>
+        <param name="register" value="false"/>
+    </gateway>
+</include>

@@ -84,11 +84,11 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 	for _, key := range keys {
 		faxJob := nfr.Results[key]
 
-		marshal, err := json.Marshal(faxJob)
+		/*marshal, err := json.Marshal(faxJob)
 		if err != nil {
 			return "", err
 		}
-		fmt.Println(string(marshal))
+		fmt.Println(string(marshal))*/
 
 		// For Call ID, display only the last segment of the UUID.
 		callIDFull := faxJob.CallUUID.String()
@@ -156,9 +156,9 @@ func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error
 				return fmt.Errorf("error parsing notify string: %w", err)
 			}
 			notifyDestinations = append(notifyDestinations, destinations...)
-			for _, d := range destinations {
+			/*for _, d := range destinations {
 				fmt.Printf("Added Destination - Type: %s, Destination: %s\n", d.Type, d.Destination)
-			}
+			}*/
 		}
 		return nil
 	}
@@ -373,9 +373,9 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 			switch dest.Type {
 			case "email":
 				// Send an email notification with the PDF report attached.
-				fmt.Printf("Processing email destination: %s\n", dest.Destination)
+				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
 				subject := "Fax Report"
-				body := "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Please find the attached fax report."
+				body := "Please find the attached fax report."
 				if err := SendEmailWithAttachment(subject, dest.Destination, body, pdfPath); err != nil {
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
