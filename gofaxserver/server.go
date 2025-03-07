@@ -45,7 +45,9 @@ func NewServer() *Server {
 }
 
 func (s *Server) Start() {
-	gofaxlib.Config.Loki.Job = "faxserver"
+	if gofaxlib.Config.Loki.Job == "" {
+		gofaxlib.Config.Loki.Job = "faxserver"
+	}
 
 	/*err := godotenv.Load()
 	if err != nil {
