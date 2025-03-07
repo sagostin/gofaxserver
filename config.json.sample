@@ -38,7 +38,7 @@
     "password": "lokipassword"
   },
   "web": {
-    "listen": ":3000",
+    "listen": "0.0.0.0:8080",
     "api_key": "apikeyhere"
   },
   "smtp": {
