@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./gofaxserve
 FROM alpine:latest
 
 # Add CA certificates and ffmpeg, then create a non-root user
-RUN apk --no-cache add ca-certificates ffmpeg curl && \
+RUN apk --no-cache add ca-certificates ghostscript curl && \
     adduser -D appuser
 
 # Set the working directory
