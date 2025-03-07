@@ -19,7 +19,6 @@ package gofaxserver
 
 import (
 	"fmt"
-	"github.com/gonicus/gofaxip/gofaxlib/logger"
 	"github.com/sirupsen/logrus"
 	"path/filepath"
 	"regexp"
@@ -95,22 +94,22 @@ func (e *EventSocketServer) Kill() {
 
 // Handle incoming call
 func (e *EventSocketServer) handler(c *eventsocket.Connection) {
-	logger.Logger.Println("Incoming Event Socket connection from", c.RemoteAddr())
+	fmt.Println("Incoming Event Socket connection from", c.RemoteAddr())
 
 	connectev, err := c.Send("connect") // Returns a whole event
 	if err != nil {
 		c.Send("exit")
-		logger.Logger.Print(err)
+		fmt.Print(err)
 		return
 	}
 
 	channelUUID, err := uuid.Parse(connectev.Get("Unique-Id"))
 	if err != nil {
 		c.Send("exit")
-		logger.Logger.Print(err)
+		fmt.Print(err)
 		return
 	}
-	defer logger.Logger.Println(channelUUID, "Handler ending")
+	defer fmt.Println(channelUUID, "Handler ending")
 
 	// Filter and subscribe to events
 	c.Send("linger")
@@ -122,7 +121,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	if gofaxlib.Config.Faxing.RecipientFromDiversionHeader {
 		recipient, err = getNumberFromSIPURI(connectev.Get("Variable_sip_h_diversion"))
 		if err != nil {
-			logger.Logger.Println(err)
+			fmt.Println(err)
 			c.Execute("respond", "404", true)
 			c.Send("exit")
 			return
@@ -170,7 +169,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		// Find free device
 		device, err := devmanager.FindDevice(fmt.Sprintf("Receiving facsimile"))
 		if err != nil {
-			logger.Logger.Println(err)
+			fmt.Println(err)
 			c.Execute("respond", "404", true)
 			c.Send("exit")
 			return
@@ -191,14 +190,14 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	// Query DynamicConfig
 	/*if dcCmd := gofaxlib.Config.Faxing.DynamicConfig; dcCmd != "" {
-		logger.Logger.Println("Calling DynamicConfig script", dcCmd)
+		fmt.Println("Calling DynamicConfig script", dcCmd)
 		dc, err := gofaxlib.DynamicConfig(dcCmd, usedDevice, cidnum, cidname, recipient, gateway)
 		if err != nil {
-			logger.Logger.Println("Error calling DynamicConfig:", err)
+			fmt.Println("Error calling DynamicConfig:", err)
 		} else {
 			// Check if call should be rejected
 			if gofaxlib.DynamicConfigBool(dc.GetString("RejectCall")) {
-				logger.Logger.Println("DynamicConfig decided to reject this call")
+				fmt.Println("DynamicConfig decided to reject this call")
 				c.Execute("respond", "404", true)
 				c.Send("exit")
 				return
@@ -215,7 +214,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	/*logManager, err := gofaxlib.NewSessionLogger(0)
 	if err != nil {
 		c.Send("exit")
-		logger.Logger.Print(err)
+		fmt.Print(err)
 		return
 	}*/
 
@@ -251,7 +250,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	}
 
 	/*if gateway == "" {
-		logger.Logger.Println("invalid gateway, rejecting call")
+		fmt.Println("invalid gateway, rejecting call")
 		c.Execute("respond", "404", true)
 		c.Send("exit")
 		return
