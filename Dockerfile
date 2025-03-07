@@ -37,7 +37,7 @@ USER appuser
 
 # Expose port 3000
 EXPOSE 8022
-EXPOSE 80
+EXPOSE 8080
 
 # Command to run the executable
 CMD ["./main"]
