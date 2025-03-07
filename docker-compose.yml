@@ -23,5 +23,6 @@ services:
       - .env
     volumes:
       - /etc/gofaxserver/config.json:/etc/gofaxserver/config.json
+      - ./tmp:/tmp
     network_mode: host
     restart: always
