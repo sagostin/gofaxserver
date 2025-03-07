@@ -1,43 +1,58 @@
-# Start from a Golang base image
-FROM golang:1.22-alpine AS builder
+# Stage 1: Build the Go application
+FROM golang:1.24.1-bookworm AS builder
 
-# Configure Go proxy
+# Configure Go proxy and set working directory
 ENV GOPROXY=https://proxy.golang.org,direct
-
-# Set the working directory inside the container
 WORKDIR /app
 
-# Copy go mod and sum files
+# Copy module files and download dependencies
 COPY go.mod go.sum ./
-
-# Download all dependencies
 RUN go mod download
 
-# Copy the source code into the container
+# Copy source code and build the application
 COPY . .
-
-# Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./gofaxserver/cmd/gofaxserver
 
-# Start a new stage from scratch
-FROM alpine:latest
+# Stage 2: Final image using Debian Bookworm Slim
+FROM debian:bookworm-slim
 
-# Add CA certificates and ffmpeg, then create a non-root user
-RUN apk --no-cache add ca-certificates bash imagemagick ghostscript curl && \
-    adduser -D appuser
+# Update package lists and install runtime & build dependencies in one RUN command.
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    bash \
+    ghostscript \
+    curl \
+    wget \
+    autoconf \
+    pkg-config \
+    build-essential \
+    libpng-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
+# Create a non-root user
+RUN adduser --disabled-password --gecos "" appuser
+
+# Download and build ImageMagick 7 from source
+WORKDIR /tmp
+RUN wget https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.0-31.tar.gz && \
+    tar xzf 7.1.0-31.tar.gz && \
+    cd ImageMagick-7.1.0-31 && \
+    ./configure --prefix=/usr/local --with-bzlib=yes --with-fontconfig=yes --with-freetype=yes --with-gslib=yes --with-gvc=yes --with-jpeg=yes --with-jp2=yes --with-png=yes --with-tiff=yes --with-xml=yes --with-gs-font-dir=/usr/share/fonts --disable-static && \
+    make -j$(nproc) && \
+    make install && \
+    ldconfig /usr/local/lib && \
+    cd / && rm -rf /tmp/ImageMagick-7.1.0-31*
+
+# Set working directory and copy the pre-built Go binary from the builder stage
 WORKDIR /app
-
-# Copy the pre-built binary file from the previous stage
 COPY --from=builder /app/main .
 
-# Use the non-root user
+# Switch to non-root user
 USER appuser
 
-# Expose port 3000
+# Expose ports as needed
 EXPOSE 8022
 EXPOSE 8080
 
-# Command to run the executable
+# Command to run the application
 CMD ["./main"]
