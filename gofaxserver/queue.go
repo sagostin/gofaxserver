@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -74,6 +75,20 @@ func (q *Queue) processFax(f *FaxJob) {
 		go func(nFR *NotifyFaxResults, epType string, prioMap map[uint][]*Endpoint) {
 			defer wg.Done()
 
+			maxAttempts := 3
+			if gofaxlib.Config.Faxing.RetryAttempts == "" {
+				rMax, err := strconv.Atoi(gofaxlib.Config.Faxing.RetryAttempts)
+				if err == nil {
+					maxAttempts = rMax
+				}
+			}
+			delay := 1 * time.Minute
+
+			dD, err := ParseDuration(gofaxlib.Config.Faxing.RetryDelay)
+			if err == nil {
+				delay = dD
+			}
+
 			// Extract and sort priorities (with 999 always last).
 			var prios []uint
 			for prio := range prioMap {
@@ -108,8 +123,6 @@ func (q *Queue) processFax(f *FaxJob) {
 
 				switch epType {
 				case "gateway":
-					const maxAttempts = 3
-					delay := 2 * time.Second
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
 						ff.Result = &gofaxlib.FaxResult{}
 						ff.CallUUID = uuid.New()
@@ -194,8 +207,6 @@ func (q *Queue) processFax(f *FaxJob) {
 
 					fileData := base64.StdEncoding.EncodeToString(fileBytes)
 
-					const maxAttempts = 3
-					delay := 2 * time.Second
 					for attempt := 1; attempt <= maxAttempts; attempt++ {
 						ff.Result = &gofaxlib.FaxResult{}
 						ff.CallUUID = uuid.New()
