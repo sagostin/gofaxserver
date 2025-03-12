@@ -447,12 +447,6 @@ EventLoop:
 		}
 
 	}
-	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-		"FreeSwitch.EventServer",
-		"Success: %v, Hangup Cause: %v, Result: %v",
-		logrus.InfoLevel,
-		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
-	))
 
 	faxjob := &FaxJob{
 		UUID:           channelUUID,
@@ -472,8 +466,26 @@ EventLoop:
 	}
 
 	if !result.Success {
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+			"FreeSwitch.EventServer",
+			"Success: %v, Hangup Cause: %v, Result: %v",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
+		))
+
+		e.server.Queue.QueueFaxResult <- QueueFaxResult{
+			Job: faxjob,
+		}
+
 		return
 	}
+
+	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+		"FreeSwitch.EventServer",
+		"Success: %v, Hangup Cause: %v, Result: %v",
+		logrus.InfoLevel,
+		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
+	))
 
 	/*if !result.Success {
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
