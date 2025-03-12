@@ -19,6 +19,8 @@ import (
 func (s *Server) loadWebPaths(app *iris.Application) {
 	admin := app.Party("/admin", s.basicAuthMiddleware)
 	{
+		admin.Get("/reload", s.handleReloadData)
+
 		// Tenant management endpoints.
 		admin.Post("/tenant", s.handleAddTenant)
 		admin.Put("/tenant/{id}", s.handleUpdateTenant)
@@ -717,4 +719,13 @@ func (s *Server) getFaxLogByUUID(ctx iris.Context) {
 	}
 
 	ctx.JSON(records)
+}
+
+func (s *Server) handleReloadData(ctx iris.Context) {
+	if err := s.ReloadData(); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"message": "Data reloaded successfully"})
 }

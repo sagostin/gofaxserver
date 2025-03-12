@@ -251,3 +251,15 @@ func loadDialplan() *DialplanManager {
 	// Initialize the DialplanManager with tenant numbers and transformation rules.
 	return NewDialplanManager([]TransformationRule{rule1, rule2})
 }
+
+// ReloadData reloads endpoints, tenants, and tenant users from the database,
+// updating the in-memory maps.
+func (s *Server) ReloadData() error {
+	if err := s.loadEndpoints(); err != nil {
+		return fmt.Errorf("failed to reload endpoints: %w", err)
+	}
+	if err := s.loadTenants(); err != nil {
+		return fmt.Errorf("failed to reload tenants: %w", err)
+	}
+	return nil
+}
