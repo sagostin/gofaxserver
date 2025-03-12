@@ -258,7 +258,7 @@ func (s *Server) ReloadData() error {
 	if err := s.loadEndpoints(); err != nil {
 		return fmt.Errorf("failed to reload endpoints: %w", err)
 	}
-	if err := s.loadTenants(); err != nil {
+	if err := s.reloadTenantsAndNumbers(); err != nil {
 		return fmt.Errorf("failed to reload tenants: %w", err)
 	}
 	return nil
