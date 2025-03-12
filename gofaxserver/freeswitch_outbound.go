@@ -276,7 +276,7 @@ StatusLoop:
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.SendFax",
 				"Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v",
-				logrus.InfoLevel,
+				logrus.ErrorLevel,
 				map[string]interface{}{"uuid": faxjob.UUID.String()}, returned == SendRetry, result.HangupCause, status,
 			))
 			faxjob.Result = result
