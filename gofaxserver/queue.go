@@ -311,30 +311,10 @@ func (q *Queue) processFax(f *FaxJob) {
 	}
 	wg.Wait()
 
-	// Remove the fax file after processing.
-	if err := os.Remove(f.FileName); err != nil {
-		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-			"Queue",
-			"failed to remove fax file",
-			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": f.UUID.String()},
-		))
+	fpTiff, err := firstPageTiff(f.UUID.String(), f.FileName)
+	if err != nil {
 		return
 	}
-
-	// notify of the results
-
-	// Generate a PDF report with the fax results.
-	/*pdfPath, err := notifyFaxResults.GenerateFaxResultsPDF()
-	if err != nil {
-		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-			"Queue",
-			"failed to save fax result report",
-			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": f.UUID.String(), "pdf_path": pdfPath},
-		))
-		return
-	}*/
 
 	notifyDestinations, err := q.processNotifyDestinations(f)
 	if err != nil {
@@ -342,6 +322,29 @@ func (q *Queue) processFax(f *FaxJob) {
 		return
 	}
 
-	q.processNotifyDestinationsAsync(notifyFaxResults, notifyDestinations)
+	q.processNotifyDestinationsAsync(notifyFaxResults, notifyDestinations, fpTiff)
 
+	defer func() {
+		// Remove the fax file after processing.
+		if err := os.Remove(f.FileName); err != nil {
+			q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+				"Queue",
+				"failed to remove fax file",
+				logrus.ErrorLevel,
+				map[string]interface{}{"uuid": f.UUID.String()},
+			))
+			return
+		}
+
+		err := os.Remove(fpTiff)
+		if err != nil {
+			q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+				"Queue",
+				"failed to remove first page fax file",
+				logrus.ErrorLevel,
+				map[string]interface{}{"uuid": f.UUID.String()},
+			))
+			return
+		}
+	}()
 }

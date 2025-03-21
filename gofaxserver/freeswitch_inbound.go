@@ -20,6 +20,7 @@ package gofaxserver
 import (
 	"fmt"
 	"github.com/sirupsen/logrus"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -475,6 +476,17 @@ EventLoop:
 
 		e.server.Queue.QueueFaxResult <- QueueFaxResult{
 			Job: faxjob,
+		}
+
+		err := os.Remove(filename)
+		if err != nil {
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"Queue",
+				"failed to remove fax file",
+				logrus.ErrorLevel,
+				map[string]interface{}{"uuid": channelUUID},
+			))
+			return
 		}
 
 		return

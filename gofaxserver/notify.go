@@ -9,9 +9,12 @@ import (
 	"github.com/go-pdf/fpdf"
 	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/smtp"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -348,7 +351,7 @@ func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
 }
 
 // processNotifyDestinationsAsync processes each NotifyDestination concurrently.
-func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destinations []NotifyDestination) {
+func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destinations []NotifyDestination, firstPageTiffPDF string) {
 	var notifyWg sync.WaitGroup
 
 	pdfPath, err := nFR.GenerateFaxResultsPDF()
@@ -456,6 +459,110 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						}
 					}
 				}
+			case "webhook_form":
+				{
+					// Ensure temporary PDF is removed after sending.
+
+					payload, err := json.Marshal(nFR)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to marshal payload for webhook: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+						break
+					}
+
+					// Prepare multipart form data.
+					body := &bytes.Buffer{}
+					writer := multipart.NewWriter(body)
+
+					// Add form fields (adjust these as needed).
+					_ = writer.WriteField("fax_job_results", string(payload))
+					// (Add more fields if necessary)
+
+					// Open the first page PDF file.
+					file, err := os.Open(firstPageTiffPDF)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to open first page pdf: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+						break
+					}
+					defer file.Close()
+
+					// Attach the file to the form; field name "firstpage_pdf".
+					part, err := writer.CreateFormFile("firstpage_pdf", filepath.Base(firstPageTiffPDF))
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to create form file: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+						break
+					}
+					_, err = io.Copy(part, file)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to copy file data: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+						break
+					}
+
+					// Close the writer to flush the multipart data.
+					if err := writer.Close(); err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to close writer: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+						break
+					}
+
+					// Build and send the POST request.
+					webhookURL := dest.Destination
+					req, err := http.NewRequest("POST", webhookURL, body)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to create webhook_form request: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+						break
+					}
+					req.Header.Set("Content-Type", writer.FormDataContentType())
+
+					client := &http.Client{Timeout: 10 * time.Second}
+					resp, err := client.Do(req)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to send webhook_form request: %v", err),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+						break
+					}
+					resp.Body.Close()
+					if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("webhook_form responded with status %d", resp.StatusCode),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+					}
+				}
 			case "gateway":
 				// Example: process a gateway notification.
 				fmt.Printf("Processing gateway destination: %s\n", dest.Destination)
@@ -467,4 +574,31 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 	}
 	notifyWg.Wait()
 	os.Remove(pdfPath)
+}
+
+func firstPageTiff(uuid, inputPath string) (string, error) {
+
+	outputPath := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf("first_%s.pdf", uuid))
+
+	// Check if the file exists
+	if _, err := os.Stat(inputPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("TIFF file does not exist: %s", inputPath)
+	}
+
+	// Step 1: Convert entire TIFF to PDF
+	cmd := exec.Command("convert",
+		"-density", "300",
+		"-compress", "lzw",
+		"-quality", "100",
+		"-background", "white",
+		"-alpha", "remove",
+		inputPath+"[0]",
+		"-resize", "2550x3300>",
+		outputPath)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to convert TIFF to PDF: %v, output: %s", err, string(output))
+	}
+	return outputPath, nil
 }
