@@ -2,9 +2,9 @@
 
 gofaxserver is a backend/connector providing Fax over IP support using FreeSWITCH and SpanDSP through FreeSWITCH's mod_spandsp.
 
-In contrast to solutions like t38modem, iaxmodem and mod_spandsp's softmodem feature, gofaxserver does not emulate fax modem devices but replaces HylaFAX's `faxgetty` and `faxsend` processes to communicate directly with FreeSWITCH using FreeSWITCH's Event Socket interface.
+In contrast to legacy fax solutions, gofaxserver provides a modern, integrated approach to Fax over IP by directly interfacing with FreeSWITCH via its Event Socket interface, eliminating the need for external fax emulation or legacy fax server utilities.
 
-gofaxserver is designed to provide a standalone fax server together with HylaFAX and a minimal FreeSWITCH setup; the necessary FreeSWITCH configuration is provided.
+gofaxserver is designed to provide a standalone fax server with a minimal FreeSWITCH setup; the necessary FreeSWITCH configuration is provided.
 
 ## Features
 
@@ -23,9 +23,9 @@ gofaxserver is designed to provide a standalone fax server together with HylaFAX
 
 ## Components
 
-gofaxserver consists of two commands that replace their native HylaFAX counterparts:
-* `gofaxsend` is used instead of HylaFAX' `faxsend`
-* `gofaxd` is used instead of HylaFAX' `faxgetty`. Only one instance of `gofaxd` is necessary regardless of the number of receiving channels.
+gofaxserver is composed of two primary commands:
+* `gofaxsend` for sending faxes.
+* `gofaxd` for receiving faxes (only one instance is required regardless of the number of receiving channels).
 
 ## Architecture
 
@@ -102,10 +102,9 @@ gofaxserver includes a flexible notification system that can send fax receipts a
 
 ## Installation
 
-We recommend running gofaxserver on Debian 12 ("bookworm"), so these instructions cover Debian in detail. Of course it is possible to install and use gofaxserver on other Linux distributions and possibly other Unixes supported by golang, FreeSWITCH and HylaFAX.
+We recommend running gofaxserver on Debian 12 ("bookworm"), so these instructions cover Debian in detail. gofaxserver can also be installed on other Linux distributions and Unix systems supported by Golang and FreeSWITCH.
 
-Due to https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1076953 the current Hylafax Packages in 12 will stop working after executing the provided cronjobs `/etc/cron.weekly/hylafax` and `/etc/cron.monthly/hylafax`.
-You can use `debian12_workaround.sh` from this repository to workaround that issue. This script has to be executed once after installing Hylafax packages.
+
 
 ### Dependencies
 
@@ -137,7 +136,7 @@ apt-get install freeswitch freeswitch-mod-commands freeswitch-mod-dptools freesw
 
 ### gofaxserver (TODO)
 
-See [releases](https://github.com/gonicus/gofaxip/releases) for amd64 Debian packages.
+See [releases](https://github.com/sagostin/gofaxserver/releases) for amd64 Debian packages.
 
 Use ```dpkg -i``` to install the latest package.
 
@@ -248,7 +247,7 @@ The database schema will be automatically created when gofaxserver starts for th
 ### Starting
 
 ```
-sudo systemctl restart freeswitch hylafax gofaxip hfaxd faxq
+sudo systemctl restart freeswitch gofaxserver
 ```
 
 ### Logging 
@@ -363,7 +362,7 @@ With golang package from debian repository:
 ```
 apt update
 apt install git dh-golang dh-systemd golang
-git clone https://github.com/gonicus/gofaxip
+git clone https://github.com/sagostin/gofaxserver
 cd gofaxip
 dpkg-buildpackage -us -uc -rfakeroot -b
 ```
