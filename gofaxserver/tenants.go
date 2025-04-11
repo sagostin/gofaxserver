@@ -199,7 +199,7 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 	filterValid := func(endpoints []*Endpoint) []*Endpoint {
 		var valid []*Endpoint
 		for _, ep := range endpoints {
-			if ep.Priority >= 0 {
+			if ep.Priority != 666 {
 				valid = append(valid, ep)
 			}
 		}
