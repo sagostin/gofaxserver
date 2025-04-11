@@ -26,7 +26,7 @@ type Endpoint struct {
 	TypeID       uint   `json:"type_id"`       // id of type, either tenant or number id
 	EndpointType string `json:"endpoint_type"` // webhook, gateway (gateway is for freeswitch), or email, or freeswitch (which would be in the format of say /external/sofia/gateway/gatewayname or something else for TDM routing)
 	Endpoint     string `json:"endpoint"`      // if type=gateway then this is the freeswitch gateway name, otherwise, it's the webhook url, or email address (or multiple email addresses separated by semi-colons), gateways will have gatewayname:publicIP for acl rules / matching
-	Priority     uint   `json:"priority"`      // priority from 0 to any? 0 being the highest priority
+	Priority     uint   `json:"priority"`      // priority from 0 to any? 0 being the highest priority - if priority is -1 then we will ignore it as an option for sending out? or should we handle based on general var in
 }
 
 // todo

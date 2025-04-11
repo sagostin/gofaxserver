@@ -196,25 +196,37 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// First check for endpoints tied to the specific number.
-	if eps, exists := s.NumberEndpoints[number]; exists && len(eps) > 0 {
-		return eps, nil
+	filterValid := func(endpoints []*Endpoint) []*Endpoint {
+		var valid []*Endpoint
+		for _, ep := range endpoints {
+			if ep.Priority >= 0 {
+				valid = append(valid, ep)
+			}
+		}
+		return valid
 	}
 
-	// DEBUG
-	/*marshal, _ := json.Marshal(s.TenantNumbers)
-	fmt.Printf("DEBUG 333: %s", marshal)*/
+	// First check for endpoints tied to the specific number.
+	if eps, exists := s.NumberEndpoints[number]; exists && len(eps) > 0 {
+		filtered := filterValid(eps)
+		if len(filtered) > 0 {
+			return filtered, nil
+		}
+	}
 
 	// If no number-specific endpoints, get the tenant endpoints.
-
 	tn, exists := s.TenantNumbers[number]
 	if !exists {
 		return nil, fmt.Errorf("number %s not found", number)
 	}
 	if eps, exists := s.TenantEndpoints[tn.TenantID]; exists {
-		return eps, nil
+		filtered := filterValid(eps)
+		if len(filtered) > 0 {
+			return filtered, nil
+		}
 	}
-	return nil, fmt.Errorf("no endpoints found for number %s", number)
+
+	return nil, fmt.Errorf("no valid endpoints found for number %s", number)
 }
 
 // AddTenantUser adds a new tenant user to the database after encrypting the password.
