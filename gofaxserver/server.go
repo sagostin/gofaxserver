@@ -238,13 +238,13 @@ func (s *Server) Start() {
 func loadDialplan() *DialplanManager {
 	// Define transformation rules:
 	rule1 := TransformationRule{
-		Pattern:     regexp.MustCompile(`^1(\d{10})$`),
+		Pattern:     regexp.MustCompile(`^1(\d{10}).*$`),
 		Replacement: "$1",
 	}
 
 	// Rule 2: If the number starts with "001", remove the leading "00"
 	rule2 := TransformationRule{
-		Pattern:     regexp.MustCompile(`^(\d{10})$`),
+		Pattern:     regexp.MustCompile(`^(\d{10}).*$`),
 		Replacement: "$1",
 	}
 
