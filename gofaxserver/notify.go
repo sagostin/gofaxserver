@@ -236,16 +236,10 @@ func parseNotifyString(notify string) ([]NotifyDestination, error) {
 // SendEmailWithAttachment sends an email with a plain text body and a file attachment via SMTP.
 // If the SMTP username is empty, it sends the email without authentication.
 // The "to" parameter can be a semicolon-separated list of email addresses.
-func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
-	// Read the attachment file from disk.
-	attachmentBytes, err := os.ReadFile(attachmentPath)
-	if err != nil {
-		return fmt.Errorf("failed to read attachment: %w", err)
-	}
-
-	// Encode the attachment in base64.
-	encodedAttachment := base64.StdEncoding.EncodeToString(attachmentBytes)
-
+// SendEmailWithAttachment sends an email with a plain text body and multiple file attachments via SMTP.
+// If the SMTP username is empty, it sends the email without authentication.
+// The "to" parameter can be a semicolon-separated list of email addresses.
+func SendEmailWithAttachment(subject, to, body string, attachmentPaths []string) error {
 	// Create a MIME boundary.
 	boundary := "myBoundary123456789"
 
@@ -272,21 +266,36 @@ func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
 	msg.WriteString("\r\n")
 	msg.WriteString(body + "\r\n")
 
-	// Attachment part.
-	filename := filepath.Base(attachmentPath)
-	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-	msg.WriteString(fmt.Sprintf("Content-Type: application/octet-stream; name=\"%s\"\r\n", filename))
-	msg.WriteString("Content-Transfer-Encoding: base64\r\n")
-	msg.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", filename))
-	msg.WriteString("\r\n")
-	const maxLineLen = 76
-	for i := 0; i < len(encodedAttachment); i += maxLineLen {
-		end := i + maxLineLen
-		if end > len(encodedAttachment) {
-			end = len(encodedAttachment)
+	// Process each attachment.
+	for _, attachmentPath := range attachmentPaths {
+		// Read the attachment file from disk.
+		attachmentBytes, err := os.ReadFile(attachmentPath)
+		if err != nil {
+			return fmt.Errorf("failed to read attachment %s: %w", attachmentPath, err)
 		}
-		msg.WriteString(encodedAttachment[i:end] + "\r\n")
+
+		// Encode the attachment in base64.
+		encodedAttachment := base64.StdEncoding.EncodeToString(attachmentBytes)
+
+		// Attachment part.
+		filename := filepath.Base(attachmentPath)
+		msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		msg.WriteString(fmt.Sprintf("Content-Type: application/octet-stream; name=\"%s\"\r\n", filename))
+		msg.WriteString("Content-Transfer-Encoding: base64\r\n")
+		msg.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", filename))
+		msg.WriteString("\r\n")
+
+		const maxLineLen = 76
+		for i := 0; i < len(encodedAttachment); i += maxLineLen {
+			end := i + maxLineLen
+			if end > len(encodedAttachment) {
+				end = len(encodedAttachment)
+			}
+			msg.WriteString(encodedAttachment[i:end] + "\r\n")
+		}
 	}
+
+	// End boundary.
 	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
 
 	// Split the "to" field by semicolon and trim spaces.
@@ -346,7 +355,6 @@ func SendEmailWithAttachment(subject, to, body, attachmentPath string) error {
 			return fmt.Errorf("failed to send email: %w", err)
 		}
 	}
-
 	return nil
 }
 
@@ -374,12 +382,12 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 
 			// Process each destination based on its type.
 			switch dest.Type {
-			case "email":
+			case "email_report":
 				// Send an email notification with the PDF report attached.
 				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
 				subject := "Fax Report"
 				body := "Please find the attached fax report."
-				if err := SendEmailWithAttachment(subject, dest.Destination, body, pdfPath); err != nil {
+				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{pdfPath}); err != nil {
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
@@ -387,6 +395,42 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
 					))
 				}
+			case "email_full":
+				// Send an email notification with the PDF report attached.
+				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
+				subject := "Full Fax Report"
+				body := "Please find the attached fax report & original fax."
+
+				pdf, err := tiffToPdf(nFR.FaxJob.FileName)
+				if err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Queue",
+						fmt.Sprintf("failed to convert tiff to pdf: %v", err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+				}
+
+				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{pdfPath, pdf}); err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+				}
+
+				defer func(name string) {
+					err := os.Remove(name)
+					if err != nil {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							fmt.Sprintf("failed to remove full fax file: %s", pdf),
+							logrus.ErrorLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
+					}
+				}(pdf)
 			case "webhook":
 				// Read the fax file from disk.
 				fileBytes, err := os.ReadFile(pdfPath)
