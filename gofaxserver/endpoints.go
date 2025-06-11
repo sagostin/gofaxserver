@@ -27,6 +27,7 @@ type Endpoint struct {
 	EndpointType string `json:"endpoint_type"` // webhook, gateway (gateway is for freeswitch), or email, or freeswitch (which would be in the format of say /external/sofia/gateway/gatewayname or something else for TDM routing)
 	Endpoint     string `json:"endpoint"`      // if type=gateway then this is the freeswitch gateway name, otherwise, it's the webhook url, or email address (or multiple email addresses separated by semi-colons), gateways will have gatewayname:publicIP for acl rules / matching
 	Priority     uint   `json:"priority"`      // priority from 0 to any? 0 being the highest priority - if priority is 666 then we will ignore it as an option for sending out? or should we handle based on general var in
+	Bridge       bool   `json:"bridge"`        // if gateway for fax is set to bridge / from a bridge enabled gateway, it will use bridge mode instead of rxfax and txfax
 }
 
 // todo
@@ -44,10 +45,15 @@ func (s *Server) loadEndpoints() error {
 	// Reset the endpoint maps.
 	s.TenantEndpoints = make(map[uint][]*Endpoint)
 	s.NumberEndpoints = make(map[string][]*Endpoint)
+	s.Endpoints = make(map[string]*Endpoint)
+	s.UpstreamFsGateways = make([]string, 0)
 	s.GatewayEndpointsACL = []string{}
 
 	// Process each endpoint and place it in the proper map.
 	for _, ep := range endpoints {
+		// add to general endpoint map with TYPE/ENDPOINT
+		s.Endpoints[ep.Type+"/"+ep.Endpoint] = &ep
+
 		epCopy := ep // create a copy for taking a pointer
 		switch epCopy.EndpointType {
 		case "gateway":
@@ -232,4 +238,30 @@ func (s *Server) fsGatewayACL(ip string) (string, error) {
 	}
 
 	return "", errors.New("unable to find matching gateway from sending IP")
+}
+
+// getEndpointByName gets the endpoint by given endpoint name - eg. pbx_test
+func (s *Server) getEndpointByName(name string) (*Endpoint, error) {
+	for epName, ep := range s.Endpoints {
+		if strings.Contains(epName, name) {
+			return ep, nil
+		}
+		continue
+	}
+
+	return nil, errors.New("unable to find endpoint by name")
+}
+
+func endpointGatewayDialstring(endpoints []string, dstNum string) string {
+	var dsGateways string
+
+	for n, gw := range endpoints {
+		if len(endpoints)-1 == n {
+			dsGateways += "|"
+		}
+
+		dsGateways += fmt.Sprintf("sofia/gateway/%v/%v", gw, dstNum)
+	}
+
+	return dsGateways
 }

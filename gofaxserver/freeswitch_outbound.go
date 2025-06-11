@@ -467,7 +467,12 @@ func (t *eventClient) start() {
 
 	// Assemble dialstring
 	var dsVariables bytes.Buffer
-	var dsGateways bytes.Buffer
+	var gateways []string
+	for _, i := range t.faxjob.Endpoints {
+		gateways = append(gateways, strings.Split(i.Endpoint, ":")[0])
+	}
+
+	var dsGateways = endpointGatewayDialstring(gateways, t.faxjob.CalleeNumber)
 
 	for k, v := range dsVariablesMap {
 		if dsVariables.Len() > 0 {
@@ -475,17 +480,8 @@ func (t *eventClient) start() {
 		}
 		dsVariables.WriteString(fmt.Sprintf("%v='%v'", k, v))
 	}
-	// Try gateways in configured order
-	for _, gw := range t.faxjob.Endpoints {
-		if dsGateways.Len() > 0 {
-			dsGateways.WriteByte('|')
-		}
-		gateway := strings.Split(gw.Endpoint, ":")[0]
 
-		dsGateways.WriteString(fmt.Sprintf("sofia/gateway/%v/%v", gateway, t.faxjob.CalleeNumber))
-	}
-
-	dialstring := fmt.Sprintf("{%v}%v", dsVariables.String(), dsGateways.String())
+	dialstring := fmt.Sprintf("{%v}%v", dsVariables.String(), dsGateways)
 	t.logManager.SendLog(t.logManager.BuildLog(
 		"EventClient",
 		"Dialstring: %s",
@@ -524,7 +520,7 @@ func (t *eventClient) start() {
 		map[string]interface{}{"uuid": t.faxjob.UUID.String()},
 	))
 
-	result := gofaxlib.NewFaxResult(t.faxjob.UUID, t.logManager)
+	result := gofaxlib.NewFaxResult(t.faxjob.UUID, t.logManager, false)
 
 	es := gofaxlib.NewEventStream(t.conn)
 	var pages uint

@@ -31,8 +31,9 @@ type Server struct {
 	TenantEndpoints map[uint][]*Endpoint `json:"tenant_endpoints,omitempty"`
 	// Endpoints assigned to a specific number (keyed by the phone number string).
 	NumberEndpoints     map[string][]*Endpoint `json:"number_endpoints,omitempty"`
-	GatewayEndpointsACL []string               `json:"gateway_endpoint_acl,omitempty"` // allowed source IPs for SIP trunks
-	UpstreamFsGateways  []string               `json:"upstream_fs_gateways"`           // upstream gateway names defined in the global endpoints config/DB
+	Endpoints           map[string]*Endpoint
+	GatewayEndpointsACL []string `json:"gateway_endpoint_acl,omitempty"` // allowed source IPs for SIP trunks
+	UpstreamFsGateways  []string `json:"upstream_fs_gateways"`           // upstream gateway names defined in the global endpoints config/DB
 }
 
 func NewServer() *Server {

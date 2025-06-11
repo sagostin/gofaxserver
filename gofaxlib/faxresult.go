@@ -96,15 +96,16 @@ type FaxResult struct {
 	Success          bool   `json:"success"`
 	TransferRate     uint   `json:"transfer_rate,omitempty"`
 	NegotiateCount   uint   `json:"negotiate_count,omitempty"`
-
-	PageResults []PageResult `json:"page_results,omitempty"`
+	bridge           bool
+	PageResults      []PageResult `json:"page_results,omitempty"`
 }
 
 // NewFaxResult creates a new FaxResult structure
-func NewFaxResult(uuid uuid.UUID, logManager *LogManager) *FaxResult {
+func NewFaxResult(uuid uuid.UUID, logManager *LogManager, bridge bool) *FaxResult {
 	f := &FaxResult{
 		UUID:       uuid,
 		logManager: logManager,
+		bridge:     bridge,
 	}
 	return f
 }

@@ -165,6 +165,12 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway,
 	))
 
+	// todo match inbound gateway source and destination number, if its from a trunk
+	// and the destination is a number with an endpoint with bridge mode,
+	// allow transcode to audio to leg B (PBX) from Trunk
+	// otherwise, if it's from PBX and going to external, transcode Leg B to Leg A if applicable
+	// this doesn't need to be handled for outbound because inbound from trunk / pbx will always be "inbound"
+
 	/*var device *Device
 	if gofaxlib.Config.Faxing.AllocateInboundDevices {
 		// Find free device
@@ -264,6 +270,53 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway, channelUUID.String(),
 	))
 
+	srcNum := e.server.DialplanManager.ApplyTransformationRules(cidnum)
+	dstNum := e.server.DialplanManager.ApplyTransformationRules(recipient)
+
+	// handle bridging
+	bridgeGw, enableBridge := e.server.Router.detectAndRouteToBridge(dstNum, srcNum, gateway)
+
+	if enableBridge {
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+			"FreeSwitch.EventServer.BRIDGE",
+			"Enabling bridge mode for call to %v from %v <%v> via gateway %v with commid %v",
+			logrus.InfoLevel,
+			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway, channelUUID.String(),
+		))
+
+		c.Execute("set", "origination_caller_id_number"+srcNum, true)
+
+		// we will assume that if the source is not an upstream gateway,
+		// that we will enable transcoding from Leg A (g711) to Leg B (g711/t38)
+		if bridgeGw == "upstream" {
+
+			var dsGateways = endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"FREESWITCH.BRIDGE",
+				"DialString %s",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": channelUUID.String()}, dsGateways,
+			))
+
+			c.Execute("set", "sip_execute_on_image=t38_gateway peer nocng", true)
+			c.Execute("bridge", dsGateways, true)
+			//c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", "telcobridges2", dstNum), true)
+		} else {
+			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
+			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
+			/*
+
+				<extension name="t38_transcode">
+				  <condition field="destination_number" expression="^(fax_transcode)$">
+				    <action application="set" data="fax_enable_t38=true"/>
+				    <action application="bridge" data="{sip_execute_on_image='t38_gateway self nocng'}sofia/internal/ext@host"/> <!-- "nocng" means don't detect the CNG tones. Just start transcoding -->
+				  </condition>
+				</extension>
+
+			*/
+		}
+	}
+
 	/*if device != nil {
 		// Notify faxq
 		// todo this is used for hylafax only, we will not use this going forward
@@ -275,17 +328,6 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	// Start interacting with the caller
 
-	if gofaxlib.Config.Faxing.AnswerAfter != 0 {
-		c.Execute("ring_ready", "", true)
-		c.Execute("sleep", strconv.FormatUint(gofaxlib.Config.Faxing.AnswerAfter, 10), true)
-	}
-
-	c.Execute("answer", "", true)
-
-	if gofaxlib.Config.Faxing.WaitTime != 0 {
-		c.Execute("playback", "silence_stream://"+strconv.FormatUint(gofaxlib.Config.Faxing.WaitTime, 10), true)
-	}
-
 	// Find filename in recvq to save received .tif
 	/*seq, err := gofaxlib.GetSeqFor(recvqDir)
 	if err != nil {
@@ -295,13 +337,6 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	}*/
 	// todo can we require to a database instead or just in memory and pass to a channel?
 	filename := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, channelUUID.String()))
-
-	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-		"FreeSwitch.EventServer",
-		"Rxfax to %s",
-		logrus.DebugLevel,
-		map[string]interface{}{"uuid": channelUUID.String()}, filename,
-	))
 
 	/*
 		todo for inbound calls from carrier if they send t.38, we will support, but for outbound,
@@ -317,12 +352,6 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			</extension>
 	*/
 
-	c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
-	c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
-
-	// todo do i need the fax_ident?
-	c.Execute("set", fmt.Sprintf("fax_ident=%s", csi), true)
-
 	// todo support bridging the call to another extension / gateway
 	// check priority of the endpoints, and if the gateway is one, then attempt to transcode it
 
@@ -331,10 +360,35 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	// and then add it to the database or
 	// something because freeswitch needs
 	// to do it like that, hmm...
-	c.Execute("rxfax", filename, true)
-	c.Execute("hangup", "", true)
+	if !enableBridge {
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+			"FreeSwitch.EventServer",
+			"Rxfax to %s",
+			logrus.DebugLevel,
+			map[string]interface{}{"uuid": channelUUID.String()}, filename,
+		))
 
-	result := gofaxlib.NewFaxResult(channelUUID, e.server.LogManager)
+		if gofaxlib.Config.Faxing.AnswerAfter != 0 {
+			c.Execute("ring_ready", "", true)
+			c.Execute("sleep", strconv.FormatUint(gofaxlib.Config.Faxing.AnswerAfter, 10), true)
+		}
+
+		c.Execute("answer", "", true)
+
+		if gofaxlib.Config.Faxing.WaitTime != 0 {
+			c.Execute("playback", "silence_stream://"+strconv.FormatUint(gofaxlib.Config.Faxing.WaitTime, 10), true)
+		}
+
+		c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
+		c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
+
+		// todo do i need the fax_ident?
+		c.Execute("set", fmt.Sprintf("fax_ident=%s", csi), true)
+		c.Execute("rxfax", filename, true)
+		c.Execute("hangup", "", true)
+	}
+
+	result := gofaxlib.NewFaxResult(channelUUID, e.server.LogManager, enableBridge)
 	es := gofaxlib.NewEventStream(c)
 
 	pages := result.TransferredPages
@@ -349,7 +403,7 @@ EventLoop:
 					"FreeSwitch.EventServer",
 					"Received disconnect message",
 					logrus.WarnLevel,
-					map[string]interface{}{"uuid": channelUUID.String()},
+					map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge},
 				))
 				//c.Close()
 				//break EventLoop
@@ -373,14 +427,14 @@ EventLoop:
 					"FreeSwitch.EventServer",
 					"Event socket client disconnected",
 					logrus.ErrorLevel,
-					map[string]interface{}{"uuid": channelUUID.String()},
+					map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge},
 				))
 			} else {
 				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 					"FreeSwitch.EventServer",
 					"Error: %v",
 					logrus.ErrorLevel,
-					map[string]interface{}{"uuid": channelUUID.String()}, err,
+					map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, err,
 				))
 			}
 			break EventLoop
@@ -389,7 +443,7 @@ EventLoop:
 				"FreeSwitch.EventServer",
 				"Kill request received, destroying channel",
 				logrus.ErrorLevel,
-				map[string]interface{}{"uuid": channelUUID.String()},
+				map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge},
 			))
 			c.Send(fmt.Sprintf("api uuid_kill %v", channelUUID))
 			c.Close()
@@ -415,7 +469,7 @@ EventLoop:
 				"FreeSwitch.EventServer",
 				"Faxing failed with %d negotiations, enabling softmodem fallback for calls from/to %s.",
 				logrus.InfoLevel,
-				map[string]interface{}{"uuid": channelUUID.String()}, result.NegotiateCount, cidnum,
+				map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.NegotiateCount, cidnum,
 			))
 			activateFallback = true
 		} else {
@@ -429,7 +483,7 @@ EventLoop:
 					"FreeSwitch.EventServer",
 					"Faxing failed with %d bad rows in %d pages, enabling softmodem fallback for calls from/to %s.",
 					logrus.InfoLevel,
-					map[string]interface{}{"uuid": channelUUID.String()}, badrows, result.TransferredPages, cidnum,
+					map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, badrows, result.TransferredPages, cidnum,
 				))
 				activateFallback = true
 			}
@@ -442,7 +496,7 @@ EventLoop:
 					"FreeSwitch.EventServer",
 					err.Error(),
 					logrus.ErrorLevel,
-					map[string]interface{}{"uuid": channelUUID.String()},
+					map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge},
 				))
 			}
 		}
@@ -471,7 +525,7 @@ EventLoop:
 			"FreeSwitch.EventServer",
 			"Success: %v, Hangup Cause: %v, Result: %v",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
+			map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.Success, result.HangupCause, result.ResultText,
 		))
 
 		e.server.Queue.QueueFaxResult <- QueueFaxResult{
@@ -484,7 +538,7 @@ EventLoop:
 				"Queue",
 				"failed to remove fax file",
 				logrus.ErrorLevel,
-				map[string]interface{}{"uuid": channelUUID},
+				map[string]interface{}{"uuid": channelUUID, "bridge": enableBridge},
 			))
 			return
 		}
@@ -496,7 +550,7 @@ EventLoop:
 		"FreeSwitch.EventServer",
 		"Success: %v, Hangup Cause: %v, Result: %v",
 		logrus.InfoLevel,
-		map[string]interface{}{"uuid": channelUUID.String()}, result.Success, result.HangupCause, result.ResultText,
+		map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.Success, result.HangupCause, result.ResultText,
 	))
 
 	/*if !result.Success {
