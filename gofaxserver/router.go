@@ -108,15 +108,16 @@ func (r *Router) detectAndRouteToBridge(dstNumber string, srcNumber string, srcG
 
 	// Only attempt bridging if the call came in via an upstream Freeswitch gateway
 	if contains(r.server.UpstreamFsGateways, srcGateway) {
+		//logrus.Printf("upstreams: %v", r.server.UpstreamFsGateways)
 		// if the upstream gateways contains the src gateway, then we want to check if the destination number has an endpoint
 		// if the destination has an endpoint, and it has bridge mode enabled, then continue
 
-		bridge, b, err := r.server.checkForBridge(dstNumber)
+		bridgeGw, b, err := r.server.checkForBridge(dstNumber)
 		if err != nil {
 			// this will just continue with normal routing if that's the case
 			return "", false
 		}
-		return bridge, b
+		return bridgeGw, b
 	}
 	// if the src gateway is not an upstream
 	// check the source number to see if it is to be bridged for outbound, also check if the destination is also on the fax server
@@ -147,12 +148,15 @@ func (r *Router) detectAndRouteToBridge(dstNumber string, srcNumber string, srcG
 
 func (s *Server) checkForBridge(numberToCheck string) (string, bool, error) {
 	epList, err := s.getEndpointsForNumber(numberToCheck)
+	//logrus.Printf("epList: %v", epList)
 	if err != nil {
 		return "", false, err
 	}
 	for _, endpoint := range epList {
-		if endpoint.Bridge && len(epList) == 1 && endpoint.Type == "gateway" {
+		//logrus.Printf("endpoint: %v", endpoint)
+		if endpoint.Bridge && endpoint.EndpointType == "gateway" {
 			epParts := strings.Split(endpoint.Endpoint, ":")
+			//logrus.Printf("endpoint 2: %v", epParts[0])
 			return epParts[0], true, nil
 		}
 	}

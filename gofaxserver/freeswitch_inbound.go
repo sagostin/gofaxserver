@@ -270,6 +270,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway, channelUUID.String(),
 	))
 
+	c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
+	c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
+
 	srcNum := e.server.DialplanManager.ApplyTransformationRules(cidnum)
 	dstNum := e.server.DialplanManager.ApplyTransformationRules(recipient)
 
@@ -298,11 +301,11 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				map[string]interface{}{"uuid": channelUUID.String()}, dsGateways,
 			))
 
-			c.Execute("set", "sip_execute_on_image=t38_gateway peer nocng", true)
+			c.Execute("set", "sip_execute_on_image=t38_gateway peer", true) // nocng
 			c.Execute("bridge", dsGateways, true)
 			//c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", "telcobridges2", dstNum), true)
 		} else {
-			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
+			c.Execute("set", "sip_execute_on_image=t38_gateway self", true)
 			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
 			/*
 
@@ -378,9 +381,6 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		if gofaxlib.Config.Faxing.WaitTime != 0 {
 			c.Execute("playback", "silence_stream://"+strconv.FormatUint(gofaxlib.Config.Faxing.WaitTime, 10), true)
 		}
-
-		c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
-		c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
 
 		// todo do i need the fax_ident?
 		c.Execute("set", fmt.Sprintf("fax_ident=%s", csi), true)
