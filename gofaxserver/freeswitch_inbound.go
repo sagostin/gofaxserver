@@ -519,27 +519,40 @@ EventLoop:
 		},
 	}
 
-	if !result.Success {
+	if enableBridge {
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-			"FreeSwitch.EventServer",
-			"Success: %v, Hangup Cause: %v, Result: %v",
-			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.Success, result.HangupCause, result.ResultText,
+			"FreeSwitch.EventServer.Bridge",
+			"Ended bridge",
+			logrus.DebugLevel,
+			map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge},
 		))
+	}
+
+	if !result.Success {
+		if !enableBridge {
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"FreeSwitch.EventServer",
+				"Success: %v, Hangup Cause: %v, Result: %v",
+				logrus.ErrorLevel,
+				map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.Success, result.HangupCause, result.ResultText,
+			))
+		}
 
 		e.server.Queue.QueueFaxResult <- QueueFaxResult{
 			Job: faxjob,
 		}
 
-		err := os.Remove(filename)
-		if err != nil {
-			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-				"Queue",
-				"failed to remove fax file",
-				logrus.ErrorLevel,
-				map[string]interface{}{"uuid": channelUUID, "bridge": enableBridge},
-			))
-			return
+		if !enableBridge {
+			err := os.Remove(filename)
+			if err != nil {
+				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+					"Queue",
+					"failed to remove fax file",
+					logrus.ErrorLevel,
+					map[string]interface{}{"uuid": channelUUID, "bridge": enableBridge},
+				))
+				return
+			}
 		}
 
 		return
