@@ -301,11 +301,11 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				map[string]interface{}{"uuid": channelUUID.String()}, dsGateways,
 			))
 
-			c.Execute("bridge", "{sip_execute_on_image=t38_gateway peer}"+dsGateways, true) // nocng
+			c.Execute("bridge", "{sip_execute_on_image=t38_gateway peer nocng},"+dsGateways, true) // nocng
 			//c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", "telcobridges2", dstNum), true)
 		} else {
-			c.Execute("set", "sip_execute_on_image=t38_gateway self", true)
-			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
+			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
+			c.Execute("bridge", "{refuse_t38=true},"+fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
 			/*
 
 				<extension name="t38_transcode">
