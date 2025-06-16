@@ -306,62 +306,12 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		} else {
 			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
 			c.Execute("bridge", "{refuse_t38=true}"+fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
-			/*
-
-				<extension name="t38_transcode">
-				  <condition field="destination_number" expression="^(fax_transcode)$">
-				    <action application="set" data="fax_enable_t38=true"/>
-				    <action application="bridge" data="{sip_execute_on_image='t38_gateway self nocng'}sofia/internal/ext@host"/> <!-- "nocng" means don't detect the CNG tones. Just start transcoding -->
-				  </condition>
-				</extension>
-
-			*/
 		}
 	}
 
-	/*if device != nil {
-		// Notify faxq
-		// todo this is used for hylafax only, we will not use this going forward
-		gofaxlib.Faxq.ModemStatus(device.Name, "I"+logManager.CommID())
-		gofaxlib.Faxq.ReceiveStatus(device.Name, "B")
-		gofaxlib.Faxq.ReceiveStatus(device.Name, "S")
-		defer gofaxlib.Faxq.ReceiveStatus(device.Name, "E")
-	}*/
-
-	// Start interacting with the caller
-
-	// Find filename in recvq to save received .tif
-	/*seq, err := gofaxlib.GetSeqFor(recvqDir)
-	if err != nil {
-		c.Send("exit")
-		logManager.Log(err)
-		return
-	}*/
 	// todo can we require to a database instead or just in memory and pass to a channel?
 	filename := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, channelUUID.String()))
 
-	/*
-		todo for inbound calls from carrier if they send t.38, we will support, but for outbound,
-		we should relay it in a sense. We will need to check the gateway and if it is a t.38 gateway?
-
-			<extension name="t38_reinvite">
-			  <condition>
-			    <action application="set" data="fax_enable_t38=true"/> <!-- Enable t.38 for this call -->
-			    <action application="set" data="fax_enable_t38_request=true"/> <!-- Enable t38_gateway to send a t.38 reinvite when a fax tone is detected. If using t38_gateway peer then you need to export this variable instead of set -->
-			    <action application="set" data="execute_on_answer=t38_gateway self"/> <!--Execute t38_gateway on answer. self or peer. self: send a reinvite back to the a-leg. peer reinvite forward to the b-leg -->
-			    <action application="bridge" data="sofia/external/1234@host"/>
-			  </condition>
-			</extension>
-	*/
-
-	// todo support bridging the call to another extension / gateway
-	// check priority of the endpoints, and if the gateway is one, then attempt to transcode it
-
-	// todo
-	// we need to save the file temporarily
-	// and then add it to the database or
-	// something because freeswitch needs
-	// to do it like that, hmm...
 	if !enableBridge {
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.EventServer",
