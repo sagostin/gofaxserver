@@ -287,7 +287,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway, channelUUID.String(),
 		))
 
-		c.Execute("set", "origination_caller_id_number"+srcNum, true)
+		c.Execute("set", "origination_caller_id_number="+srcNum, true)
 
 		// we will assume that if the source is not an upstream gateway,
 		// that we will enable transcoding from Leg A (g711) to Leg B (g711/t38)
@@ -301,8 +301,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				map[string]interface{}{"uuid": channelUUID.String()}, dsGateways,
 			))
 
-			c.Execute("set", "sip_execute_on_image=t38_gateway peer", true) // nocng
-			c.Execute("bridge", dsGateways, true)
+			c.Execute("bridge", "{sip_execute_on_image=t38_gateway peer}"+dsGateways, true) // nocng
 			//c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", "telcobridges2", dstNum), true)
 		} else {
 			c.Execute("set", "sip_execute_on_image=t38_gateway self", true)
