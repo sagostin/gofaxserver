@@ -293,9 +293,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		// we will assume that if the source is not an upstream gateway,
 		// that we will enable transcoding from Leg A (g711) to Leg B (g711/t38)
 		if bridgeGw == "upstream" {
-			exportString := fmt.Sprintf("{%s,%s,%s}",
+			exportString := fmt.Sprintf("{%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)),
-				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
+				//fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
 				fmt.Sprintf("sip_execute_on_image='%s'", "t38_gateway peer nocng"))
 
 			var dsGateways = endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
