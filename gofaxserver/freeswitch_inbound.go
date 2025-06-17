@@ -296,7 +296,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			exportString := fmt.Sprintf("{%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)),
 				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
-				fmt.Sprintf("sip_execute_on_image='%s'", "t38_gateway peer"))
+				fmt.Sprintf("sip_execute_on_image='%s'", "t38_gateway peer nocng"))
 
 			var dsGateways = endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
@@ -309,7 +309,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			c.Execute("bridge", exportString+dsGateways, true) // nocng
 
 		} else {
-			c.Execute("set", "sip_execute_on_image=t38_gateway self", true)
+			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
 			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
 		}
 	}
