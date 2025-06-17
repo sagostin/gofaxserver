@@ -300,15 +300,15 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": channelUUID.String()}, dsGateways,
 			))
-			exportString := fmt.Sprintf("{%s,%s,%s}",
+			exportString1 := fmt.Sprintf("{%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
 				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
-				fmt.Sprintf("sip_execute_on_image='%s'", "t38_gateway peer nocng"))
+				fmt.Sprintf("sip_execute_on_image='%s'", "t38_gateway peer"))
 
-			c.Execute("bridge", exportString+dsGateways, true) // nocng
+			c.Execute("bridge", exportString1+dsGateways, true) // nocng
 
 		} else {
-			c.Execute("set", "sip_execute_on_image='t38_gateway self nocng'", true)
+			c.Execute("set", "sip_execute_on_image='t38_gateway self'", true)
 			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
 		}
 	}
