@@ -280,19 +280,19 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	bridgeGw, enableBridge := e.server.Router.detectAndRouteToBridge(dstNum, srcNum, gateway)
 
 	if enableBridge {
+		//c.Execute("export", fmt.Sprintf("%s", strconv.FormatBool(enableT38)), true)
+		//c.Execute("export", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.EventServer.BRIDGE",
 			"Enabling bridge mode for call to %v from %v <%v> via gateway %v with commid %v",
 			logrus.InfoLevel,
 			map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway, channelUUID.String(),
 		))
-
 		c.Execute("set", "origination_caller_id_number="+srcNum, true)
 
 		// we will assume that if the source is not an upstream gateway,
 		// that we will enable transcoding from Leg A (g711) to Leg B (g711/t38)
 		if bridgeGw == "upstream" {
-
 			var dsGateways = endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FREESWITCH.BRIDGE",
@@ -300,12 +300,16 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": channelUUID.String()}, dsGateways,
 			))
+			exportString := fmt.Sprintf("{%s,%s,%s}",
+				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
+				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
+				fmt.Sprintf("sip_execute_on_image='%s'", "t38_gateway peer nocng"))
 
-			c.Execute("bridge", "{sip_execute_on_image=t38_gateway peer nocng}"+dsGateways, true) // nocng
-			//c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", "telcobridges2", dstNum), true)
+			c.Execute("bridge", exportString+dsGateways, true) // nocng
+
 		} else {
-			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
-			c.Execute("bridge", "{refuse_t38=true}"+fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
+			c.Execute("set", "sip_execute_on_image='t38_gateway self nocng'", true)
+			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
 		}
 	}
 
