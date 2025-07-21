@@ -362,13 +362,13 @@ func SendEmailWithAttachment(subject, to, body string, attachmentPaths []string)
 func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destinations []NotifyDestination, firstPageTiffPDF string) {
 	var notifyWg sync.WaitGroup
 
-	pdfPath, err := nFR.GenerateFaxResultsPDF()
+	faxReport, err := nFR.GenerateFaxResultsPDF()
 	if err != nil {
 		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 			"Notify",
 			"failed to save fax result report",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": nFR.FaxJob.UUID.String(), "pdf_path": pdfPath},
+			map[string]interface{}{"uuid": nFR.FaxJob.UUID.String(), "pdf_path": faxReport},
 		))
 		return
 	}
@@ -387,7 +387,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
 				subject := "Fax Report"
 				body := "Please find the attached fax report."
-				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{pdfPath}); err != nil {
+				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{faxReport}); err != nil {
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
@@ -395,9 +395,17 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
 					))
 				}
-			case "email_full":
+			case "email_full", "email_full_failure":
 				// Send an email notification with the PDF report attached.
 				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
+
+				// if the type is only for failures then
+				if dest.Type == "email_full_failure" {
+					if nFR.FaxJob.Result.Success {
+						break
+					}
+				}
+
 				subject := "Full Fax Report"
 				body := "Please find the attached fax report & original fax."
 
@@ -411,7 +419,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					))
 				}
 
-				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{pdfPath, pdf}); err != nil {
+				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{faxReport, pdf}); err != nil {
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
@@ -433,7 +441,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				}(pdf)
 			case "webhook":
 				// Read the fax file from disk.
-				fileBytes, err := os.ReadFile(pdfPath)
+				fileBytes, err := os.ReadFile(faxReport)
 				if err != nil {
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
@@ -617,7 +625,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 		}()
 	}
 	notifyWg.Wait()
-	os.Remove(pdfPath)
+	os.Remove(faxReport)
 }
 
 func firstPageTiff(uuid, inputPath string) (string, error) {
