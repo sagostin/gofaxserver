@@ -312,6 +312,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
 			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
 		}
+	} else {
+		// todo predictive / auto disable ecm on failure for inbound?
+		c.Execute("fax_use_ecm", strconv.FormatBool(false), true)
 	}
 
 	// todo can we require to a database instead or just in memory and pass to a channel?
