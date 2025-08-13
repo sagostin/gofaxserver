@@ -463,7 +463,7 @@ EventLoop:
 		CallerIdNumber: cidnum,
 		CallerIdName:   cidname,
 		FileName:       filename,
-		UseECM:         true, // set this by default
+		UseECM:         false, // set this by default
 		DisableV17:     false,
 		Result:         result,
 		SourceInfo: FaxSourceInfo{
