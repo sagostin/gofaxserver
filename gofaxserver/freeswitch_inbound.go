@@ -274,8 +274,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
 
 	// todo better implementation
-	c.Execute("set", fmt.Sprintf("fax_use_ecm=%s", strconv.FormatBool(false)), false)
-	c.Execute("set", fmt.Sprintf("fax_disable_v17=%s", strconv.FormatBool(true)), false)
+	// c.Execute("set", fmt.Sprintf("fax_use_ecm=%s", strconv.FormatBool(true)), true)
+	c.Execute("set", fmt.Sprintf("fax_disable_v17=%s", strconv.FormatBool(true)), true)
+	// c.Execute("set", fmt.Sprintf("fax_v17_disabled=%s", strconv.FormatBool(true)), true)
 
 	srcNum := e.server.DialplanManager.ApplyTransformationRules(cidnum)
 	dstNum := e.server.DialplanManager.ApplyTransformationRules(recipient)
