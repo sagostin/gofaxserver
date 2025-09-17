@@ -75,25 +75,12 @@ func (q *Queue) processFax(f *FaxJob) {
 		go func(nFR *NotifyFaxResults, epType string, prioMap map[uint][]*Endpoint) {
 			defer wg.Done()
 
-			maxAttempts := 3
-			if gofaxlib.Config.Faxing.RetryAttempts == "" {
-				rMax, err := strconv.Atoi(gofaxlib.Config.Faxing.RetryAttempts)
-				if err == nil {
-					maxAttempts = rMax
-				}
-			}
-			delay := 1 * time.Minute
-
-			dD, err := ParseDuration(gofaxlib.Config.Faxing.RetryDelay)
-			if err == nil {
-				delay = dD
-			}
-
 			// Extract and sort priorities (with 999 always last).
 			var prios []uint
 			for prio := range prioMap {
 				prios = append(prios, prio)
 			}
+
 			sort.Slice(prios, func(i, j int) bool {
 				a, b := prios[i], prios[j]
 				if a == 999 && b != 999 {
@@ -105,87 +92,50 @@ func (q *Queue) processFax(f *FaxJob) {
 			})
 
 			// Process each priority group sequentially.
+			// Process each priority group sequentially with "advance-on-any-failure" semantics.
 			for _, prio := range prios {
 				group := prioMap[prio]
-				// Create a shallow copy of the fax job for this group.
-				ff := *f
-				ff.Endpoints = group
-				// Initialize Result.
-				ff.Result = &gofaxlib.FaxResult{}
 
-				// Helper to report an attempt.
-				sendResult := func() {
-					q.QueueFaxResult <- QueueFaxResult{Job: &ff}
-
-					copyFax := ff // copy the current attempt state
-					nFR.Results[ff.CallUUID.String()] = &copyFax
+				// Parse retry config (fix: only parse if non-empty)
+				maxAttempts := 3
+				if s := gofaxlib.Config.Faxing.RetryAttempts; s != "" {
+					if rMax, err := strconv.Atoi(s); err == nil && rMax > 0 {
+						maxAttempts = rMax
+					}
+				}
+				baseDelay := time.Minute
+				if d, err := ParseDuration(gofaxlib.Config.Faxing.RetryDelay); err == nil {
+					baseDelay = d
 				}
 
-				switch epType {
-				case "gateway":
-					for attempt := 1; attempt <= maxAttempts; attempt++ {
-						ff.Result = &gofaxlib.FaxResult{}
-						ff.CallUUID = uuid.New()
-						startTime := time.Now()
-						returned, err := q.server.FsSocket.SendFax(&ff)
-						if err != nil {
-							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-								"Queue",
-								fmt.Sprintf("error sending fax (gateway) attempt %d, priority %d, callee: %s, caller: %s, err: %v, endpoints: %v",
-									attempt, prio, ff.CalleeNumber, ff.CallerIdName, err, ff.Endpoints),
-								logrus.ErrorLevel,
-								map[string]interface{}{"uuid": ff.UUID.String()},
-							))
-							ff.Result.UUID = ff.CallUUID
-							ff.Result.Success = false
-							ff.Result.StartTs = startTime
-							ff.Result.EndTs = time.Now()
+				// Helper to record/send an attempt result and snapshot into notify map.
+				sendResult := func(ff *FaxJob) {
+					q.QueueFaxResult <- QueueFaxResult{Job: ff}
+					copyFax := *ff // snapshot state
+					notifyFaxResults.Results[ff.CallUUID.String()] = &copyFax
+				}
 
-							if returned != SendRetry {
-								ff.Result.HangupCause = ff.Status
-								attempt = maxAttempts
-							}
-							sendResult()
-						} else if ff.Result.Success {
-							ff.Result.UUID = ff.CallUUID
-							ff.Result.Success = true
-							sendResult()
-							break
-						} else {
-							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-								"Queue",
-								fmt.Sprintf("attempt %d (gateway) failed: priority %d, callee: %s, caller: %s, result: %v, endpoints: %v",
-									attempt, prio, ff.CalleeNumber, ff.CallerIdName, ff.Result.ResultText, ff.Endpoints),
-								logrus.ErrorLevel,
-								map[string]interface{}{"uuid": ff.UUID.String()},
-							))
-							ff.Result.UUID = ff.CallUUID
-							ff.Result.Success = false
-							ff.Result.StartTs = startTime
-							ff.Result.EndTs = time.Now()
-							ff.Status = "gateway failure"
-							ff.Result.HangupCause = ""
-							sendResult()
-						}
-						if attempt >= maxAttempts {
-							break
-						}
-						time.Sleep(delay)
-						delay *= 2
+				// Precompute webhook payload once per priority group (if any ep is webhook)
+				var webhookPDFPath string
+				var webhookFileB64 string
+				var webhookPrepared bool
+				prepareWebhookPayload := func(ffBase *FaxJob) {
+					if webhookPrepared {
+						return
 					}
-				case "webhook":
-					// Read the file from disk.
-
-					// todo convert to pdf for sending to webhook, so we can assume pdf
-					pdf, err := tiffToPdf(ff.FileName)
+					// Convert (once) and read file for this priority group
+					pdf, err := tiffToPdf(ffBase.FileName)
 					if err != nil {
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Queue",
 							fmt.Sprintf("failed to convert tiff to pdf: %v", err),
 							logrus.ErrorLevel,
-							map[string]interface{}{"uuid": ff.UUID.String()},
+							map[string]interface{}{"uuid": ffBase.UUID.String()},
 						))
+						webhookPrepared = true // mark as prepared to avoid reattempting
+						return
 					}
+					webhookPDFPath = pdf
 
 					fileBytes, err := os.ReadFile(pdf)
 					if err != nil {
@@ -193,70 +143,40 @@ func (q *Queue) processFax(f *FaxJob) {
 							"Queue",
 							fmt.Sprintf("failed to read fax file for webhook: %v", err),
 							logrus.ErrorLevel,
-							map[string]interface{}{"uuid": ff.UUID.String()},
+							map[string]interface{}{"uuid": ffBase.UUID.String()},
 						))
-						ff.Result.UUID = ff.CallUUID
-						ff.Result.Success = false
-						ff.Result.StartTs = time.Now()
-						ff.Result.EndTs = time.Now()
-						ff.Status = fmt.Sprintf("failed to read fax file: %v", err)
-						ff.Result.HangupCause = ""
-						sendResult()
-						break
+						webhookPrepared = true
+						return
 					}
+					webhookFileB64 = base64.StdEncoding.EncodeToString(fileBytes)
+					webhookPrepared = true
+				}
 
-					fileData := base64.StdEncoding.EncodeToString(fileBytes)
+				// Process endpoints within this priority; advance to next priority only if ANY failed fully.
+				groupHadFailure := false
 
-					for attempt := 1; attempt <= maxAttempts; attempt++ {
+				switch endpointType {
+				case "gateway":
+					for _, ep := range group {
+						// Shallow copy per-endpoint; operate on a single endpoint
+						ff := *f
+						ff.Endpoints = []*Endpoint{ep}
 						ff.Result = &gofaxlib.FaxResult{}
-						ff.CallUUID = uuid.New()
-						startTime := time.Now()
 
-						faxJobWithFile := FaxJobWithFile{
-							FaxJob:   ff,
-							FileData: fileData,
-						}
-						payload, err := json.Marshal(faxJobWithFile)
-						if err != nil {
-							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-								"Queue",
-								fmt.Sprintf("failed to marshal fax job for webhook: %v", err),
-								logrus.ErrorLevel,
-								map[string]interface{}{"uuid": ff.UUID.String()},
-							))
-							ff.Result.UUID = ff.CallUUID
-							ff.Result.Success = false
-							ff.Result.StartTs = startTime
-							ff.Result.EndTs = time.Now()
-							ff.Status = "marshal error"
-							ff.Result.HangupCause = ""
-							sendResult()
-							break
-						}
-						webhookURL := ff.Endpoints[0].Endpoint
-						req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(payload))
-						if err != nil {
-							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-								"Queue",
-								fmt.Sprintf("error creating POST request for webhook: %v", err),
-								logrus.ErrorLevel,
-								map[string]interface{}{"uuid": ff.UUID.String()},
-							))
-							ff.Result.UUID = ff.CallUUID
-							ff.Result.Success = false
-							ff.Result.StartTs = startTime
-							ff.Result.EndTs = time.Now()
-							ff.Status = "request creation error"
-							ff.Result.HangupCause = ""
-							sendResult()
-						} else {
-							req.Header.Set("Content-Type", "application/json")
-							client := &http.Client{Timeout: 10 * time.Second}
-							resp, err := client.Do(req)
+						success := false
+						delay := baseDelay
+
+						for attempt := 1; attempt <= maxAttempts; attempt++ {
+							ff.Result = &gofaxlib.FaxResult{}
+							ff.CallUUID = uuid.New()
+							startTime := time.Now()
+
+							returned, err := q.server.FsSocket.SendFax(&ff)
 							if err != nil {
 								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 									"Queue",
-									fmt.Sprintf("error sending POST request to webhook (attempt %d): %v", attempt, err),
+									fmt.Sprintf("error sending fax (gateway) attempt %d, prio %d, callee: %s, caller: %s, err: %v, endpoint: %v",
+										attempt, prio, ff.CalleeNumber, ff.CallerIdName, err, ep),
 									logrus.ErrorLevel,
 									map[string]interface{}{"uuid": ff.UUID.String()},
 								))
@@ -264,24 +184,124 @@ func (q *Queue) processFax(f *FaxJob) {
 								ff.Result.Success = false
 								ff.Result.StartTs = startTime
 								ff.Result.EndTs = time.Now()
-								ff.Status = "webhook request error"
-								ff.Result.HangupCause = ""
-								sendResult()
-							} else {
-								resp.Body.Close()
-								if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-									ff.Result.UUID = ff.CallUUID
-									ff.Result.Success = true
-									ff.Result.StartTs = startTime
-									ff.Result.EndTs = time.Now()
-									ff.Status = fmt.Sprintf("status %d", resp.StatusCode)
-									ff.Result.HangupCause = ""
-									sendResult()
+
+								// If not retriable, exit attempts
+								if returned != SendRetry {
+									ff.Result.HangupCause = ff.Status
+									sendResult(&ff)
 									break
-								} else {
+								}
+								sendResult(&ff)
+							} else if ff.Result.Success {
+								ff.Result.UUID = ff.CallUUID
+								ff.Result.Success = true
+								ff.Result.StartTs = startTime
+								ff.Result.EndTs = time.Now()
+								sendResult(&ff)
+								success = true
+								break
+							} else {
+								// explicit failure from gateway
+								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+									"Queue",
+									fmt.Sprintf("attempt %d (gateway) failed: prio %d, callee: %s, caller: %s, result: %v, endpoint: %v",
+										attempt, prio, ff.CalleeNumber, ff.CallerIdName, ff.Result.ResultText, ep),
+									logrus.ErrorLevel,
+									map[string]interface{}{"uuid": ff.UUID.String()},
+								))
+								ff.Result.UUID = ff.CallUUID
+								ff.Result.Success = false
+								ff.Result.StartTs = startTime
+								ff.Result.EndTs = time.Now()
+								ff.Status = "gateway failure"
+								ff.Result.HangupCause = ""
+								sendResult(&ff)
+							}
+
+							if attempt < maxAttempts {
+								time.Sleep(delay)
+								delay *= 2
+							}
+						}
+
+						if !success {
+							groupHadFailure = true
+						}
+					}
+
+				case "webhook":
+					// Prepare shared payload once per priority group
+					prepareWebhookPayload(f)
+
+					for _, ep := range group {
+						ff := *f
+						ff.Endpoints = []*Endpoint{ep}
+						ff.Result = &gofaxlib.FaxResult{}
+
+						success := false
+						delay := baseDelay
+
+						for attempt := 1; attempt <= maxAttempts; attempt++ {
+							ff.Result = &gofaxlib.FaxResult{}
+							ff.CallUUID = uuid.New()
+							startTime := time.Now()
+
+							// If we couldn't prepare a payload, fail immediately
+							if webhookPDFPath == "" || webhookFileB64 == "" {
+								ff.Result.UUID = ff.CallUUID
+								ff.Result.Success = false
+								ff.Result.StartTs = startTime
+								ff.Result.EndTs = time.Now()
+								ff.Status = "webhook payload not prepared"
+								sendResult(&ff)
+								break
+							}
+
+							// Build payload
+							faxJobWithFile := FaxJobWithFile{
+								FaxJob:   ff,
+								FileData: webhookFileB64,
+							}
+							payload, err := json.Marshal(faxJobWithFile)
+							if err != nil {
+								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+									"Queue",
+									fmt.Sprintf("failed to marshal fax job for webhook: %v", err),
+									logrus.ErrorLevel,
+									map[string]interface{}{"uuid": ff.UUID.String()},
+								))
+								ff.Result.UUID = ff.CallUUID
+								ff.Result.Success = false
+								ff.Result.StartTs = startTime
+								ff.Result.EndTs = time.Now()
+								ff.Status = "marshal error"
+								sendResult(&ff)
+								break
+							}
+
+							webhookURL := ep.Endpoint // per-endpoint
+							req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(payload))
+							if err != nil {
+								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+									"Queue",
+									fmt.Sprintf("error creating POST request for webhook: %v", err),
+									logrus.ErrorLevel,
+									map[string]interface{}{"uuid": ff.UUID.String()},
+								))
+								ff.Result.UUID = ff.CallUUID
+								ff.Result.Success = false
+								ff.Result.StartTs = startTime
+								ff.Result.EndTs = time.Now()
+								ff.Status = "request creation error"
+								sendResult(&ff)
+							} else {
+								req.Header.Set("Content-Type", "application/json")
+								client := &http.Client{Timeout: 10 * time.Second}
+								resp, err := client.Do(req)
+								if err != nil {
 									q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 										"Queue",
-										fmt.Sprintf("webhook responded with status %d on attempt %d", resp.StatusCode, attempt),
+										fmt.Sprintf("error sending POST to webhook (attempt %d): %v", attempt, err),
 										logrus.ErrorLevel,
 										map[string]interface{}{"uuid": ff.UUID.String()},
 									))
@@ -289,22 +309,62 @@ func (q *Queue) processFax(f *FaxJob) {
 									ff.Result.Success = false
 									ff.Result.StartTs = startTime
 									ff.Result.EndTs = time.Now()
-									ff.Status = fmt.Sprintf("status %d", resp.StatusCode)
-									ff.Result.HangupCause = ""
-									sendResult()
+									ff.Status = "webhook request error"
+									sendResult(&ff)
+								} else {
+									resp.Body.Close()
+									if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+										ff.Result.UUID = ff.CallUUID
+										ff.Result.Success = true
+										ff.Result.StartTs = startTime
+										ff.Result.EndTs = time.Now()
+										ff.Status = fmt.Sprintf("status %d", resp.StatusCode)
+										sendResult(&ff)
+										success = true
+										break
+									} else {
+										q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+											"Queue",
+											fmt.Sprintf("webhook responded with status %d on attempt %d", resp.StatusCode, attempt),
+											logrus.ErrorLevel,
+											map[string]interface{}{"uuid": ff.UUID.String()},
+										))
+										ff.Result.UUID = ff.CallUUID
+										ff.Result.Success = false
+										ff.Result.StartTs = startTime
+										ff.Result.EndTs = time.Now()
+										ff.Status = fmt.Sprintf("status %d", resp.StatusCode)
+										sendResult(&ff)
+									}
 								}
 							}
+
+							if attempt < maxAttempts {
+								time.Sleep(delay)
+								delay *= 2
+							}
 						}
-						if attempt >= maxAttempts {
-							break
+
+						if !success {
+							groupHadFailure = true
 						}
-						time.Sleep(delay)
-						delay *= 2
 					}
 
-					os.Remove(pdf) // remove temp pdf file that we converted from tiff
+					// Clean up the shared PDF for this priority group
+					if webhookPDFPath != "" {
+						_ = os.Remove(webhookPDFPath)
+					}
+
 				default:
-					// Handle additional endpoint types if needed.
+					// Handle additional endpoint types if needed in the same pattern:
+					// - per-endpoint retries
+					// - mark groupHadFailure if any endpoint ultimately fails
+				}
+
+				// DECISION: advance to higher priority only if ANY endpoint in this priority failed.
+				if !groupHadFailure {
+					// All endpoints in this priority ultimately succeeded → stop here.
+					break
 				}
 			}
 		}(&notifyFaxResults, endpointType, prioMap)
