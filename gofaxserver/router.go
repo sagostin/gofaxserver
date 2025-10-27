@@ -2,6 +2,7 @@ package gofaxserver
 
 import (
 	"errors"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"strings"
 	"time"
@@ -27,19 +28,29 @@ func (r *Router) Start() {
 }
 
 func (r *Router) routeFax(fax *FaxJob) {
+	start := time.Now()
+
+	// --- Pre-transform snapshot for logs
+	origSrc := fax.CallerIdNumber
+	origDst := fax.CalleeNumber
+
+	// Apply dialplan transforms
 	srcNum := r.server.DialplanManager.ApplyTransformationRules(fax.CallerIdNumber)
 	dstNum := r.server.DialplanManager.ApplyTransformationRules(fax.CalleeNumber)
-
 	fax.CalleeNumber = dstNum
 	fax.CallerIdNumber = srcNum
+	fax.Ts = time.Now()
 
-	fax.Ts = time.Now() // time of start routing
-
-	srcTenant, _ := r.server.getTenantByNumber(srcNum)
-	if srcTenant != nil {
+	// Resolve tenants / caller ID meta
+	var (
+		srcTenantID uint
+		dstTenantID uint
+	)
+	if srcTenant, _ := r.server.getTenantByNumber(srcNum); srcTenant != nil {
 		fax.SrcTenantID = srcTenant.ID
-		cid, _ := r.server.getNumber(srcNum)
-		if cid != nil {
+		srcTenantID = srcTenant.ID
+
+		if cid, _ := r.server.getNumber(srcNum); cid != nil {
 			fax.CallerIdName = cid.Name
 			fax.Header = cid.Header
 		} else {
@@ -47,52 +58,189 @@ func (r *Router) routeFax(fax *FaxJob) {
 		}
 		fax.Identifier = fax.CallerIdNumber
 	}
-	dstTenant, _ := r.server.getTenantByNumber(dstNum)
-	if dstTenant != nil {
+	if dstTenant, _ := r.server.getTenantByNumber(dstNum); dstTenant != nil {
 		fax.DstTenantID = dstTenant.ID
+		dstTenantID = dstTenant.ID
 	}
 
-	r.server.Queue.QueueFaxResult <- QueueFaxResult{
-		Job: fax,
-	}
+	// Upstreams snapshot for logs
+	upstreams := append([]string(nil), r.server.UpstreamFsGateways...)
 
-	// source type specific routing
-	switch srcType := fax.SourceInfo.SourceType; srcType {
+	// High-level routing start log (INFO)
+	r.server.LogManager.SendLog(
+		r.server.LogManager.BuildLog(
+			"Router",
+			"fax routing start",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"uuid":            fax.UUID.String(),
+				"elapsed_ms":      0,
+				"orig_src":        origSrc,
+				"orig_dst":        origDst,
+				"src_transformed": srcNum,
+				"dst_transformed": dstNum,
+				"src_tenant_id":   srcTenantID,
+				"dst_tenant_id":   dstTenantID,
+				"source_type":     fax.SourceInfo.SourceType,
+				"source_id":       fax.SourceInfo.Source,
+				"upstreams_count": len(upstreams),
+				"upstreams":       upstreams,
+				"caller_id_name":  fax.CallerIdName,
+				"header":          fax.Header,
+			},
+		),
+	)
+
+	// Emit a lightweight progress tick to UI/consumers
+	r.server.Queue.QueueFaxResult <- QueueFaxResult{Job: fax}
+
+	// --- Source-type specific short-circuit (e.g., came from a trusted upstream gateway)
+	switch fax.SourceInfo.SourceType {
 	case "gateway":
 		if contains(r.server.UpstreamFsGateways, fax.SourceInfo.Source) {
-			ep, err := r.server.getEndpointsForNumber(dstNum)
+			endpoints, err := r.server.getEndpointsForNumber(dstNum)
 			if err != nil {
-				r.server.LogManager.SendLog(r.server.LogManager.BuildLog(
-					"Router",
-					"failed to route from upstream to endpoint - caller: %s - callee: %s - err: %s",
-					logrus.ErrorLevel,
-					map[string]interface{}{"uuid": fax.UUID.String()}, fax.CalleeNumber, fax.CallerIdName, err,
-				))
+				r.server.LogManager.SendLog(
+					r.server.LogManager.BuildLog(
+						"Router",
+						"upstream->endpoint lookup failed",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"uuid":     fax.UUID.String(),
+							"callee":   dstNum,
+							"caller":   srcNum,
+							"error":    err.Error(),
+							"upstream": fax.SourceInfo.Source,
+						},
+					),
+				)
+				// Fall through to default routing below
+			} else {
+				// Success path: log endpoints then queue
+				r.server.LogManager.SendLog(
+					r.server.LogManager.BuildLog(
+						"Router",
+						"upstream->endpoint routing",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"uuid":            fax.UUID.String(),
+							"callee":          dstNum,
+							"caller":          srcNum,
+							"upstream":        fax.SourceInfo.Source,
+							"endpoints_count": len(endpoints),
+							"endpoints":       summarizeEndpoints(endpoints),
+						},
+					),
+				)
+				fax.Endpoints = endpoints
+				r.server.Queue.Queue <- fax
 				return
 			}
-			fax.Endpoints = ep
-			r.server.Queue.Queue <- fax
-			return
 		}
 	}
 
-	// otherwise continue to the rest of the routing steps
+	// --- Standard: try direct endpoints for the destination
 	endpoints, err := r.server.getEndpointsForNumber(dstNum)
-	if err == nil {
+	if err == nil && len(endpoints) > 0 {
+		r.server.LogManager.SendLog(
+			r.server.LogManager.BuildLog(
+				"Router",
+				"direct endpoint routing",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"uuid":            fax.UUID.String(),
+					"callee":          dstNum,
+					"caller":          srcNum,
+					"endpoints_count": len(endpoints),
+					"endpoints":       summarizeEndpoints(endpoints),
+				},
+			),
+		)
 		fax.Endpoints = endpoints
 		r.server.Queue.Queue <- fax
 		return
 	}
 
-	// route to default gateway for freeswitch
-	var eps []*Endpoint
-	for _, ep := range r.server.UpstreamFsGateways {
-		eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999, Type: "global", TypeID: 0})
+	// --- Fallback: route to upstream FreeSWITCH gateways (priority 999 global batch)
+	if len(upstreams) == 0 {
+		// Nothing to fall back to—log and drop (or you could NACK/notify)
+		r.server.LogManager.SendLog(
+			r.server.LogManager.BuildLog(
+				"Router",
+				"no direct endpoints and no upstreams available",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"uuid":   fax.UUID.String(),
+					"callee": dstNum,
+					"caller": srcNum,
+					"error":  fmt.Sprintf("getEndpointsForNumber failed or returned none: %v", err),
+				},
+			),
+		)
+		return
 	}
 
-	// send to the queue
+	r.server.LogManager.SendLog(
+		r.server.LogManager.BuildLog(
+			"Router",
+			"falling back to upstream gateways",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"uuid":            fax.UUID.String(),
+				"callee":          dstNum,
+				"caller":          srcNum,
+				"reason_error":    fmt.Sprintf("%v", err),
+				"upstreams_count": len(upstreams),
+				"upstreams":       upstreams,
+			},
+		),
+	)
+
+	eps := make([]*Endpoint, 0, len(upstreams))
+	for _, up := range upstreams {
+		eps = append(eps, &Endpoint{
+			EndpointType: "gateway",
+			Endpoint:     up,
+			Priority:     999,
+			Type:         "global",
+			TypeID:       0,
+		})
+	}
+
+	r.server.LogManager.SendLog(
+		r.server.LogManager.BuildLog(
+			"Router",
+			"enqueued to upstreams",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"uuid":            fax.UUID.String(),
+				"callee":          dstNum,
+				"caller":          srcNum,
+				"endpoints_count": len(eps),
+				"endpoints":       summarizeEndpoints(eps),
+				"elapsed_ms":      time.Since(start).Milliseconds(),
+			},
+		),
+	)
+
+	// Send to the queue
 	fax.Endpoints = eps
 	r.server.Queue.Queue <- fax
+}
+
+// summarizeEndpoints produces a compact, log-friendly view of endpoints.
+func summarizeEndpoints(eps []*Endpoint) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(eps))
+	for _, e := range eps {
+		out = append(out, map[string]interface{}{
+			"type":          e.EndpointType, // e.g., "gateway", "webhook"
+			"endpoint":      e.Endpoint,     // address/URL/gateway name
+			"priority":      e.Priority,     // uint
+			"strategy_type": e.Type,         // e.g., "global"
+			"type_id":       e.TypeID,
+		})
+	}
+	return out
 }
 
 // Updated detectAndRouteToBridge: first attempts to find a bridge-enabled endpoint
