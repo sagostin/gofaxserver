@@ -87,7 +87,7 @@ func (r *Router) routeFax(fax *FaxJob) {
 	// route to default gateway for freeswitch
 	var eps []*Endpoint
 	for _, ep := range r.server.UpstreamFsGateways {
-		eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999})
+		eps = append(endpoints, &Endpoint{EndpointType: "gateway", Endpoint: ep, Priority: 999, Type: "global", TypeID: 0})
 	}
 
 	// send to the queue
