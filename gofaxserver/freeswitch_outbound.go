@@ -482,9 +482,10 @@ func (t *eventClient) start() {
 	}
 
 	dialstring := fmt.Sprintf("{%v}%v", dsVariables.String(), dsGateways)
+
 	t.logManager.SendLog(t.logManager.BuildLog(
 		"EventClient",
-		"Dialstring: %s",
+		"FS_OUTBOUND - %s",
 		logrus.InfoLevel,
 		map[string]interface{}{"uuid": t.faxjob.UUID.String()}, dialstring,
 	))

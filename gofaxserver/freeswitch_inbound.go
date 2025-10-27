@@ -306,7 +306,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			var dsGateways = endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FREESWITCH.BRIDGE",
-				"DialString %s",
+				"FS_INBOUND - BRIDGE - %s",
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": channelUUID.String()}, exportString+dsGateways,
 			))

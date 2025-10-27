@@ -256,10 +256,9 @@ func endpointGatewayDialstring(endpoints []string, dstNum string) string {
 	var dsGateways string
 
 	for n, gw := range endpoints {
-		if len(endpoints)-1 == n {
-			dsGateways += "|"
+		if n > 0 {
+			dsGateways += "," // prepend comma before all but the first
 		}
-
 		dsGateways += fmt.Sprintf("sofia/gateway/%v/%v", gw, dstNum)
 	}
 
