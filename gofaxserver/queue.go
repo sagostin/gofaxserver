@@ -171,7 +171,7 @@ func (q *Queue) processFax(f *FaxJob) {
 							map[string]interface{}{
 								"uuid":       f.UUID.String(),
 								"priority":   prio,
-								"group_size": len(group),
+								"group_size": len(ff.Endpoints),
 							},
 						))
 
@@ -181,6 +181,11 @@ func (q *Queue) processFax(f *FaxJob) {
 						for attempt := 1; attempt <= maxAttempts; attempt++ {
 							ff.Result = &gofaxlib.FaxResult{}
 							ff.CallUUID = uuid.New()
+
+							epType, epLabel, epVal := endpointBrief(&Endpoint{Type: "global", EndpointType: "gateway",
+								Endpoint: strings.Join(q.server.UpstreamFsGateways, ",")}) // for single-endpoint case
+							q.server.FaxTracker.SetCall(f.UUID, ff.CallUUID)
+							q.server.FaxTracker.MarkAttempt(f.UUID, ff.CallUUID, attempt, maxAttempts, prio, epType, epLabel, epVal)
 
 							startTime := time.Now()
 							returned, err := q.server.FsSocket.SendFax(&ff)
@@ -267,6 +272,7 @@ func (q *Queue) processFax(f *FaxJob) {
 							}
 
 							if attempt < maxAttempts {
+								q.server.FaxTracker.MarkWaiting(f.UUID)
 								time.Sleep(delay)
 								delay *= 2
 							}
@@ -302,6 +308,9 @@ func (q *Queue) processFax(f *FaxJob) {
 							for attempt := 1; attempt <= maxAttempts; attempt++ {
 								ff.Result = &gofaxlib.FaxResult{}
 								ff.CallUUID = uuid.New()
+								epType, epLabel, epVal := endpointBrief(ep) // for single-endpoint case
+								q.server.FaxTracker.SetCall(f.UUID, ff.CallUUID)
+								q.server.FaxTracker.MarkAttempt(f.UUID, ff.CallUUID, attempt, maxAttempts, prio, epType, epLabel, epVal)
 
 								startTime := time.Now()
 								returned, err := q.server.FsSocket.SendFax(&ff)
@@ -389,6 +398,7 @@ func (q *Queue) processFax(f *FaxJob) {
 								}
 
 								if attempt < maxAttempts {
+									q.server.FaxTracker.MarkWaiting(f.UUID)
 									time.Sleep(delay)
 									delay *= 2
 								}
@@ -441,8 +451,12 @@ func (q *Queue) processFax(f *FaxJob) {
 
 						for attempt := 1; attempt <= maxAttempts; attempt++ {
 							ff.Result = &gofaxlib.FaxResult{}
-							ff.CallUUID = uuid.New()
 							startTime := time.Now()
+
+							ff.CallUUID = uuid.New()
+							epType, epLabel, epVal := endpointBrief(ep) // for single-endpoint case
+							q.server.FaxTracker.SetCall(f.UUID, ff.CallUUID)
+							q.server.FaxTracker.MarkAttempt(f.UUID, ff.CallUUID, attempt, maxAttempts, prio, epType, epLabel, epVal)
 
 							if webhookPDFPath == "" || webhookFileB64 == "" {
 								ff.Result.UUID = ff.CallUUID
@@ -521,6 +535,7 @@ func (q *Queue) processFax(f *FaxJob) {
 							}
 
 							if attempt < maxAttempts {
+								q.server.FaxTracker.MarkWaiting(f.UUID)
 								time.Sleep(delay)
 								delay *= 2
 							}
@@ -540,6 +555,8 @@ func (q *Queue) processFax(f *FaxJob) {
 					break
 				}
 			}
+			// after notify / cleanup, just before return
+			q.server.FaxTracker.Complete(f.UUID)
 		}(endpointType, prioMap)
 	}
 	wg.Wait()
@@ -593,4 +610,11 @@ func gatewayLabel(ep *Endpoint) string {
 	}
 	parts := strings.SplitN(ep.Endpoint, ":", 2)
 	return parts[0]
+}
+
+func endpointBrief(ep *Endpoint) (etype, label, value string) {
+	if ep == nil {
+		return "", "", ""
+	}
+	return ep.EndpointType, ep.Type, ep.Endpoint
 }

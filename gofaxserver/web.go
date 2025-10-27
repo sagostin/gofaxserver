@@ -20,6 +20,7 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 	admin := app.Party("/admin", s.basicAuthMiddleware)
 	{
 		admin.Get("/reload", s.handleReloadData)
+		admin.Get("/faxes", s.handleFaxes)
 
 		// Tenant management endpoints.
 		admin.Post("/tenant", s.handleAddTenant)
@@ -88,6 +89,18 @@ func (s *Server) handleAuthenticateTenantUser(ctx iris.Context) {
 		"api_key":   user.APIKey,
 		"user_id":   user.ID,
 		"tenant_id": user.TenantID,
+	})
+}
+
+// handleAddTenantUser reads a JSON payload for a new tenant user, creates the user (encrypting the password),
+// and returns the created user.
+func (s *Server) handleFaxes(ctx iris.Context) {
+	ctx.JSON(struct {
+		Active int            `json:"active"`
+		Items  []*FaxRunState `json:"items"`
+	}{
+		Active: s.FaxTracker.ActiveCount(),
+		Items:  s.FaxTracker.Snapshot(),
 	})
 }
 

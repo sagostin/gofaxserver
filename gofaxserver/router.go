@@ -225,6 +225,8 @@ func (r *Router) routeFax(fax *FaxJob) {
 
 	// Send to the queue
 	fax.Endpoints = eps
+	// in routeFax, right before you queue:
+	r.server.FaxTracker.Begin(fax)
 	r.server.Queue.Queue <- fax
 }
 
