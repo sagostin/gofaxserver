@@ -199,7 +199,7 @@ func (q *Queue) processFax(f *FaxJob) {
 					// keep the list intact and let FreeSWITCH handle sequencing/failover.
 					if isGlobalUpstreamGatewayGroup(group) {
 						ff := *f
-						ff.Endpoints = group // keep full list
+						// ff.Endpoints = ff.Endpoints // keep full list - assume we added all the endpoints at the fax side?
 						ff.Result = &gofaxlib.FaxResult{}
 						success := false
 						delay := baseDelay
