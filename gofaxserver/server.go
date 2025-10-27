@@ -60,6 +60,8 @@ func (s *Server) Start() {
 	logManager.LoadTemplates()
 	s.LogManager = logManager
 
+	s.FaxTracker = NewFaxTracker()
+
 	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"Server.StartUp",
 		fmt.Sprintf("starting gofaxserver"),
