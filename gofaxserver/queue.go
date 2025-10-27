@@ -173,42 +173,125 @@ func (q *Queue) processFax(f *FaxJob) {
 
 				switch endpointType {
 				case "gateway":
+					// strategy banner for the priority group
+					{
+						gws := make([]string, 0, len(group))
+						for _, e := range group {
+							gws = append(gws, gatewayLabel(e))
+						}
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Queue",
+							"processing gateway group",
+							logrus.InfoLevel,
+							map[string]interface{}{
+								"uuid":           f.UUID.String(),
+								"priority":       prio,
+								"group_size":     len(group),
+								"gateways":       gws,
+								"endpoint_type":  "gateway",
+								"max_attempts":   maxAttempts,
+								"base_delay_sec": int(baseDelay.Seconds()),
+							},
+						))
+					}
+
 					// If ALL endpoints in this priority group are global upstream gateways,
 					// keep the list intact and let FreeSWITCH handle sequencing/failover.
 					if isGlobalUpstreamGatewayGroup(group) {
 						ff := *f
-						ff.Endpoints = group // <-- keep full list
+						ff.Endpoints = group // keep full list
 						ff.Result = &gofaxlib.FaxResult{}
 						success := false
 						delay := baseDelay
+
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Queue",
+							"gateway strategy: global-batch (FreeSWITCH handles fan-out/failover)",
+							logrus.InfoLevel,
+							map[string]interface{}{
+								"uuid":       f.UUID.String(),
+								"priority":   prio,
+								"group_size": len(group),
+							},
+						))
 
 						for attempt := 1; attempt <= maxAttempts; attempt++ {
 							ff.Result = &gofaxlib.FaxResult{}
 							ff.CallUUID = uuid.New()
 							startTime := time.Now()
+							nextDelay := 0 * time.Second
+							if attempt < maxAttempts {
+								nextDelay = delay
+							}
+
+							// attempt-start log
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Queue",
+								"sending fax (gateway global-batch) attempt start",
+								logrus.InfoLevel,
+								map[string]interface{}{
+									"uuid":          f.UUID.String(),
+									"call_uuid":     ff.CallUUID.String(),
+									"priority":      prio,
+									"attempt":       attempt,
+									"max_attempts":  maxAttempts,
+									"callee":        ff.CalleeNumber,
+									"caller":        ff.CallerIdName,
+									"group_size":    len(group),
+									"next_delay_ms": int(nextDelay.Milliseconds()),
+								},
+							))
 
 							returned, err := q.server.FsSocket.SendFax(&ff)
+							elapsed := time.Since(startTime)
+
 							if err != nil {
+								// error from send path
+								level := logrus.WarnLevel
+								retriable := (returned == SendRetry)
+								if !retriable {
+									level = logrus.ErrorLevel
+								}
 								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 									"Queue",
-									fmt.Sprintf("error sending fax (gateway global batch) attempt %d, prio %d, callee: %s, caller: %s, err: %v, endpoints: %d",
-										attempt, prio, ff.CalleeNumber, ff.CallerIdName, err, len(group)),
-									logrus.ErrorLevel,
-									map[string]interface{}{"uuid": ff.UUID.String()},
+									"fax send error (gateway global-batch)",
+									level,
+									map[string]interface{}{
+										"uuid":          f.UUID.String(),
+										"call_uuid":     ff.CallUUID.String(),
+										"priority":      prio,
+										"attempt":       attempt,
+										"elapsed_ms":    int(elapsed.Milliseconds()),
+										"error":         err.Error(),
+										"returned":      fmt.Sprintf("%v", returned),
+										"retriable":     retriable,
+										"next_delay_ms": int(nextDelay.Milliseconds()),
+									},
 								))
 								ff.Result.UUID = ff.CallUUID
 								ff.Result.Success = false
 								ff.Result.StartTs = startTime
 								ff.Result.EndTs = time.Now()
-
-								// If not retriable, stop retrying
-								if returned != SendRetry {
+								if !retriable {
 									ff.Result.HangupCause = ff.Status
 									sendResult(&ff)
 									break
 								}
 								sendResult(&ff)
 							} else if ff.Result.Success {
+								// success
+								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+									"Queue",
+									"fax sent successfully (gateway global-batch)",
+									logrus.InfoLevel,
+									map[string]interface{}{
+										"uuid":       f.UUID.String(),
+										"call_uuid":  ff.CallUUID.String(),
+										"priority":   prio,
+										"attempt":    attempt,
+										"elapsed_ms": int(elapsed.Milliseconds()),
+									},
+								))
 								ff.Result.UUID = ff.CallUUID
 								ff.Result.Success = true
 								ff.Result.StartTs = startTime
@@ -217,13 +300,21 @@ func (q *Queue) processFax(f *FaxJob) {
 								success = true
 								break
 							} else {
-								// explicit failure from FS with the batch dialstring
+								// explicit failure from FS with batch dialstring
 								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 									"Queue",
-									fmt.Sprintf("attempt %d (gateway global batch) failed: prio %d, callee: %s, caller: %s, result: %v, endpoints: %d",
-										attempt, prio, ff.CalleeNumber, ff.CallerIdName, ff.Result.ResultText, len(group)),
-									logrus.ErrorLevel,
-									map[string]interface{}{"uuid": ff.UUID.String()},
+									"fax failed (gateway global-batch explicit failure)",
+									logrus.WarnLevel,
+									map[string]interface{}{
+										"uuid":          f.UUID.String(),
+										"call_uuid":     ff.CallUUID.String(),
+										"priority":      prio,
+										"attempt":       attempt,
+										"elapsed_ms":    int(elapsed.Milliseconds()),
+										"result_text":   ff.Result.ResultText,
+										"hangup_cause":  ff.Result.HangupCause,
+										"next_delay_ms": int(nextDelay.Milliseconds()),
+									},
 								))
 								ff.Result.UUID = ff.CallUUID
 								ff.Result.Success = false
@@ -242,9 +333,30 @@ func (q *Queue) processFax(f *FaxJob) {
 
 						if !success {
 							groupHadFailure = true
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Queue",
+								"gateway global-batch group exhausted without success",
+								logrus.ErrorLevel,
+								map[string]interface{}{
+									"uuid":       f.UUID.String(),
+									"priority":   prio,
+									"group_size": len(group),
+								},
+							))
 						}
 					} else {
 						// Default behavior: split per-endpoint so we can track failures individually
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Queue",
+							"gateway strategy: per-endpoint (split & track individually)",
+							logrus.InfoLevel,
+							map[string]interface{}{
+								"uuid":       f.UUID.String(),
+								"priority":   prio,
+								"group_size": len(group),
+							},
+						))
+
 						for _, ep := range group {
 							ff := *f
 							ff.Endpoints = []*Endpoint{ep}
@@ -253,32 +365,95 @@ func (q *Queue) processFax(f *FaxJob) {
 							success := false
 							delay := baseDelay
 
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Queue",
+								"processing single gateway endpoint",
+								logrus.InfoLevel,
+								map[string]interface{}{
+									"uuid":     f.UUID.String(),
+									"priority": prio,
+									"endpoint": endpointSummary(ep),
+								},
+							))
+
 							for attempt := 1; attempt <= maxAttempts; attempt++ {
 								ff.Result = &gofaxlib.FaxResult{}
 								ff.CallUUID = uuid.New()
 								startTime := time.Now()
+								nextDelay := 0 * time.Second
+								if attempt < maxAttempts {
+									nextDelay = delay
+								}
+
+								// attempt-start log
+								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+									"Queue",
+									"sending fax (gateway single) attempt start",
+									logrus.InfoLevel,
+									map[string]interface{}{
+										"uuid":          f.UUID.String(),
+										"call_uuid":     ff.CallUUID.String(),
+										"priority":      prio,
+										"attempt":       attempt,
+										"max_attempts":  maxAttempts,
+										"callee":        ff.CalleeNumber,
+										"caller":        ff.CallerIdName,
+										"endpoint":      endpointSummary(ep),
+										"next_delay_ms": int(nextDelay.Milliseconds()),
+									},
+								))
 
 								returned, err := q.server.FsSocket.SendFax(&ff)
+								elapsed := time.Since(startTime)
+
 								if err != nil {
+									retriable := (returned == SendRetry)
+									level := logrus.WarnLevel
+									if !retriable {
+										level = logrus.ErrorLevel
+									}
 									q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 										"Queue",
-										fmt.Sprintf("error sending fax (gateway) attempt %d, prio %d, callee: %s, caller: %s, err: %v, endpoint: %v",
-											attempt, prio, ff.CalleeNumber, ff.CallerIdName, err, ep),
-										logrus.ErrorLevel,
-										map[string]interface{}{"uuid": ff.UUID.String()},
+										"fax send error (gateway single)",
+										level,
+										map[string]interface{}{
+											"uuid":          f.UUID.String(),
+											"call_uuid":     ff.CallUUID.String(),
+											"priority":      prio,
+											"attempt":       attempt,
+											"elapsed_ms":    int(elapsed.Milliseconds()),
+											"error":         err.Error(),
+											"returned":      fmt.Sprintf("%v", returned),
+											"retriable":     retriable,
+											"endpoint":      endpointSummary(ep),
+											"next_delay_ms": int(nextDelay.Milliseconds()),
+										},
 									))
 									ff.Result.UUID = ff.CallUUID
 									ff.Result.Success = false
 									ff.Result.StartTs = startTime
 									ff.Result.EndTs = time.Now()
 
-									if returned != SendRetry {
+									if !retriable {
 										ff.Result.HangupCause = ff.Status
 										sendResult(&ff)
 										break
 									}
 									sendResult(&ff)
 								} else if ff.Result.Success {
+									q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+										"Queue",
+										"fax sent successfully (gateway single)",
+										logrus.InfoLevel,
+										map[string]interface{}{
+											"uuid":       f.UUID.String(),
+											"call_uuid":  ff.CallUUID.String(),
+											"priority":   prio,
+											"attempt":    attempt,
+											"elapsed_ms": int(elapsed.Milliseconds()),
+											"endpoint":   endpointSummary(ep),
+										},
+									))
 									ff.Result.UUID = ff.CallUUID
 									ff.Result.Success = true
 									ff.Result.StartTs = startTime
@@ -289,10 +464,19 @@ func (q *Queue) processFax(f *FaxJob) {
 								} else {
 									q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 										"Queue",
-										fmt.Sprintf("attempt %d (gateway) failed: prio %d, callee: %s, caller: %s, result: %v, endpoint: %v",
-											attempt, prio, ff.CalleeNumber, ff.CallerIdName, ff.Result.ResultText, ep),
-										logrus.ErrorLevel,
-										map[string]interface{}{"uuid": ff.UUID.String()},
+										"fax failed (gateway single explicit failure)",
+										logrus.WarnLevel,
+										map[string]interface{}{
+											"uuid":          f.UUID.String(),
+											"call_uuid":     ff.CallUUID.String(),
+											"priority":      prio,
+											"attempt":       attempt,
+											"elapsed_ms":    int(elapsed.Milliseconds()),
+											"result_text":   ff.Result.ResultText,
+											"hangup_cause":  ff.Result.HangupCause,
+											"endpoint":      endpointSummary(ep),
+											"next_delay_ms": int(nextDelay.Milliseconds()),
+										},
 									))
 									ff.Result.UUID = ff.CallUUID
 									ff.Result.Success = false
@@ -311,6 +495,16 @@ func (q *Queue) processFax(f *FaxJob) {
 
 							if !success {
 								groupHadFailure = true
+								q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+									"Queue",
+									"endpoint exhausted without success",
+									logrus.ErrorLevel,
+									map[string]interface{}{
+										"uuid":     f.UUID.String(),
+										"priority": prio,
+										"endpoint": endpointSummary(ep),
+									},
+								))
 							}
 						}
 					}
@@ -493,4 +687,19 @@ func (q *Queue) processFax(f *FaxJob) {
 			return
 		}
 	}()
+}
+
+// Summarize a single endpoint for logs.
+func endpointSummary(ep *Endpoint) string {
+	return fmt.Sprintf("id=%d type=%s type_id=%d ep_type=%s endpoint=%s prio=%d bridge=%t",
+		ep.ID, ep.Type, ep.TypeID, ep.EndpointType, ep.Endpoint, ep.Priority, ep.Bridge)
+}
+
+// Extract a stable gateway label for log lists (strip :IP if present).
+func gatewayLabel(ep *Endpoint) string {
+	if ep == nil {
+		return ""
+	}
+	parts := strings.SplitN(ep.Endpoint, ":", 2)
+	return parts[0]
 }
