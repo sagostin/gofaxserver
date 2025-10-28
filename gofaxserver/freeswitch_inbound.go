@@ -292,10 +292,10 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		// that we will enable transcoding from Leg A (g711) to Leg B (g711/t38)
 		if bridgeGw == "upstream" {
 			exportString := fmt.Sprintf("{%s,%s,%s,%s}",
-				fmt.Sprintf("nolocal:fax_enable_t38=%s", strconv.FormatBool(true)),
-				fmt.Sprintf("nolocal:fax_enable_t38_request=%s", strconv.FormatBool(true)),
-				fmt.Sprintf("nolocal:execute_on_answer=%s", "t38_gateway self"),
-				fmt.Sprintf("nolocal:absolute_codec_string=%s", "PCMA"),
+				fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(true)),
+				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(true)),
+				fmt.Sprintf("execute_on_answer=%s", "t38_gateway self"),
+				fmt.Sprintf("absolute_codec_string=%s", "PCMA"),
 			)
 
 			var dsGateways = endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
