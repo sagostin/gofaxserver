@@ -270,20 +270,13 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		map[string]interface{}{"uuid": channelUUID.String()}, recipient, cidname, cidnum, gateway, channelUUID.String(),
 	))
 
-	c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
-	c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
-
-	// todo better implementation
-	// c.Execute("set", fmt.Sprintf("fax_use_ecm=%s", strconv.FormatBool(true)), true)
-	c.Execute("set", fmt.Sprintf("fax_disable_v17=%s", strconv.FormatBool(true)), true)
-	// c.Execute("set", fmt.Sprintf("fax_v17_disabled=%s", strconv.FormatBool(true)), true)
-
 	srcNum := e.server.DialplanManager.ApplyTransformationRules(cidnum)
 	dstNum := e.server.DialplanManager.ApplyTransformationRules(recipient)
 
 	// handle bridging
 	bridgeGw, enableBridge := e.server.Router.detectAndRouteToBridge(dstNum, srcNum, gateway)
 
+	// todo fix it so it will determine if other endpoints are capable of doing said routing
 	if enableBridge {
 		//c.Execute("export", fmt.Sprintf("%s", strconv.FormatBool(enableT38)), true)
 		//c.Execute("export", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
@@ -298,23 +291,33 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		// we will assume that if the source is not an upstream gateway,
 		// that we will enable transcoding from Leg A (g711) to Leg B (g711/t38)
 		if bridgeGw == "upstream" {
-			exportString := fmt.Sprintf("{%s,%s,%s}",
-				fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)),
-				fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
-				fmt.Sprintf("sip_execute_on_image='%s'", "t38_gateway peer nocng"))
+			exportString := fmt.Sprintf("{%s,%s,%s,%s}",
+				fmt.Sprintf("nolocal:fax_enable_t38=%s", strconv.FormatBool(enableT38)),
+				fmt.Sprintf("nolocal:fax_enable_t38_request=%s", strconv.FormatBool(requestT38)),
+				fmt.Sprintf("nolocal:execute_on_answer=%s", "t38_gateway self"),
+				fmt.Sprintf("nolocal:absolute_codec_string=%s", "PCMA"),
+			)
 
 			var dsGateways = endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FREESWITCH.BRIDGE",
-				"FS_INBOUND - BRIDGE - %s",
+				"FS_INBOUND - OUTBOUND BRIDGE - %s",
 				logrus.InfoLevel,
 				map[string]interface{}{"uuid": channelUUID.String()}, exportString+dsGateways,
 			))
-
 			c.Execute("bridge", exportString+dsGateways, true) // nocng
-
 		} else {
-			c.Execute("set", "sip_execute_on_image=t38_gateway self nocng", true)
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"FREESWITCH.BRIDGE",
+				"FS_INBOUND - INBOUND BRIDGE - %s",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": channelUUID.String()}, bridgeGw,
+			))
+			c.Execute("set", "absolute_codec_string=PCMA", true)
+			c.Execute("set", "fax_enable_t38=true", true)
+			c.Execute("set", "fax_enable_t38_request=true", true)
+			c.Execute("answer", "", true)
+			c.Execute("t38_gateway", "self", true)
 			c.Execute("bridge", fmt.Sprintf("sofia/gateway/%v/%v", bridgeGw, dstNum), true)
 		}
 	}
@@ -323,6 +326,10 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	filename := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, channelUUID.String()))
 
 	if !enableBridge {
+		c.Execute("set", fmt.Sprintf("fax_enable_t38=%s", strconv.FormatBool(enableT38)), true)
+		c.Execute("set", fmt.Sprintf("fax_enable_t38_request=%s", strconv.FormatBool(requestT38)), true)
+		c.Execute("set", fmt.Sprintf("fax_disable_v17=%s", strconv.FormatBool(true)), true)
+
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.EventServer",
 			"Rxfax to %s",
