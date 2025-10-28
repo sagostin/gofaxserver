@@ -490,9 +490,10 @@ EventLoop:
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.EventServer.Bridge",
 			"Ended bridge",
-			logrus.DebugLevel,
+			logrus.InfoLevel,
 			map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge},
 		))
+		return
 	}
 
 	if !result.Success {
@@ -532,47 +533,7 @@ EventLoop:
 		map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.Success, result.HangupCause, result.ResultText,
 	))
 
-	/*if !result.Success {
-		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-			"FreeSwitch.EventServer",
-			result.ResultText,
-			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": channelUUID.String()},
-		))
-		return
-	}*/
-	// todo pass the xfl to a channel for db saving and further routing
-
 	e.server.FaxJobRouting <- faxjob
-
-	// todo check if it was from our primary gateways, if not,
-	// then we have to send it to the router for further processing
-
-	// Process received file
-	// todo send information to inbound channel for db saving, and further routing
-
-	/*rcvdcmd := gofaxlib.Config.Gofaxd.FaxRcvdCmd
-	if rcvdcmd == "" {
-		rcvdcmd = defaultFaxrcvdCmd
-	}
-	errmsg := ""
-	if !result.Success {
-		errmsg = result.ResultText
-	}
-
-	cmd := exec.Command(rcvdcmd, filename, usedDevice, logManager.CommID(), errmsg, cidnum, cidname, recipient, gateway)
-	extraEnv := []string{
-		fmt.Sprintf("HANGUPCAUSE=%s", result.HangupCause),
-		fmt.Sprintf("TRANSFER_RATE=%d", result.TransferRate),
-	}
-	cmd.Env = append(os.Environ(), extraEnv...)
-	logManager.Log("Calling", cmd.Path, cmd.Args)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		logManager.Log(cmd.Path, "ended with", err)
-		logManager.Log(output)
-	} else {
-		logManager.Log(cmd.Path, "ended successfully")
-	}*/
 
 	return
 }
