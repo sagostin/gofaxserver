@@ -74,11 +74,21 @@ func isGlobalUpstreamGatewayGroup(group []*Endpoint) bool {
 	return true
 }
 
-// processFax executes a fax job across endpoint groups (by type → priority),
-// retrying with backoff and escalating only when ALL endpoints at a given
-// priority fail.
 func (q *Queue) processFax(f *FaxJob) {
-	defer q.server.FaxTracker.Complete(f.UUID)
+	// Ensure the tracker is marked complete exactly once, on any exit path.
+	var completeOnce sync.Once
+	complete := func(reason string) {
+		completeOnce.Do(func() {
+			q.server.FaxTracker.Complete(f.UUID)
+			q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+				"Queue", "fax job marked complete",
+				logrus.InfoLevel,
+				map[string]interface{}{"uuid": f.UUID.String(), "reason": reason},
+			))
+		})
+	}
+	// Safety net in case we return anywhere without an explicit reason.
+	defer complete("function-exit")
 
 	// ----------------- Build endpoint groups: type -> priority -> endpoints
 	groupMap := make(map[string]map[uint][]*Endpoint, 4)
@@ -118,14 +128,6 @@ func (q *Queue) processFax(f *FaxJob) {
 		baseDelay = d
 	}
 	maxDelay := 60 * time.Second
-
-	// ----------------- Job-level context deadline (sane upper bound)
-	/*jobTimeout := 10 * time.Minute
-	if d, err := ParseDuration(gofaxlib.Config.Faxing.JobTimeout); err == nil && d > 0 {
-		jobTimeout = d
-	}
-	jobCtx, jobCancel := context.WithTimeout(context.Background(), jobTimeout)
-	defer jobCancel()*/
 
 	// ----------------- Small utilities (logging & stamping)
 	logAttempt := func(level logrus.Level, msg string, fields map[string]interface{}) {
@@ -538,7 +540,7 @@ func (q *Queue) processFax(f *FaxJob) {
 								return false, false
 							}
 
-							// Track attempt
+							// Track attempt (updates tracker each try)
 							ff.Result = &gofaxlib.FaxResult{}
 							ff.CallUUID = uuid.New()
 							q.server.FaxTracker.SetCall(f.UUID, ff.CallUUID)
@@ -676,7 +678,8 @@ func (q *Queue) processFax(f *FaxJob) {
 
 	fpTiff, err := firstPageTiff(f.UUID.String(), f.FileName)
 	if err != nil {
-		// can't generate preview; still clean up main file via defer
+		// mark complete before returning on preview failure
+		complete("preview-failed")
 		return
 	}
 	defer func(path string) {
@@ -690,10 +693,15 @@ func (q *Queue) processFax(f *FaxJob) {
 
 	notifyDestinations, err := q.processNotifyDestinations(f)
 	if err != nil {
+		complete("notify-destinations-error")
 		fmt.Println("Error processing notify destinations:", err)
 		return
 	}
+
 	q.processNotifyDestinationsAsync(notifyFaxResults, notifyDestinations, fpTiff)
+
+	// Mark complete AFTER notifications are dispatched
+	complete("notify-dispatched")
 }
 
 // Summarize a single endpoint for logs.
