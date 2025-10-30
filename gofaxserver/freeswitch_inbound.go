@@ -225,10 +225,10 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		if bridgeGw == "upstream" {
 			// Leg B (upstream) gets T.38 gateway on answer; Leg A assumed G.711
 			exportStr := fmt.Sprintf("{%s,%s,%s,%s}",
-				fmt.Sprintf("fax_enable_t38=%t", true),
-				fmt.Sprintf("fax_enable_t38_request=%t", true),
+				fmt.Sprintf("fax_enable_t38=%t", enableT38),
+				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
 				"execute_on_answer=t38_gateway self",
-				"absolute_codec_string=PCMA",
+				"absolute_codec_string=PCMU",
 			)
 
 			dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
@@ -237,9 +237,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		} else {
 			// PBX side bridge
 			logf(logrus.InfoLevel, "FS_INBOUND → INBOUND BRIDGE gateway=%s", map[string]interface{}{"uuid": channelUUID.String()}, bridgeGw)
-			exec("set", "absolute_codec_string=PCMA", true)
-			exec("set", "fax_enable_t38=true", true)
-			exec("set", "fax_enable_t38_request=true", true)
+			exec("set", "absolute_codec_string=PCMU", true)
+			exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
+			exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
 			exec("answer", "", true)
 			exec("t38_gateway", "self", true)
 			exec("bridge", fmt.Sprintf("sofia/gateway/%s/%s", bridgeGw, dstNum), true)
