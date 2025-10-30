@@ -75,6 +75,7 @@ func isGlobalUpstreamGatewayGroup(group []*Endpoint) bool {
 }
 
 func (q *Queue) processFax(f *FaxJob) {
+	defer q.server.FaxTracker.Complete(f.UUID)
 	// ---- GROUP ENDPOINTS BY TYPE THEN PRIORITY --------------------------------
 	groupMap := make(map[string]map[uint][]*Endpoint, 4)
 	for _, ep := range f.Endpoints {
@@ -294,10 +295,10 @@ func (q *Queue) processFax(f *FaxJob) {
 						epType, epLabel, epVal := endpointBrief(globalEP)
 
 						// When bridge is disabled, we do a single “-1 attempt” shot (your original behavior)
-						if !enableBridge {
+						if enableBridge {
 							ff.Result = &gofaxlib.FaxResult{}
 							ff.CallUUID = uuid.New()
-							ok, _ := doSendOnce(&ff, -1, epType, epLabel, epVal, "gateway global-batch")
+							ok, _ := doSendOnce(&ff, -1, epType, epLabel, epVal, "gateway global-batch (bridged?)")
 							if ok {
 								success = true
 							} else {
@@ -673,8 +674,6 @@ func (q *Queue) processFax(f *FaxJob) {
 					break
 				}
 			}
-			// after notify / cleanup, just before return
-			q.server.FaxTracker.Complete(f.UUID)
 		}(endpointType, prioMap)
 	}
 	wg.Wait()
