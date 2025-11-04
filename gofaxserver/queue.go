@@ -211,7 +211,6 @@ func (q *Queue) processFax(f *FaxJob) {
 	var wg sync.WaitGroup
 	for endpointType, prioMap := range groupMap {
 		epType := endpointType
-		// Make a stable copy for the goroutine
 		typeMap := prioMap
 
 		wg.Add(1)
@@ -235,7 +234,7 @@ func (q *Queue) processFax(f *FaxJob) {
 				}
 			})
 
-			// escalate only if ALL endpoints for this priority fail
+		prioLoop: // ← label so we can break out of ALL priorities on success
 			for _, prio := range prios {
 				group := typeMap[prio]
 				if len(group) == 0 {
@@ -637,7 +636,7 @@ func (q *Queue) processFax(f *FaxJob) {
 						ok := retryWithBackoff(context.Background(), maxAttempts, baseDelay, maxDelay, sendWebhookOnce)
 						if ok {
 							allFailed = false
-							// stop escalating this priority set on first success
+							// stop escalating this priority set on first success (within this priority)
 							break
 						}
 						logAttempt(logrus.ErrorLevel, "webhook endpoint exhausted without success", map[string]interface{}{
@@ -651,8 +650,8 @@ func (q *Queue) processFax(f *FaxJob) {
 						// escalate to next priority
 						continue
 					}
-					// success → stop escalating
-					break
+					// ✅ success → stop escalating ALL further priorities for this endpoint type
+					break prioLoop
 
 				default:
 					logAttempt(logrus.WarnLevel, "unknown endpoint type (skipping priority group)", map[string]interface{}{
