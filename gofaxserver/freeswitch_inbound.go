@@ -273,6 +273,24 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		exec("hangup", "", true)
 	}
 
+	// --- Queue job routing / cleanup -----------------------------------------
+	faxjob := &FaxJob{
+		UUID:           channelUUID,
+		CalleeNumber:   recipient,
+		CallerIdNumber: cidNum,
+		CallerIdName:   cidName,
+		FileName:       filename,
+		UseECM:         false, // default
+		DisableV17:     false,
+		SourceInfo: FaxSourceInfo{
+			Timestamp:  time.Now(),
+			SourceType: "gateway", // indicates FreeSWITCH source
+			Source:     gateway,
+			SourceID:   channelUUID.String(),
+		},
+	}
+	e.server.FaxTracker.Begin(faxjob)
+
 	// --- Result tracking & event loop ----------------------------------------
 	result := gofaxlib.NewFaxResult(channelUUID, e.server.LogManager, enableBridge)
 	es := gofaxlib.NewEventStream(c)
@@ -342,26 +360,12 @@ EventLoop:
 		}
 	}
 
-	// --- Queue job routing / cleanup -----------------------------------------
-	faxjob := &FaxJob{
-		UUID:           channelUUID,
-		CalleeNumber:   recipient,
-		CallerIdNumber: cidNum,
-		CallerIdName:   cidName,
-		FileName:       filename,
-		UseECM:         false, // default
-		DisableV17:     false,
-		Result:         result,
-		SourceInfo: FaxSourceInfo{
-			Timestamp:  time.Now(),
-			SourceType: "gateway", // indicates FreeSWITCH source
-			Source:     gateway,
-			SourceID:   channelUUID.String(),
-		},
-	}
+	faxjob.Result = result
 
 	if enableBridge {
 		logf(logrus.InfoLevel, "Ended bridge", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge})
+
+		e.server.FaxTracker.Complete(faxjob.UUID)
 		return
 	}
 

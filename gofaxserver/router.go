@@ -63,8 +63,6 @@ func (r *Router) routeFax(fax *FaxJob) {
 		dstTenantID = dstTenant.ID
 	}
 
-	r.server.FaxTracker.Begin(fax)
-
 	// Upstreams snapshot for logs
 	upstreams := append([]string(nil), r.server.UpstreamFsGateways...)
 
