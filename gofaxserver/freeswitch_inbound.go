@@ -223,16 +223,29 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		exec("set", "origination_caller_id_number="+srcNum, true)
 
 		if bridgeGw == "upstream" {
-			// A-leg exports – doc-style
-			exec("export", fmt.Sprintf("nolocal:fax_enable_t38=%t", enableT38), true)
-			exec("export", fmt.Sprintf("nolocal:fax_enable_t38_request=%t", requestT38), true)
-			exec("export", "nolocal:execute_on_answer=t38_gateway self", true)
-			exec("export", "nolocal:absolute_codec_string=PCMU", true)
+			// Leg B (upstream) gets T.38 gateway on answer; Leg A assumed G.711
+			exportStr := fmt.Sprintf("{%s,%s,%s,%s}",
+				fmt.Sprintf("fax_enable_t38=%t", enableT38),
+				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
+				"execute_on_answer=t38_gateway self",
+				"absolute_codec_string=PCMU",
+			)
 
-			// B-leg plain dialstring (no {})
 			dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
-			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
-			exec("bridge", dsGateways, true)
+			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, exportStr+dsGateways)
+			exec("bridge", exportStr+dsGateways, true)
+
+			/*	// A-leg exports – doc-style
+				exec("export", fmt.Sprintf("nolocal:fax_enable_t38=%t", enableT38), true)
+				exec("export", fmt.Sprintf("nolocal:fax_enable_t38_request=%t", requestT38), true)
+				exec("export", "nolocal:execute_on_answer=t38_gateway self", true)
+				exec("export", "nolocal:absolute_codec_string=PCMU", true)
+
+				// B-leg plain dialstring (no {})
+				dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
+				logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
+				exec("bridge", dsGateways, true)
+			*/
 		} else {
 			// PBX side bridge
 			logf(logrus.InfoLevel, "FS_INBOUND → INBOUND BRIDGE gateway=%s", map[string]interface{}{"uuid": channelUUID.String()}, bridgeGw)
