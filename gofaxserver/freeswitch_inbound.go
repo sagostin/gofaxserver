@@ -383,20 +383,19 @@ EventLoop:
 
 	// Non-bridge: deliver result + remove temp file
 	level := logrus.InfoLevel
-	if !result.Success {
-		level = logrus.ErrorLevel
-	}
-	logf(level, "Success: %v, Hangup Cause: %v, Result: %v", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.Success, result.HangupCause, result.ResultText)
 
 	if !result.Success {
+		e.server.FaxTracker.Complete(faxjob.UUID)
+		level = logrus.ErrorLevel
+
 		e.server.Queue.QueueFaxResult <- QueueFaxResult{Job: faxjob}
 		if err := os.Remove(filename); err != nil {
 			logf(logrus.ErrorLevel, "failed to remove fax file", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge, "file": filename})
-			return
 		}
 	} else {
 		e.server.FaxJobRouting <- faxjob
 	}
+	logf(level, "Success: %v, Hangup Cause: %v, Result: %v", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge}, result.Success, result.HangupCause, result.ResultText)
 
 	return
 }
