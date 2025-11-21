@@ -219,46 +219,24 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 			fallbackDst, fbErr := gofaxlib.GetSoftmodemFallback(nil, dstNum)
 			if fbErr != nil {
-				logf(logrus.ErrorLevel, "fallbackSrc check error: %v", map[string]interface{}{"uuid": channelUUID.String()}, fbErr)
+				logf(logrus.ErrorLevel, "fallbackDst check error: %v", map[string]interface{}{"uuid": channelUUID.String()}, fbErr)
 			}
 			if fallbackDst {
-				logf(logrus.WarnLevel, "Softmodem fallbackSrc active for caller %s; disabling T.38", map[string]interface{}{"uuid": channelUUID.String()}, cidNum)
+				logf(logrus.WarnLevel, "Softmodem fallbackDst active for caller %s; disabling T.38", map[string]interface{}{"uuid": channelUUID.String()}, cidNum)
 				enableT38 = false
 				requestT38 = false
 			}
 
-			// Leg B (upstream) gets T.38 gateway on answer; Leg A assumed G.711
-
-			exportStr := fmt.Sprintf("{%s,%s,%s}",
+			exportStr := fmt.Sprintf("{%s,%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%t", enableT38),
 				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
+				"execute_on_answer=t38_gateway self",
 				"absolute_codec_string=PCMU",
 			)
-
-			if !fallbackDst {
-				exportStr = fmt.Sprintf("{%s,%s,%s,%s}",
-					fmt.Sprintf("fax_enable_t38=%t", enableT38),
-					fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
-					"execute_on_answer=t38_gateway self",
-					"absolute_codec_string=PCMU",
-				)
-			}
 
 			dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
 			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, exportStr+dsGateways)
 			exec("bridge", exportStr+dsGateways, true)
-
-			/*	// A-leg exports – doc-style
-				exec("export", fmt.Sprintf("nolocal:fax_enable_t38=%t", enableT38), true)
-				exec("export", fmt.Sprintf("nolocal:fax_enable_t38_request=%t", requestT38), true)
-				exec("export", "nolocal:execute_on_answer=t38_gateway self", true)
-				exec("export", "nolocal:absolute_codec_string=PCMU", true)
-
-				// B-leg plain dialstring (no {})
-				dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
-				logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
-				exec("bridge", dsGateways, true)
-			*/
 		} else {
 			fallbackSrc, fbErr := gofaxlib.GetSoftmodemFallback(nil, srcNum)
 			if fbErr != nil {
