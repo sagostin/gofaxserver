@@ -58,11 +58,20 @@ type FaxJobResult struct {
 	NegotiateCount   uint      `json:"negotiate_count"`
 	PageResults      string    `json:"page_results"`
 
+	// NEW: bridge / transcoding metadata
+	IsBridge        bool          `json:"is_bridge"`
+	BridgeDirection string        `json:"bridge_direction"` // "pbx_to_upstream" / "upstream_to_pbx"
+	BridgeGateway   string        `json:"bridge_gateway"`
+	BridgeStartTs   time.Time     `json:"bridge_start_ts"`
+	BridgeEndTs     time.Time     `json:"bridge_end_ts"`
+	BridgeDuration  time.Duration `json:"bridge_duration"`
+	BridgeT38       bool          `json:"bridge_t38"` // was T.38 gateway actually enabled?
+	SoftmodemSrc    bool          `json:"softmodem_src"`
+	SoftmodemDst    bool          `json:"softmodem_dst"`
+
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// storeQueueFaxResult combines the FaxJob and FaxResult into a FaxJobResult
-// and saves it using GORM. It marshals the Endpoints slice into JSON.
 func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 	job := qFR.Job
 	if job == nil {
@@ -72,9 +81,7 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 	// Marshal endpoints to JSON.
 	var endpointsJSON string
 	if len(job.Endpoints) > 0 {
-		if data, err := json.Marshal(job.Endpoints); err != nil {
-			endpointsJSON = ""
-		} else {
+		if data, err := json.Marshal(job.Endpoints); err == nil {
 			endpointsJSON = string(data)
 		}
 	}
@@ -107,6 +114,17 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		ConnTime:   job.ConnTime,
 		Ts:         job.Ts,
 
+		// bridge metadata – will be non-zero for transcoded calls
+		IsBridge:        job.IsBridge,
+		BridgeDirection: job.BridgeDirection,
+		BridgeGateway:   job.BridgeGateway,
+		BridgeStartTs:   job.BridgeStartTs,
+		BridgeEndTs:     job.BridgeEndTs,
+		BridgeDuration:  job.BridgeEndTs.Sub(job.BridgeStartTs),
+		BridgeT38:       job.BridgeT38,
+		SoftmodemSrc:    job.SoftmodemSrc,
+		SoftmodemDst:    job.SoftmodemDst,
+
 		CreatedAt: time.Now(),
 	}
 
@@ -114,10 +132,9 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 	if err != nil {
 		return err
 	}
-
 	record.SourceInfo = string(sourceRoutingInformation)
 
-	// If a FaxResult exists, fill in its fields.
+	// If a FaxResult exists, fill in its fields. For bridged calls it may be nil.
 	if job.Result != nil {
 		record.StartTs = job.Result.StartTs
 		record.EndTs = job.Result.EndTs
@@ -132,15 +149,11 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		record.TransferRate = job.Result.TransferRate
 		record.NegotiateCount = job.Result.NegotiateCount
 
-		pageR, err := json.Marshal(job.Result.PageResults)
-		if err != nil {
-			return err
+		if pageR, err := json.Marshal(job.Result.PageResults); err == nil {
+			record.PageResults = string(pageR)
 		}
-
-		record.PageResults = string(pageR)
 	}
 
-	// q.server.DB is assumed to be an initialized *gorm.DB instance.
 	return q.server.DB.Create(&record).Error
 }
 

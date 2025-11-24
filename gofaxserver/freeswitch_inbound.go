@@ -120,6 +120,17 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		return true
 	}
 
+	// Bridge / transcoding tracking
+	isBridge := false
+	bridgeDirection := ""
+	bridgeGateway := ""
+	var bridgeStart time.Time
+	var bridgeEnd time.Time
+
+	// Track whether softmodem fallback matched either side
+	var softmodemSrc bool
+	var softmodemDst bool
+
 	// --- Connection / 'connect' handshake -----------------------------------
 	logf(logrus.InfoLevel, "Incoming Event Socket connection from %s", map[string]interface{}{}, c.RemoteAddr())
 
@@ -211,10 +222,14 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	// --- Bridge mode path -----------------------------------------------------
 	if enableBridge {
+		isBridge = true
+		bridgeGateway = bridgeGw
+
 		logf(logrus.InfoLevel, "Bridge enabled for %s → %s via %s", map[string]interface{}{"uuid": channelUUID.String()}, srcNum, dstNum, gateway)
 		exec("set", "origination_caller_id_number="+srcNum, true)
 
 		if bridgeGw == "upstream" {
+			bridgeDirection = "upstream"
 			// Internal / PBX -> Upstream (t.38)
 
 			fallbackDst, fbErr := gofaxlib.GetSoftmodemFallback(nil, dstNum)
@@ -222,6 +237,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				logf(logrus.ErrorLevel, "fallbackDst check error: %v", map[string]interface{}{"uuid": channelUUID.String()}, fbErr)
 			}
 			if fallbackDst {
+				softmodemDst = true
 				logf(logrus.WarnLevel, "Softmodem fallbackDst active for caller %s; disabling T.38", map[string]interface{}{"uuid": channelUUID.String()}, cidNum)
 				enableT38 = false
 				requestT38 = false
@@ -236,13 +252,17 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 			dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
 			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, exportStr+dsGateways)
+			bridgeStart = time.Now()
 			exec("bridge", exportStr+dsGateways, true)
 		} else {
+			bridgeDirection = "downstream"
+
 			fallbackSrc, fbErr := gofaxlib.GetSoftmodemFallback(nil, srcNum)
 			if fbErr != nil {
 				logf(logrus.ErrorLevel, "fallbackSrc check error: %v", map[string]interface{}{"uuid": channelUUID.String()}, fbErr)
 			}
 			if fallbackSrc {
+				softmodemSrc = true
 				logf(logrus.WarnLevel, "Softmodem fallbackSrc active for caller %s; disabling T.38", map[string]interface{}{"uuid": channelUUID.String()}, cidNum)
 				enableT38 = false
 				requestT38 = false
@@ -255,6 +275,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
 			exec("answer", "", true)
 			exec("t38_gateway", "self", true)
+			bridgeStart = time.Now()
 			exec("bridge", fmt.Sprintf("sofia/gateway/%s/%s", bridgeGw, dstNum), true)
 		}
 	}
@@ -263,6 +284,44 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	filename := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, channelUUID.String()))
 
 	if !enableBridge {
+		// todo calculate the fallback for both source / destination, use which ever matches, continue as normal if not
+		fallbackDst, fbErr := gofaxlib.GetSoftmodemFallback(nil, dstNum)
+		if fbErr != nil {
+			logf(logrus.ErrorLevel, "fallbackDst check error: %v", map[string]interface{}{"uuid": channelUUID.String()}, fbErr)
+		}
+
+		fallbackSrc, fbErr := gofaxlib.GetSoftmodemFallback(nil, srcNum)
+		if fbErr != nil {
+			logf(logrus.ErrorLevel, "fallbackSrc check error: %v", map[string]interface{}{"uuid": channelUUID.String()}, fbErr)
+		}
+
+		var matchedField string
+		var matchedNumber string
+
+		switch {
+		case fallbackSrc:
+			matchedField = "caller"
+			matchedNumber = srcNum // or your caller variable if different
+		case fallbackDst:
+			matchedField = "called"
+			matchedNumber = dstNum // or your destination variable if different
+		}
+
+		// Apply fallback if either side matched
+		if fallbackDst || fallbackSrc {
+			logf(
+				logrus.WarnLevel,
+				"Softmodem fallback active; disabling T.38",
+				map[string]interface{}{
+					"uuid":           channelUUID.String(),
+					"matched_field":  matchedField,
+					"matched_number": matchedNumber,
+				},
+			)
+			enableT38 = false
+			requestT38 = false
+		}
+
 		exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
 		exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
 		exec("set", "fax_disable_v17=true", true)
@@ -302,6 +361,14 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			SourceID:   channelUUID.String(),
 		},
 	}
+
+	if srcTenant, _ := e.server.getTenantByNumber(srcNum); srcTenant != nil {
+		faxjob.SrcTenantID = srcTenant.ID
+	}
+	if dstTenant, _ := e.server.getTenantByNumber(dstNum); dstTenant != nil {
+		faxjob.DstTenantID = dstTenant.ID
+	}
+
 	e.server.FaxTracker.Begin(faxjob)
 
 	// --- Result tracking & event loop ----------------------------------------
@@ -348,6 +415,8 @@ EventLoop:
 		}
 	}
 
+	bridgeEnd = time.Now()
+
 	// --- Post-receive fallbackSrc heuristics ------------------------------------
 	if gofaxlib.Config.FreeSwitch.SoftmodemFallback && !result.Success {
 		var activateFallback bool
@@ -373,11 +442,28 @@ EventLoop:
 		}
 	}
 
+	if enableBridge && !bridgeStart.IsZero() && !bridgeEnd.IsZero() {
+		faxjob.ConnTime = bridgeEnd.Sub(bridgeStart)
+	}
+
+	if enableBridge {
+		// bridge metadata (will be false/zero for non-bridge)
+		faxjob.IsBridge = isBridge
+		faxjob.BridgeDirection = bridgeDirection
+		faxjob.BridgeGateway = bridgeGateway
+		faxjob.BridgeStartTs = bridgeStart
+		faxjob.BridgeEndTs = bridgeEnd
+		faxjob.BridgeT38 = enableT38
+		faxjob.SoftmodemSrc = softmodemSrc
+		faxjob.SoftmodemDst = softmodemDst
+	}
+
 	faxjob.Result = result
 
 	if enableBridge {
 		logf(logrus.InfoLevel, "Ended bridge", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge})
 
+		e.server.Queue.QueueFaxResult <- QueueFaxResult{Job: faxjob}
 		e.server.FaxTracker.Complete(faxjob.UUID)
 		return
 	}

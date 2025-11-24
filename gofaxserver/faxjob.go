@@ -44,6 +44,16 @@ type FaxJob struct {
 	JobTime    time.Duration `json:"jobtime,omitempty"`
 	ConnTime   time.Duration `json:"conntime,omitempty"`
 	Ts         time.Time     `json:"ts"` // timestamp of the job
+
+	// bridge metadata
+	IsBridge        bool
+	BridgeDirection string
+	BridgeGateway   string
+	BridgeStartTs   time.Time
+	BridgeEndTs     time.Time
+	BridgeT38       bool
+	SoftmodemSrc    bool
+	SoftmodemDst    bool
 }
 
 type FaxSourceInfo struct {

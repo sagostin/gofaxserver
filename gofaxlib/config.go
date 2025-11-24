@@ -66,6 +66,7 @@ type config struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Job      string `json:"job"`
+		Enabled  bool   `json:"enabled"`
 	} `json:"loki"`
 	Web struct {
 		Listen string `json:"listen"`

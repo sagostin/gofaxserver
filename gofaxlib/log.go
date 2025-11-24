@@ -3,6 +3,7 @@ package gofaxlib
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"net/http"
@@ -79,6 +80,10 @@ func NewLokiClient() *LokiClient {
 
 // PushLog sends a log entry to Loki.
 func (c *LokiClient) PushLog(labels map[string]string, entry LogEntry) error {
+	if !Config.Loki.Enabled {
+		return errors.New("loki not enabled")
+	}
+
 	payload := LokiPushData{
 		Streams: []LokiStream{
 			{
@@ -185,7 +190,9 @@ func (lm *LogManager) processLogChannel() {
 			Line:      logLine,
 		}
 		if err := lm.LokiClient.PushLog(labels, entry); err != nil {
-			logrus.Error("Failed to send log to Loki:", err)
+			if Config.Loki.Enabled {
+				logrus.Error("Failed to send log to Loki:", err)
+			}
 		}
 	}
 }
