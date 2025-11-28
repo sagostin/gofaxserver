@@ -47,139 +47,67 @@ func SendQfileFromDisk(filename, deviceID string) (SendResult, error) {
 // SendFax immediately tries to send the given qfile using FreeSWITCH
 func (e *EventSocketServer) SendFax(faxjob *FaxJob) (returned SendResult, err error) {
 	returned = SendFailed
-	/*var jobid uint
-	if jobidstr := qf.GetString("jobid"); jobidstr != "" {
-		if i, err := strconv.Atoi(jobidstr); err == nil {
-			jobid = uint(i)
-		}
-	}
 
-	if jobid == 0 {
-		err = fmt.Errorf("Error parsing jobid")
-		return
-	}*/
-
-	// Create Job structure
-	/*faxjob := NewFaxJob()*/
-	/*faxjob.FreeSwitch.Number = fmt.Sprint(gofaxlib.Config.Gofaxsend.CallPrefix, qf.GetString("external"))
-	faxjob.FreeSwitch.Cidnum = gofaxlib.Config.Gofaxsend.FaxNumber //qf.GetString("faxnumber")
-	faxjob.FreeSwitch.Ident = gofaxlib.Config.Freeswitch.Ident
-	faxjob.FreeSwitch.Header = gofaxlib.Config.Freeswitch.Header
-	faxjob.FreeSwitch.Gateways = gofaxlib.Config.Freeswitch.Gateway*/
-
-	/*if ecmMode, err := qf.GetInt("desiredec"); err == nil {
-		faxjob.UseECM = ecmMode != 0
-	}
-
-	if brMode, err := qf.GetInt("desiredbr"); err == nil {
-		if brMode < 5 { // < 14400bps
-			faxjob.DisableV17 = true
-		}
-	}*/
-	/*qf.Set("commid", sessionlog.CommID())*/
-
+	// Initial job snapshot
 	e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 		"FreeSwitch.SendFax",
-		"Processing faxjob %s as freeswitch call",
+		"Processing faxjob as FreeSWITCH call",
 		logrus.InfoLevel,
-		map[string]interface{}{"uuid": faxjob.UUID}, faxjob.UUID,
+		map[string]interface{}{
+			"uuid":             faxjob.UUID.String(),
+			"callee_number":    faxjob.CalleeNumber,
+			"caller_id_number": faxjob.CallerIdNumber,
+			"caller_id_name":   faxjob.CallerIdName,
+			"file_name":        faxjob.FileName,
+			"endpoints":        faxjob.Endpoints,
+			"tot_tries":        faxjob.TotTries,
+			"tot_dials":        faxjob.TotDials,
+			"use_ecm":          faxjob.UseECM,
+			"disable_v17":      faxjob.DisableV17,
+		},
 	))
 
-	// Query DynamicConfig
-	/*if dcCmd := gofaxlib.Config.Gofaxsend.DynamicConfig; dcCmd != "" {
-		sessionlog.Log("Calling DynamicConfig script", dcCmd)
-		dc, err := gofaxlib.DynamicConfig(dcCmd, deviceID, qf.GetString("owner"), qf.GetString("number"), fmt.Sprint(jobid))
-		if err != nil {
-			errmsg := fmt.Sprintln("Error calling DynamicConfig:", err)
-			sessionlog.Log(errmsg)
-			qf.Set("returned", strconv.Itoa(int(SendRetry)))
-			qf.Set("status", errmsg)
-			if err = qf.Write(); err != nil {
-				sessionlog.Logf("Error updating qfile:", err)
-			}
-			// Retry, as this is an internal error executing the DynamicConfig script which could recover later
-			return SendRetry, nil
-		}
-
-		// Check if call should be rejected
-		if gofaxlib.DynamicConfigBool(dc.GetString("RejectCall")) {
-			errmsg := "Transmission rejected by DynamicConfig"
-			sessionlog.Log(errmsg)
-			qf.Set("returned", strconv.Itoa(int(SendFailed)))
-			qf.Set("status", errmsg)
-			if err = qf.Write(); err != nil {
-				sessionlog.Logf("Error updating qfile:", err)
-			}
-			return SendFailed, nil
-		}
-
-		// Check if a custom identifier should be set
-		if dynamicTsi := dc.GetString("LocalIdentifier"); dynamicTsi != "" {
-			faxjob.Ident = dynamicTsi
-		}
-
-		if tagline := dc.GetString("TagLine"); tagline != "" {
-			faxjob.Header = tagline
-		}
-
-		if prefix := dc.GetString("CallPrefix"); prefix != "" {
-			faxjob.Number = fmt.Sprint(prefix, qf.GetString("external"))
-		}
-
-		if faxnumber := dc.GetString("FAXNumber"); faxnumber != "" {
-			faxjob.Cidnum = faxnumber
-		}
-
-		if gatewayString := dc.GetString("Gateway"); gatewayString != "" {
-			faxjob.Gateways = strings.Split(gatewayString, ",")
-		}
-
-	}*/
-
-	/*switch gofaxlib.Config.Gofaxsend.CidName {
-	case "sender":
-		faxjob.Cidname = qf.GetString("sender")
-	case "number":
-		faxjob.Cidname = qf.GetString("number")
-	case "cidnum":
-		faxjob.Cidname = faxjob.Cidnum
-	default:
-		faxjob.Cidname = gofaxlib.Config.FreeSwitch.CidName
-	}*/
-
-	// Total attempted calls
-	/*	totdials, _ := faxjob
-		// Consecutive failed attempts to place a call
-		ndials, _ := qf.GetInt("ndials")
-		// Total answered calls
-		tottries, _ := qf.GetInt("tottries")
-	*/
-	//Auto fallback to slow baudrate after to many tries
+	// Auto fallback to slow baudrate after too many tries
 	v17retry, err := strconv.Atoi(gofaxlib.Config.Faxing.DisableV17AfterRetry)
 	if err != nil {
 		v17retry = 0
 	}
-	if v17retry > 0 && faxjob.TotTries >= v17retry {
+	if v17retry > 0 && faxjob.TotTries >= v17retry && !faxjob.DisableV17 {
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+			"FreeSwitch.SendFax",
+			"Disabling V.17 after %d tries (threshold=%d)",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"uuid":      faxjob.UUID.String(),
+				"tot_tries": faxjob.TotTries,
+			},
+			faxjob.TotTries, v17retry,
+		))
 		faxjob.DisableV17 = true
 	}
 
-	//Auto disable ECM after to many tries
+	// Auto disable ECM after too many tries
 	ecmretry, err := strconv.Atoi(gofaxlib.Config.Faxing.DisableECMAfterRetry)
 	if err != nil {
 		ecmretry = 0
 	}
-	if ecmretry > 0 && faxjob.TotTries >= ecmretry {
+	if ecmretry > 0 && faxjob.TotTries >= ecmretry && faxjob.UseECM {
+		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+			"FreeSwitch.SendFax",
+			"Disabling ECM after %d tries (threshold=%d)",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"uuid":      faxjob.UUID.String(),
+				"tot_tries": faxjob.TotTries,
+			},
+			faxjob.TotTries, ecmretry,
+		))
 		faxjob.UseECM = false
 	}
 
-	// Update status
-	//qf.Set("status", "Dialing")
+	// Update status counters
 	faxjob.TotDials++
-	//qf.Set("totdials", strconv.Itoa(totdials))
-	/*if err = qf.Write(); err != nil {
-		sessionlog.Log("Error updating qfile:", err)
-		return SendFailed, nil
-	}*/
+
 	// Default: Retry when eventClient fails
 	returned = SendRetry
 
@@ -195,112 +123,209 @@ StatusLoop:
 		select {
 		case page := <-t.PageSent():
 			faxjob.NPages = int(page.Page)
-			/*qf.Set("dataformat", page.EncodingName)
-			if err = qf.Write(); err != nil {
-				sessionlog.Log("Error updating qfile:", err)
-			}*/
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"FreeSwitch.SendFax",
+				"Page sent",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"uuid":               faxjob.UUID.String(),
+					"page_number":        page.Page,
+					"page_encoding":      page.EncodingName,
+					"bad_rows":           page.BadRows,
+					"total_page_results": faxjob.NPages,
+				},
+			))
 
 		case result = <-t.Result():
 			faxjob.SignalRate = int(result.TransferRate)
 			faxjob.CSI = result.RemoteID
 
-			// Break if call is hung up
 			if result.HangupCause != "" {
-				// Faxing Finished
+				// Final result
 				status = result.ResultText
+				faxjob.Status = status
+
+				e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+					"FreeSwitch.SendFax",
+					"Final fax result received",
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"uuid":              faxjob.UUID.String(),
+						"hangup_cause":      result.HangupCause,
+						"success":           result.Success,
+						"result_text":       result.ResultText,
+						"transfer_rate":     result.TransferRate,
+						"ecm":               result.Ecm,
+						"negotiations":      result.NegotiateCount,
+						"transferred_pages": result.TransferredPages,
+					},
+				))
+
 				if result.Success {
 					faxjob.Result = result
 				}
 				break StatusLoop
 			}
 
-			// Negotiation finished
-			negstatus := fmt.Sprint("Sending ", result.TransferRate)
+			// Negotiation finished, but call still up
+			negstatus := fmt.Sprintf("Sending %d", result.TransferRate)
 			if result.Ecm {
-				negstatus = negstatus + "/ECM"
+				negstatus += "/ECM"
 			}
 			status = negstatus
 			faxjob.TotTries++
 			faxjob.NDials = 0
 			faxjob.Status = status
 
-			/*qf.Set("tottries", strconv.Itoa(tottries))
-			qf.Set("ndials", strconv.Itoa(ndials))
-			if err = qf.Write(); err != nil {
-				sessionlog.Log("Error updating qfile:", err)
-			}*/
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"FreeSwitch.SendFax",
+				"Negotiation result",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"uuid":              faxjob.UUID.String(),
+					"status":            status,
+					"transfer_rate":     result.TransferRate,
+					"ecm":               result.Ecm,
+					"tot_tries":         faxjob.TotTries,
+					"negotiations":      result.NegotiateCount,
+					"transferred_pages": result.TransferredPages,
+				},
+			))
 
 		case faxerr := <-t.Errors():
 			faxjob.NDials++
-			/*qf.Set("ndials", strconv.Itoa(ndials))*/
 			status = faxerr.Error()
 			if faxerr.Retry() {
 				returned = SendRetry
 			} else {
 				returned = SendFailed
 			}
+
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"FreeSwitch.SendFax",
+				"Event client error",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"uuid":          faxjob.UUID.String(),
+					"error":         faxerr.Error(),
+					"retry":         faxerr.Retry(),
+					"ndials":        faxjob.NDials,
+					"send_result":   returned.String(),
+					"current_state": faxjob.Status,
+				},
+			))
+
 			break StatusLoop
 		}
 	}
 
 	faxjob.Status = status
 	faxjob.Returned = strconv.Itoa(int(returned))
-
-	/*qf.Set("status", status)
-	qf.Set("returned", strconv.Itoa(int(returned)))
-	if err = qf.Write(); err != nil {
-		sessionlog.Log("Error updating qfile:", err)
-	}*/
-
-	/*xfl := &gofaxlib.XFRecord{}
-	xfl.Commid = sessionlog.CommID()
-	xfl.Modem = deviceID
-	xfl.Jobid = uint(jobid)
-	xfl.Jobtag = qf.GetString("jobtag")
-	xfl.Sender = qf.GetString("mailaddr")
-	xfl.Destnum = qf.GetString("number")
-	xfl.Owner = qf.GetString("owner")*/
+	faxjob.Ts = transmitTs
+	faxjob.JobTime = time.Since(transmitTs)
 
 	if result != nil {
 		if result.Success {
 			returned = SendDone
-			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
-				"FreeSwitch.SendFax",
-				"Faxing sent successfully. Hangup Cause: %v. Result: %v",
-				logrus.InfoLevel,
-				map[string]interface{}{"uuid": faxjob.UUID.String()}, result.HangupCause, status,
-			))
 			faxjob.Result = result
 			err = nil
-		} else {
+
 			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 				"FreeSwitch.SendFax",
-				"Faxing failed. Retry: %v. Hangup Cause: %v. Result: %v",
-				logrus.ErrorLevel,
-				map[string]interface{}{"uuid": faxjob.UUID.String()}, returned == SendRetry, result.HangupCause, status,
+				"Faxing sent successfully",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"uuid":             faxjob.UUID.String(),
+					"hangup_cause":     result.HangupCause,
+					"result_text":      status,
+					"send_result":      returned.String(),
+					"duration_ms":      faxjob.JobTime.Milliseconds(),
+					"pages":            result.TransferredPages,
+					"signal_rate":      result.TransferRate,
+					"ecm":              result.Ecm,
+					"callee_number":    faxjob.CalleeNumber,
+					"caller_id_number": faxjob.CallerIdNumber,
+					"caller_id_name":   faxjob.CallerIdName,
+					"use_ecm":          faxjob.UseECM,
+					"disable_v17":      faxjob.DisableV17,
+					"tot_tries":        faxjob.TotTries,
+					"tot_dials":        faxjob.TotDials,
+				},
 			))
+		} else {
 			faxjob.Result = result
 			err = errors.New("faxing failed")
+
+			e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
+				"FreeSwitch.SendFax",
+				"Faxing failed",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"uuid":             faxjob.UUID.String(),
+					"retry":            returned == SendRetry,
+					"hangup_cause":     result.HangupCause,
+					"result_text":      status,
+					"send_result":      returned.String(),
+					"duration_ms":      faxjob.JobTime.Milliseconds(),
+					"pages":            result.TransferredPages,
+					"signal_rate":      result.TransferRate,
+					"ecm":              result.Ecm,
+					"callee_number":    faxjob.CalleeNumber,
+					"caller_id_number": faxjob.CallerIdNumber,
+					"caller_id_name":   faxjob.CallerIdName,
+					"use_ecm":          faxjob.UseECM,
+					"disable_v17":      faxjob.DisableV17,
+					"tot_tries":        faxjob.TotTries,
+					"tot_dials":        faxjob.TotDials,
+				},
+			))
 		}
 	} else {
+		// No result object – treat as call failure and retry
 		returned = SendRetry
+		err = errors.New("call failed")
+
 		e.server.LogManager.SendLog(e.server.LogManager.BuildLog(
 			"FreeSwitch.SendFax",
-			"Call failed. Retry: %v. Result: %v",
+			"Call failed without fax result",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": faxjob.UUID.String()}, returned == SendRetry, status,
+			map[string]interface{}{
+				"uuid":             faxjob.UUID.String(),
+				"retry":            returned == SendRetry,
+				"result_text":      status,
+				"send_result":      returned.String(),
+				"duration_ms":      faxjob.JobTime.Milliseconds(),
+				"callee_number":    faxjob.CalleeNumber,
+				"caller_id_number": faxjob.CallerIdNumber,
+				"caller_id_name":   faxjob.CallerIdName,
+			},
 		))
-		faxjob.Status = status
-		faxjob.Ts = transmitTs
-		faxjob.JobTime = time.Now().Sub(transmitTs)
-		err = errors.New("call failed")
 	}
 
-	/*if err = xfl.SaveTransmissionReport(); err != nil {
-		sessionlog.Log(err)
-	}*/
-
 	return returned, err
+}
+
+func (r SendResult) String() string {
+	switch r {
+	case SendRetry:
+		return "SendRetry"
+	case SendFailed:
+		return "SendFailed"
+	case SendDone:
+		return "SendDone"
+	case SendReformat:
+		return "SendReformat"
+	case SendV34fail:
+		return "SendV34fail"
+	case SendV17fail:
+		return "SendV17fail"
+	case SendBatchfail:
+		return "SendBatchfail"
+	case SendNobatch:
+		return "SendNobatch"
+	default:
+		return fmt.Sprintf("UnknownSendResult(%d)", int(r))
+	}
 }
 
 const (
@@ -353,39 +378,102 @@ func (t *eventClient) Result() <-chan *gofaxlib.FaxResult {
 }
 
 // Connect to FreeSWITCH and originate a txfax
+// Connect to FreeSWITCH and originate a txfax
 func (t *eventClient) start() {
 
+	// Basic validation with logging
 	if t.faxjob.CalleeNumber == "" {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Number to dial is empty",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+		))
 		t.errorChan <- NewFaxError("Number to dial is empty", false)
 		return
 	}
 
 	if len(t.faxjob.Endpoints) == 0 {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Gateway/endpoints not set",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+		))
 		t.errorChan <- NewFaxError("Gateway not set", false)
 		return
 	}
 
 	if _, err := os.Stat(t.faxjob.FileName); err != nil {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Fax file not accessible: %v",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"uuid":      t.faxjob.UUID.String(),
+				"file_name": t.faxjob.FileName,
+				"error":     err.Error(),
+			},
+			err,
+		))
 		t.errorChan <- NewFaxError(err.Error(), false)
 		return
 	}
 
 	var err error
-	t.conn, err = eventsocket.Dial(gofaxlib.Config.FreeSwitch.EventClientSocket, gofaxlib.Config.FreeSwitch.EventClientSocketPassword)
+	t.conn, err = eventsocket.Dial(
+		gofaxlib.Config.FreeSwitch.EventClientSocket,
+		gofaxlib.Config.FreeSwitch.EventClientSocketPassword,
+	)
 	if err != nil {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Failed to connect to FreeSWITCH event socket: %v",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"uuid":      t.faxjob.UUID.String(),
+				"socket":    gofaxlib.Config.FreeSwitch.EventClientSocket,
+				"error":     err.Error(),
+				"callee":    t.faxjob.CalleeNumber,
+				"caller_id": t.faxjob.CallerIdNumber,
+			},
+			err,
+		))
 		t.errorChan <- NewFaxError(err.Error(), true)
 		return
 	}
 	defer t.conn.Close()
 
+	t.logManager.SendLog(t.logManager.BuildLog(
+		"EventClient",
+		"Connected to FreeSWITCH event socket",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"uuid":   t.faxjob.UUID.String(),
+			"socket": gofaxlib.Config.FreeSwitch.EventClientSocket,
+		},
+	))
+
 	// Enable event filter and events
-	_, err = t.conn.Send(fmt.Sprintf("filter Unique-ID %v", t.faxjob.UUID))
-	if err != nil {
+	if _, err = t.conn.Send(fmt.Sprintf("filter Unique-ID %v", t.faxjob.UUID)); err != nil {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Failed to apply UUID filter: %v",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": t.faxjob.UUID.String(), "error": err.Error()},
+			err,
+		))
 		t.errorChan <- NewFaxError(err.Error(), true)
 		return
 	}
-	_, err = t.conn.Send("event plain CHANNEL_CALLSTATE CUSTOM spandsp::txfaxnegociateresult spandsp::txfaxpageresult spandsp::txfaxresult")
-	if err != nil {
+	if _, err = t.conn.Send("event plain CHANNEL_CALLSTATE CUSTOM spandsp::txfaxnegociateresult spandsp::txfaxpageresult spandsp::txfaxresult"); err != nil {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Failed to subscribe to events: %v",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": t.faxjob.UUID.String(), "error": err.Error()},
+			err,
+		))
 		t.errorChan <- NewFaxError(err.Error(), true)
 		return
 	}
@@ -398,17 +486,27 @@ func (t *eventClient) start() {
 	if err != nil {
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
-			err.Error(),
+			"GetSoftmodemFallback error: %v",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+			map[string]interface{}{
+				"uuid":      t.faxjob.UUID.String(),
+				"caller_id": t.faxjob.CallerIdNumber,
+				"error":     err.Error(),
+			},
+			err,
 		))
 	}
 	if fallback {
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
-			"Softmodem fallback active for destination %s, disabling T.38",
-			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": t.faxjob.UUID.String()}, t.faxjob.CalleeNumber,
+			"Softmodem fallback already active for destination %s, disabling T.38",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"uuid":          t.faxjob.UUID.String(),
+				"callee_number": t.faxjob.CalleeNumber,
+				"caller_id":     t.faxjob.CallerIdNumber,
+			},
+			t.faxjob.CalleeNumber,
 		))
 		enableT38 = false
 		requestT38 = false
@@ -420,8 +518,8 @@ func (t *eventClient) start() {
 		"origination_uuid":             t.faxjob.UUID.String(),
 		"origination_caller_id_number": t.faxjob.CallerIdNumber,
 		"origination_caller_id_name":   t.faxjob.CallerIdName,
-		"fax_ident":                    t.faxjob.Identifier, // t.faxjob.CallerIdNumber,
-		"fax_header":                   t.faxjob.Header,     // t.faxjob.CallerIdName,
+		"fax_ident":                    t.faxjob.Identifier,
+		"fax_header":                   t.faxjob.Header,
 		"fax_use_ecm":                  strconv.FormatBool(t.faxjob.UseECM),
 		"fax_disable_v17":              strconv.FormatBool(t.faxjob.DisableV17),
 		"fax_enable_t38":               strconv.FormatBool(enableT38),
@@ -436,9 +534,14 @@ func (t *eventClient) start() {
 		if strings.TrimSpace(err.Error()) != "no reply" {
 			t.logManager.SendLog(t.logManager.BuildLog(
 				"EventClient",
-				err.Error(),
+				"FreeSwitchDBList error: %v",
 				logrus.ErrorLevel,
-				map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+				map[string]interface{}{
+					"uuid":          t.faxjob.UUID.String(),
+					"overrideRealm": overrideRealm,
+					"error":         err.Error(),
+				},
+				err,
 			))
 		}
 	} else {
@@ -448,17 +551,29 @@ func (t *eventClient) start() {
 				if strings.TrimSpace(err.Error()) != "no reply" {
 					t.logManager.SendLog(t.logManager.BuildLog(
 						"EventClient",
-						err.Error(),
+						"FreeSwitchDBSelect error for %s: %v",
 						logrus.ErrorLevel,
-						map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+						map[string]interface{}{
+							"uuid":          t.faxjob.UUID.String(),
+							"overrideRealm": overrideRealm,
+							"var_name":      varName,
+							"error":         err.Error(),
+						},
+						varName, err,
 					))
 				}
 			} else {
 				t.logManager.SendLog(t.logManager.BuildLog(
 					"EventClient",
 					"Overriding dialstring variable %s=%s",
-					logrus.ErrorLevel,
-					map[string]interface{}{"uuid": t.faxjob.UUID.String()}, varName, varValue,
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"uuid":          t.faxjob.UUID.String(),
+						"overrideRealm": overrideRealm,
+						"var_name":      varName,
+						"var_value":     varValue,
+					},
+					varName, varValue,
 				))
 				dsVariablesMap[varName] = varValue
 			}
@@ -487,25 +602,47 @@ func (t *eventClient) start() {
 		"EventClient",
 		"FS_OUTBOUND - %s",
 		logrus.InfoLevel,
-		map[string]interface{}{"uuid": t.faxjob.UUID.String()}, dialstring,
+		map[string]interface{}{
+			"uuid":             t.faxjob.UUID.String(),
+			"dialstring":       dialstring,
+			"gateways":         gateways,
+			"callee_number":    t.faxjob.CalleeNumber,
+			"caller_id_number": t.faxjob.CallerIdNumber,
+			"caller_id_name":   t.faxjob.CallerIdName,
+			"use_ecm":          t.faxjob.UseECM,
+			"disable_v17":      t.faxjob.DisableV17,
+			"enable_t38":       enableT38,
+			"request_t38":      requestT38,
+		},
+		dialstring,
 	))
 
 	// Originate call
 	t.logManager.SendLog(t.logManager.BuildLog(
 		"EventClient",
-		"Originating channel to "+t.faxjob.CalleeNumber+" using gateway "+dialstring,
+		"Originating channel to %s",
 		logrus.InfoLevel,
-		map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+		map[string]interface{}{
+			"uuid":          t.faxjob.UUID.String(),
+			"callee_number": t.faxjob.CalleeNumber,
+		},
+		t.faxjob.CalleeNumber,
 	))
-	_, err = t.conn.Send(fmt.Sprintf("api originate %v, &txfax(%v)", dialstring, t.faxjob.FileName))
+	_, err = t.conn.Send(fmt.Sprintf("api originate %v &txfax(%v)", dialstring, t.faxjob.FileName))
 	if err != nil {
 		t.conn.Send(fmt.Sprintf("uuid_dump %v", t.faxjob.UUID))
 		hangupcause := strings.TrimSpace(err.Error())
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
-			"Originate failed with hangup cause "+hangupcause,
-			logrus.InfoLevel,
-			map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+			"Originate failed with hangup cause %s",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"uuid":          t.faxjob.UUID.String(),
+				"hangup_cause":  hangupcause,
+				"callee_number": t.faxjob.CalleeNumber,
+				"file_name":     t.faxjob.FileName,
+			},
+			hangupcause,
 		))
 		if gofaxlib.FailedHangUpCause(hangupcause) {
 			t.errorChan <- NewFaxError(hangupcause, false)
@@ -518,7 +655,10 @@ func (t *eventClient) start() {
 		"EventClient",
 		"Originate successful",
 		logrus.InfoLevel,
-		map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+		map[string]interface{}{
+			"uuid":          t.faxjob.UUID.String(),
+			"callee_number": t.faxjob.CalleeNumber,
+		},
 	))
 
 	result := gofaxlib.NewFaxResult(t.faxjob.UUID, t.logManager, false)
@@ -542,12 +682,19 @@ func (t *eventClient) start() {
 					var activateFallback bool
 
 					if result.NegotiateCount > 1 {
-						// Activate fallback if negotiation was repeated
 						t.logManager.SendLog(t.logManager.BuildLog(
 							"EventClient",
-							"Faxing failed with %d negotiations, enabling softmodem fallback for calls from/to %s.",
+							"Faxing failed with %d negotiations, enabling softmodem fallback for calls to %s",
 							logrus.ErrorLevel,
-							map[string]interface{}{"uuid": t.faxjob.UUID.String()}, result.NegotiateCount, t.faxjob.CalleeNumber,
+							map[string]interface{}{
+								"uuid":              t.faxjob.UUID.String(),
+								"negotiate_count":   result.NegotiateCount,
+								"callee_number":     t.faxjob.CalleeNumber,
+								"hangup_cause":      result.HangupCause,
+								"transferred_pages": result.TransferredPages,
+								"success":           result.Success,
+							},
+							result.NegotiateCount, t.faxjob.CalleeNumber,
 						))
 						activateFallback = true
 					} else {
@@ -556,12 +703,19 @@ func (t *eventClient) start() {
 							badrows += p.BadRows
 						}
 						if badrows > 0 {
-							// Activate fallback if any bad rows were present
 							t.logManager.SendLog(t.logManager.BuildLog(
 								"EventClient",
-								"Faxing failed with %d bad rows in %d pages, enabling softmodem fallback for calls from/to %s.",
+								"Faxing failed with %d bad rows in %d pages, enabling softmodem fallback for calls to %s",
 								logrus.ErrorLevel,
-								map[string]interface{}{"uuid": t.faxjob.UUID.String()}, badrows, result.TransferredPages, t.faxjob.CalleeNumber,
+								map[string]interface{}{
+									"uuid":          t.faxjob.UUID.String(),
+									"bad_rows":      badrows,
+									"pages":         result.TransferredPages,
+									"callee_number": t.faxjob.CalleeNumber,
+									"hangup_cause":  result.HangupCause,
+									"success":       result.Success,
+								},
+								badrows, result.TransferredPages, t.faxjob.CalleeNumber,
 							))
 							activateFallback = true
 						}
@@ -572,37 +726,61 @@ func (t *eventClient) start() {
 						if err != nil {
 							t.logManager.SendLog(t.logManager.BuildLog(
 								"EventClient",
-								err.Error(),
+								"SetSoftmodemFallback error: %v",
 								logrus.ErrorLevel,
-								map[string]interface{}{"uuid": t.faxjob.UUID.String()},
+								map[string]interface{}{
+									"uuid":          t.faxjob.UUID.String(),
+									"callee_number": t.faxjob.CalleeNumber,
+									"error":         err.Error(),
+								},
+								err,
 							))
 						}
 					}
-
 				}
 
 				t.resultChan <- result
 				return
 			}
+
 			if ev.Get("Event-Subclass") == "spandsp::txfaxnegociateresult" {
+				// Intermediate negotiation result
 				t.resultChan <- result
 			} else if result.TransferredPages != pages {
 				pages = result.TransferredPages
 				t.pageChan <- &result.PageResults[pages-1]
 			}
+
 		case err := <-es.Errors():
+			t.logManager.SendLog(t.logManager.BuildLog(
+				"EventClient",
+				"Event stream error: %v",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"uuid":  t.faxjob.UUID.String(),
+					"error": err.Error(),
+				},
+				err,
+			))
 			t.errorChan <- NewFaxError(err.Error(), true)
 			return
+
 		case kill := <-sigchan:
 			t.logManager.SendLog(t.logManager.BuildLog(
 				"EventClient",
-				"event_client received signal %v, destroying freeswitch channel %v",
+				"event_client received signal %v, destroying FreeSWITCH channel %v",
 				logrus.ErrorLevel,
-				map[string]interface{}{"uuid": t.faxjob.UUID.String()}, kill, t.faxjob.UUID,
+				map[string]interface{}{
+					"uuid":          t.faxjob.UUID.String(),
+					"signal":        kill.String(),
+					"channel_uuid":  t.faxjob.UUID.String(),
+					"callee_number": t.faxjob.CalleeNumber,
+				},
+				kill, t.faxjob.UUID,
 			))
 			t.conn.Send(fmt.Sprintf("api uuid_kill %v", t.faxjob.UUID))
 			t.errorChan <- NewFaxError(fmt.Sprintf("Killed by signal %v", kill), false)
+			return
 		}
 	}
-
 }
