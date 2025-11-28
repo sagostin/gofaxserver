@@ -482,16 +482,17 @@ func (t *eventClient) start() {
 	requestT38 := gofaxlib.Config.Faxing.RequestT38
 	enableT38 := gofaxlib.Config.Faxing.EnableT38
 
-	fallback, err := gofaxlib.GetSoftmodemFallback(t.conn, t.faxjob.CallerIdNumber)
+	fallback, err := gofaxlib.GetSoftmodemFallback(t.conn, t.faxjob.CalleeNumber)
 	if err != nil {
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
 			"GetSoftmodemFallback error: %v",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"uuid":      t.faxjob.UUID.String(),
-				"caller_id": t.faxjob.CallerIdNumber,
-				"error":     err.Error(),
+				"uuid":             t.faxjob.UUID.String(),
+				"callee_number":    t.faxjob.CalleeNumber,
+				"caller_id_number": t.faxjob.CallerIdNumber,
+				"error":            err.Error(),
 			},
 			err,
 		))
@@ -502,9 +503,9 @@ func (t *eventClient) start() {
 			"Softmodem fallback already active for destination %s, disabling T.38",
 			logrus.WarnLevel,
 			map[string]interface{}{
-				"uuid":          t.faxjob.UUID.String(),
-				"callee_number": t.faxjob.CalleeNumber,
-				"caller_id":     t.faxjob.CallerIdNumber,
+				"uuid":             t.faxjob.UUID.String(),
+				"callee_number":    t.faxjob.CalleeNumber,
+				"caller_id_number": t.faxjob.CallerIdNumber,
 			},
 			t.faxjob.CalleeNumber,
 		))
