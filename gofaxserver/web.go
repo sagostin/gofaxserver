@@ -27,6 +27,8 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Put("/tenant/{id}", s.handleUpdateTenant)
 		admin.Delete("/tenant/{id}", s.handleDeleteTenant)
 
+		admin.Post("/fallback", s.handleFallbackNumber)
+
 		// Tenant Numbers management.
 		admin.Post("/number", s.handleAddTenantNumber)
 		admin.Put("/number/{id}", s.handleUpdateTenantNumber)
@@ -213,6 +215,38 @@ func (s *Server) getTenantUsers(ctx iris.Context) {
 // -------------------------
 // Admin Handlers for Tenant Management
 // -------------------------
+
+// handleFallbackNumber stores a softmodem fallback number.
+// Expects raw text in the POST body (e.g., "2505551234").
+func (s *Server) handleFallbackNumber(ctx iris.Context) {
+	fallbackNumber := struct {
+		Number string `json:"number"`
+	}{}
+
+	if err := ctx.ReadJSON(fallbackNumber); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	number := strings.TrimSpace(fallbackNumber.Number)
+	if number == "" {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "no fallback number provided"})
+		return
+	}
+
+	// Save to FreeSWITCH mod_db.
+	if err := gofaxlib.SetSoftmodemFallback(nil, number, true); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to set fallback number: " + err.Error()})
+		return
+	}
+
+	ctx.JSON(iris.Map{
+		"success": true,
+		"number":  number,
+	})
+}
 
 // handleAddTenant creates a new tenant.
 func (s *Server) handleAddTenant(ctx iris.Context) {

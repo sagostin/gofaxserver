@@ -12,8 +12,8 @@ const (
 
 // GetSoftmodemFallback checks if fallback to SpanDSP's softmodem (no T.38)
 // should be enabled for the given callerid number
-func GetSoftmodemFallback(c *eventsocket.Connection, cidnum string) (bool, error) {
-	if !Config.FreeSwitch.SoftmodemFallback || cidnum == "" {
+func GetSoftmodemFallback(c *eventsocket.Connection, number string) (bool, error) {
+	if !Config.FreeSwitch.SoftmodemFallback || number == "" {
 		return false, nil
 	}
 
@@ -26,7 +26,7 @@ func GetSoftmodemFallback(c *eventsocket.Connection, cidnum string) (bool, error
 		defer c.Close()
 	}
 
-	exists, err := FreeSwitchDBExists(c, modDbFallbackRealm, cidnum)
+	exists, err := FreeSwitchDBExists(c, modDbFallbackRealm, number)
 	if err != nil {
 		return false, err
 	}
@@ -36,8 +36,8 @@ func GetSoftmodemFallback(c *eventsocket.Connection, cidnum string) (bool, error
 
 // SetSoftmodemFallback saves the given softmodem fallback setting for a caller id
 // to FreeSWITCH's mod_db
-func SetSoftmodemFallback(c *eventsocket.Connection, cidnum string, enabled bool) error {
-	if !Config.FreeSwitch.SoftmodemFallback || cidnum == "" {
+func SetSoftmodemFallback(c *eventsocket.Connection, number string, enabled bool) error {
+	if !Config.FreeSwitch.SoftmodemFallback || number == "" {
 		return nil
 	}
 
@@ -50,5 +50,5 @@ func SetSoftmodemFallback(c *eventsocket.Connection, cidnum string, enabled bool
 		defer c.Close()
 	}
 
-	return FreeSwitchDBInsert(c, modDbFallbackRealm, cidnum, fmt.Sprintf("%d", time.Now().Unix()))
+	return FreeSwitchDBInsert(c, modDbFallbackRealm, number, fmt.Sprintf("%d", time.Now().Unix()))
 }
