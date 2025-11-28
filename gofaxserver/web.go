@@ -223,7 +223,7 @@ func (s *Server) handleFallbackNumber(ctx iris.Context) {
 		Number string `json:"number"`
 	}{}
 
-	if err := ctx.ReadJSON(fallbackNumber); err != nil {
+	if err := ctx.ReadJSON(&fallbackNumber); err != nil {
 		ctx.StatusCode(http.StatusBadRequest)
 		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
 		return
