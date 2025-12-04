@@ -243,17 +243,24 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				requestT38 = false
 			}
 
-			exportStr := fmt.Sprintf("{%s,%s,%s,%s}",
+			/*exportStr := fmt.Sprintf("{%s,%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%t", enableT38),
 				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
-				"sip_execute_on_image=t38_gateway self",
+				"sip_execute_on_image=t38_gateway peer",
 				"absolute_codec_string=PCMU",
-			)
+			)*/
+
+			exec("set", "absolute_codec_string=PCMU", true)
+			exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
+			exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
+			exec("set", fmt.Sprintf("sip_execute_on_image=t38_gateway %s", "peer"), true)
+			bridgeStart = time.Now()
 
 			dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
-			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, exportStr+dsGateways)
+			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
 			bridgeStart = time.Now()
-			exec("bridge", exportStr+dsGateways, true)
+			exec("bridge", dsGateways, true)
+
 		} else {
 			bridgeDirection = "downstream"
 
