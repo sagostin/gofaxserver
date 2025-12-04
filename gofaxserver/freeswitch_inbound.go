@@ -246,7 +246,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
 
 			exportStr := fmt.Sprintf("{%s}",
-				"execute_on_answer=t38_gateway self",
+				fmt.Sprintf("sip_execute_on_image='t38_gateway %s'", "self nocng"),
 			)
 
 			/*exec("set", "absolute_codec_string=PCMU", true)
@@ -279,7 +279,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			logf(logrus.InfoLevel, "FS_INBOUND → INBOUND BRIDGE gateway=%s", map[string]interface{}{"uuid": channelUUID.String()}, bridgeGw)
 			exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
 			// exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
-			exec("set", fmt.Sprintf("execute_on_answer=t38_gateway %s", "peer"), true)
+			exec("set", fmt.Sprintf("sip_execute_on_image=t38_gateway %s", "peer nocng"), true)
 			bridgeStart = time.Now()
 			exec("bridge", fmt.Sprintf("sofia/gateway/%s/%s", bridgeGw, dstNum), true)
 		}
