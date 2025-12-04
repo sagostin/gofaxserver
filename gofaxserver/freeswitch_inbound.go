@@ -242,9 +242,10 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				enableT38 = false
 				requestT38 = false
 			}
-			exportStr := fmt.Sprintf("{%s,%s}",
+			exportStr := fmt.Sprintf("{%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%t", enableT38),
-				fmt.Sprintf("execute_on_answer='t38_gateway %s'", "self"),
+				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
+				fmt.Sprintf("execute_on_answer='t38_gateway nocng%s'", "self"),
 			)
 
 			/*exec("set", "absolute_codec_string=PCMU", true)
@@ -283,8 +284,8 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			// External -> PBX / Internal (t.38)
 			logf(logrus.InfoLevel, "FS_INBOUND → INBOUND BRIDGE gateway=%s", map[string]interface{}{"uuid": channelUUID.String()}, bridgeGw)
 			exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
-			// exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
-			exec("set", fmt.Sprintf("execute_on_answer=t38_gateway %s", "self"), true)
+			exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
+			exec("set", fmt.Sprintf("execute_on_answer=t38_gateway nocng%s", "self"), true)
 			bridgeStart = time.Now()
 			exec("bridge", fmt.Sprintf("sofia/gateway/%s/%s", bridgeGw, dstNum), true)
 		}
