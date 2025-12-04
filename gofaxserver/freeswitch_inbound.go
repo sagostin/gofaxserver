@@ -245,7 +245,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			exportStr := fmt.Sprintf("{%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%t", enableT38),
 				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
-				fmt.Sprintf("sip_execute_on_image='t38_gateway %s'", "self nocng"),
+				fmt.Sprintf("sip_execute_on_image='t38_gateway %s'", "self"),
 			)
 
 			/*exec("set", "absolute_codec_string=PCMU", true)
