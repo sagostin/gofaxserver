@@ -246,7 +246,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			exportStr := fmt.Sprintf("{%s,%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%t", enableT38),
 				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
-				"execute_on_answer=t38_gateway self",
+				"execute_on_answer=t38_gateway self nocng",
 				"absolute_codec_string=PCMU",
 			)
 
@@ -273,8 +273,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			exec("set", "absolute_codec_string=PCMU", true)
 			exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
 			exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
-			exec("answer", "", true)
-			exec("t38_gateway", "self", true)
+			exec("set", fmt.Sprintf("execute_on_answer=t38_gateway %s", "self nocng"), true)
 			bridgeStart = time.Now()
 			exec("bridge", fmt.Sprintf("sofia/gateway/%s/%s", bridgeGw, dstNum), true)
 		}
