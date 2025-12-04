@@ -242,7 +242,8 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				enableT38 = false
 				requestT38 = false
 			}
-			exportStr := fmt.Sprintf("{%s}",
+			exportStr := fmt.Sprintf("{%s,%s}",
+				"fax_enable_t38=true",
 				fmt.Sprintf("sip_execute_on_image='t38_gateway %s'", "self nocng"),
 			)
 
