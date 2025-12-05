@@ -130,6 +130,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	// Track whether softmodem fallback matched either side
 	var softmodemSrc bool
 	var softmodemDst bool
+	fallbackHit := false
 
 	// --- Connection / 'connect' handshake -----------------------------------
 	logf(logrus.InfoLevel, "Incoming Event Socket connection from %s", map[string]interface{}{}, c.RemoteAddr())
@@ -207,6 +208,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	requestT38 := gofaxlib.Config.Faxing.RequestT38
 	enableT38 := gofaxlib.Config.Faxing.EnableT38
 
+	pairDecisionTime := time.Now()
+	pairAllowT38 := true
+
 	// todo determine fallbackSrc for both src and dst & support dynamic changing?
 
 	// Bridge decision
@@ -221,7 +225,35 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	}, enableBridge, bridgeGw)
 
 	// --- Bridge mode path -----------------------------------------------------
+	// --- Bridge mode path -----------------------------------------------------
 	if enableBridge {
+		pairAllowT38 = e.server.ShouldAllowT38ForPair(srcNum, dstNum, pairDecisionTime)
+		if !pairAllowT38 {
+			logf(logrus.InfoLevel,
+				"Per-pair policy: disabling T.38 for %s → %s (flip-flop within TTL)",
+				map[string]interface{}{
+					"uuid":       channelUUID.String(),
+					"src_num":    srcNum,
+					"dst_num":    dstNum,
+					"pair_ttl_s": T38PairTTL.Seconds(),
+				},
+				srcNum, dstNum,
+			)
+			enableT38 = false
+			requestT38 = false
+		} else {
+			logf(logrus.InfoLevel,
+				"Per-pair policy: allowing T.38 for %s → %s (first or flipped)",
+				map[string]interface{}{
+					"uuid":       channelUUID.String(),
+					"src_num":    srcNum,
+					"dst_num":    dstNum,
+					"pair_ttl_s": T38PairTTL.Seconds(),
+				},
+				srcNum, dstNum,
+			)
+		}
+
 		isBridge = true
 		bridgeGateway = bridgeGw
 
@@ -238,32 +270,21 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			}
 			if fallbackDst {
 				softmodemDst = true
+				fallbackHit = true
 				logf(logrus.WarnLevel, "Softmodem fallbackDst active for caller %s; disabling T.38", map[string]interface{}{"uuid": channelUUID.String()}, cidNum)
 				enableT38 = false
 				requestT38 = false
 			}
+
 			exportStr := fmt.Sprintf("{%s,%s,%s}",
 				fmt.Sprintf("fax_enable_t38=%t", enableT38),
 				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
 				fmt.Sprintf("sip_execute_on_image='t38_gateway %s'", "self nocng"),
 			)
 
-			/*exec("set", "absolute_codec_string=PCMU", true)
-			exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
-			// exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
-			exec("set", fmt.Sprintf("sip_execute_on_image=t38_gateway %s", "peer"), true)
-			*/
-			bridgeStart = time.Now()
-
 			dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
 			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
-			bridgeStart = time.Now()
 
-			//exec("bridge", exportStr+dsGateways, true)
-
-			//exec("set", fmt.Sprintf("fax_enable_t38=%t", enableT38), true)
-			// exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
-			//exec("set", fmt.Sprintf("execute_on_answer=t38_gateway %s", "peer"), true)
 			bridgeStart = time.Now()
 			exec("bridge", exportStr+dsGateways, true)
 
@@ -276,6 +297,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			}
 			if fallbackSrc {
 				softmodemSrc = true
+				fallbackHit = true
 				logf(logrus.WarnLevel, "Softmodem fallbackSrc active for caller %s; disabling T.38", map[string]interface{}{"uuid": channelUUID.String()}, cidNum)
 				enableT38 = false
 				requestT38 = false
@@ -470,6 +492,34 @@ EventLoop:
 	}
 
 	faxjob.Result = result
+
+	if enableBridge {
+		now := time.Now()
+		if !bridgeEnd.IsZero() {
+			now = bridgeEnd
+		}
+
+		if !fallbackHit {
+			// Only let non-fallback bridged calls influence flip-flop state.
+			e.server.UpdateT38PairState(srcNum, dstNum, faxjob.BridgeT38, now)
+		} else {
+			logf(
+				logrus.DebugLevel,
+				"Skipping T.38 pair state update due to softmodem fallback",
+				map[string]interface{}{
+					"uuid":    channelUUID.String(),
+					"src_num": srcNum,
+					"dst_num": dstNum,
+				},
+			)
+		}
+
+		logf(logrus.InfoLevel, "Ended bridge", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge})
+
+		e.server.Queue.QueueFaxResult <- QueueFaxResult{Job: faxjob}
+		e.server.FaxTracker.Complete(faxjob.UUID)
+		return
+	}
 
 	if enableBridge {
 		logf(logrus.InfoLevel, "Ended bridge", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge})

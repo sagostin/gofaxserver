@@ -35,6 +35,55 @@ type Server struct {
 	GatewayEndpointsACL []string    `json:"gateway_endpoint_acl,omitempty"` // allowed source IPs for SIP trunks
 	UpstreamFsGateways  []string    `json:"upstream_fs_gateways"`           // upstream gateway names defined in the global endpoints config/DB
 	FaxTracker          *FaxTracker `json:"fax_tracker,omitempty"`
+	t38PairMu           sync.Mutex
+	t38PairState        map[string]*T38PairState
+}
+
+const (
+	// How long a src/dst pair "remembers" last behaviour before resetting.
+	T38PairTTL = 15 * time.Minute // adjust to 10–15 minutes as you like
+)
+
+// ShouldAllowT38ForPair decides whether we *should* enable T.38 for this pair
+// based on the last time we saw it. If there is no valid recent entry,
+// we default to allowing T.38.
+func (s *Server) ShouldAllowT38ForPair(srcNum, dstNum string, now time.Time) bool {
+	key := srcNum + "_" + dstNum
+
+	s.t38PairMu.Lock()
+	defer s.t38PairMu.Unlock()
+
+	st, ok := s.t38PairState[key]
+	if !ok || now.Sub(st.LastSeen) > T38PairTTL {
+		// No recent history: start with T.38 allowed.
+		return true
+	}
+
+	// Flip-flop: if we last used T.38, next call should *not*; and vice-versa.
+	return !st.LastUsedT38
+}
+
+// UpdateT38PairState records what we *actually* used for this call.
+func (s *Server) UpdateT38PairState(srcNum, dstNum string, usedT38 bool, now time.Time) {
+	key := srcNum + "_" + dstNum
+
+	s.t38PairMu.Lock()
+	defer s.t38PairMu.Unlock()
+
+	st, ok := s.t38PairState[key]
+	if !ok {
+		st = &T38PairState{}
+		s.t38PairState[key] = st
+	}
+
+	st.LastUsedT38 = usedT38
+	st.LastSeen = now
+}
+
+// T38PairState tracks recent behaviour for a src/dst pair.
+type T38PairState struct {
+	LastUsedT38 bool      // what we actually used on the last call
+	LastSeen    time.Time // when that call finished
 }
 
 func NewServer() *Server {
@@ -43,6 +92,7 @@ func NewServer() *Server {
 		TenantNumbers:   make(map[string]*TenantNumber),
 		TenantEndpoints: make(map[uint][]*Endpoint),
 		NumberEndpoints: make(map[string][]*Endpoint),
+		t38PairState:    make(map[string]*T38PairState),
 	}
 }
 
