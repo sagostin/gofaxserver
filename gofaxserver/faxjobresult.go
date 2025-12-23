@@ -3,9 +3,10 @@ package gofaxserver
 import (
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
-	"time"
 )
 
 // FaxJobResult is a GORM model representing a stored fax job result.
@@ -69,6 +70,10 @@ type FaxJobResult struct {
 	SoftmodemSrc    bool          `json:"softmodem_src"`
 	SoftmodemDst    bool          `json:"softmodem_dst"`
 
+	// T.38 decision tracking (for all call types)
+	UsedT38           bool `json:"used_t38"`           // was T.38 actually used for this call
+	SoftmodemFallback bool `json:"softmodem_fallback"` // was softmodem fallback override active
+
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -124,6 +129,10 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		BridgeT38:       job.BridgeT38,
 		SoftmodemSrc:    job.SoftmodemSrc,
 		SoftmodemDst:    job.SoftmodemDst,
+
+		// T.38 decision tracking
+		UsedT38:           job.UsedT38,
+		SoftmodemFallback: job.SoftmodemFallback,
 
 		CreatedAt: time.Now(),
 	}

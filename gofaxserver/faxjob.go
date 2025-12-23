@@ -1,9 +1,10 @@
 package gofaxserver
 
 import (
-	"github.com/google/uuid"
 	"gofaxserver/gofaxlib"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // FaxJob contains everything FreeSWITCH needs to send a fax.
@@ -54,6 +55,10 @@ type FaxJob struct {
 	BridgeT38       bool
 	SoftmodemSrc    bool
 	SoftmodemDst    bool
+
+	// T.38 decision tracking (for all call types)
+	UsedT38           bool `json:"used_t38"`           // was T.38 actually used for this call
+	SoftmodemFallback bool `json:"softmodem_fallback"` // was softmodem fallback override active
 }
 
 type FaxSourceInfo struct {

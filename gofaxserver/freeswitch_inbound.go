@@ -19,13 +19,14 @@ package gofaxserver
 
 import (
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 
 	"gofaxserver/gofaxlib"
 
@@ -422,6 +423,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			Source:     gateway,
 			SourceID:   channelUUID.String(),
 		},
+		// T.38 decision tracking
+		UsedT38:           enableT38,
+		SoftmodemFallback: fallbackHit,
 	}
 
 	if srcTenant, _ := e.server.getTenantByNumber(srcNum); srcTenant != nil {

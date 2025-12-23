@@ -21,8 +21,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/fiorix/go-eventsocket/eventsocket"
-	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
 	"os"
 	"os/signal"
@@ -30,6 +28,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/fiorix/go-eventsocket/eventsocket"
+	"github.com/sirupsen/logrus"
 )
 
 /*// SendQfileFromDisk reads the qfile from disk and then immediately tries to send the given qfile using FreeSWITCH
@@ -113,7 +114,7 @@ func (e *EventSocketServer) SendFax(faxjob *FaxJob) (returned SendResult, err er
 
 	// Start eventClient goroutine
 	transmitTs := time.Now()
-	t := newEventClient(faxjob, e.server.LogManager)
+	t := newEventClient(faxjob, e.server.LogManager, e.server)
 	result := &gofaxlib.FaxResult{}
 	var status string
 
@@ -345,6 +346,7 @@ type SendResult int
 type eventClient struct {
 	faxjob *FaxJob
 	conn   *eventsocket.Connection
+	server *Server
 
 	pageChan   chan *gofaxlib.PageResult
 	errorChan  chan FaxError
@@ -353,9 +355,10 @@ type eventClient struct {
 	logManager *gofaxlib.LogManager
 }
 
-func newEventClient(faxjob *FaxJob, logManager *gofaxlib.LogManager) *eventClient {
+func newEventClient(faxjob *FaxJob, logManager *gofaxlib.LogManager, server *Server) *eventClient {
 	t := &eventClient{
 		faxjob:     faxjob,
+		server:     server,
 		pageChan:   make(chan *gofaxlib.PageResult),
 		errorChan:  make(chan FaxError),
 		resultChan: make(chan *gofaxlib.FaxResult),
@@ -482,6 +485,47 @@ func (t *eventClient) start() {
 	requestT38 := gofaxlib.Config.Faxing.RequestT38
 	enableT38 := gofaxlib.Config.Faxing.EnableT38
 
+	// Track for T.38 pair state update after call
+	srcNum := t.faxjob.CallerIdNumber
+	dstNum := t.faxjob.CalleeNumber
+	pairDecisionTime := time.Now()
+	fallbackHit := false
+
+	// First: Apply per-pair flip-flop T.38 policy
+	if t.server != nil {
+		pairAllowT38 := t.server.ShouldAllowT38ForPair(srcNum, dstNum, pairDecisionTime)
+		if !pairAllowT38 {
+			t.logManager.SendLog(t.logManager.BuildLog(
+				"EventClient",
+				"Per-pair policy: disabling T.38 for %s → %s (flip-flop within TTL)",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"uuid":       t.faxjob.UUID.String(),
+					"src_num":    srcNum,
+					"dst_num":    dstNum,
+					"pair_ttl_s": T38PairTTL.Seconds(),
+				},
+				srcNum, dstNum,
+			))
+			enableT38 = false
+			requestT38 = false
+		} else {
+			t.logManager.SendLog(t.logManager.BuildLog(
+				"EventClient",
+				"Per-pair policy: allowing T.38 for %s → %s (first or flipped)",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"uuid":       t.faxjob.UUID.String(),
+					"src_num":    srcNum,
+					"dst_num":    dstNum,
+					"pair_ttl_s": T38PairTTL.Seconds(),
+				},
+				srcNum, dstNum,
+			))
+		}
+	}
+
+	// Second: Check legacy softmodem fallback as an override
 	fallback, err := gofaxlib.GetSoftmodemFallback(t.conn, t.faxjob.CalleeNumber)
 	if err != nil {
 		t.logManager.SendLog(t.logManager.BuildLog(
@@ -498,9 +542,10 @@ func (t *eventClient) start() {
 		))
 	}
 	if fallback {
+		fallbackHit = true
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
-			"Softmodem fallback already active for destination %s, disabling T.38",
+			"Softmodem fallback override active for destination %s, disabling T.38",
 			logrus.WarnLevel,
 			map[string]interface{}{
 				"uuid":             t.faxjob.UUID.String(),
@@ -512,6 +557,10 @@ func (t *eventClient) start() {
 		enableT38 = false
 		requestT38 = false
 	}
+
+	// Track T.38 decision on the faxjob for database persistence
+	t.faxjob.UsedT38 = enableT38
+	t.faxjob.SoftmodemFallback = fallbackHit
 
 	// Collect dialstring variables
 	dsVariablesMap := map[string]string{
@@ -738,6 +787,23 @@ func (t *eventClient) start() {
 							))
 						}
 					}
+				}
+
+				// Update T.38 pair state for flip-flop (skip if fallback override was used)
+				if t.server != nil && !fallbackHit {
+					t.server.UpdateT38PairState(srcNum, dstNum, enableT38, time.Now())
+					t.logManager.SendLog(t.logManager.BuildLog(
+						"EventClient",
+						"Updated T.38 pair state for %s → %s (used T.38: %t)",
+						logrus.DebugLevel,
+						map[string]interface{}{
+							"uuid":     t.faxjob.UUID.String(),
+							"src_num":  srcNum,
+							"dst_num":  dstNum,
+							"used_t38": enableT38,
+						},
+						srcNum, dstNum, enableT38,
+					))
 				}
 
 				t.resultChan <- result
