@@ -491,8 +491,41 @@ func (t *eventClient) start() {
 	pairDecisionTime := time.Now()
 	fallbackHit := false
 
-	// First: Apply per-pair flip-flop T.38 policy
-	if t.server != nil {
+	// Check if this is an upstream gateway call - T.38 is only supported for upstreams
+	isUpstreamCall := false
+	if t.server != nil && len(t.faxjob.Endpoints) > 0 {
+		for _, ep := range t.faxjob.Endpoints {
+			// Extract gateway name from endpoint (format: "gateway:ip" or just "gateway")
+			gwName := strings.Split(ep.Endpoint, ":")[0]
+			for _, upstream := range t.server.UpstreamFsGateways {
+				if strings.EqualFold(gwName, upstream) {
+					isUpstreamCall = true
+					break
+				}
+			}
+			if isUpstreamCall {
+				break
+			}
+		}
+	}
+
+	// Only apply T.38 flip-flop for upstream gateway calls
+	if !isUpstreamCall {
+		// Non-upstream calls: disable T.38 entirely
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"T.38 disabled for non-upstream endpoint (tenant/local gateway)",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"uuid":    t.faxjob.UUID.String(),
+				"src_num": srcNum,
+				"dst_num": dstNum,
+			},
+		))
+		enableT38 = false
+		requestT38 = false
+	} else if t.server != nil {
+		// Upstream calls: apply per-pair flip-flop T.38 policy
 		pairAllowT38 := t.server.ShouldAllowT38ForPair(srcNum, dstNum, pairDecisionTime)
 		if !pairAllowT38 {
 			t.logManager.SendLog(t.logManager.BuildLog(
@@ -789,8 +822,8 @@ func (t *eventClient) start() {
 					}
 				}
 
-				// Update T.38 pair state for flip-flop (skip if fallback override was used)
-				if t.server != nil && !fallbackHit {
+				// Update T.38 pair state for flip-flop (skip if fallback override was used or non-upstream)
+				if t.server != nil && !fallbackHit && isUpstreamCall {
 					t.server.UpdateT38PairState(srcNum, dstNum, enableT38, time.Now())
 					t.logManager.SendLog(t.logManager.BuildLog(
 						"EventClient",

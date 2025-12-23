@@ -171,13 +171,52 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 func (q *Queue) startQueueResults() {
 	for result := range q.QueueFaxResult {
 		go func(res QueueFaxResult) {
-			//fmt.Printf("Processing result for job %v: %+v\n", res.Job.UUID, res)
+			if res.Job == nil {
+				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+					"FaxJobResult",
+					"received nil job in QueueFaxResult",
+					logrus.ErrorLevel,
+					nil,
+				))
+				return
+			}
+
+			// Log receipt of result
+			q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+				"FaxJobResult",
+				"processing fax job result",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"uuid":       res.Job.UUID.String(),
+					"is_bridge":  res.Job.IsBridge,
+					"bridge_dir": res.Job.BridgeDirection,
+					"bridge_gw":  res.Job.BridgeGateway,
+					"used_t38":   res.Job.UsedT38,
+					"has_result": res.Job.Result != nil,
+				},
+			))
+
 			if err := q.storeQueueFaxResult(res); err != nil {
 				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 					"FaxJobResult",
-					"error storing fax job result: ",
+					"error storing fax job result: %v",
 					logrus.ErrorLevel,
-					map[string]interface{}{"uuid": res.Job.UUID.String()}, err,
+					map[string]interface{}{
+						"uuid":      res.Job.UUID.String(),
+						"is_bridge": res.Job.IsBridge,
+						"error":     err.Error(),
+					},
+					err,
+				))
+			} else {
+				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+					"FaxJobResult",
+					"fax job result stored successfully",
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"uuid":      res.Job.UUID.String(),
+						"is_bridge": res.Job.IsBridge,
+					},
 				))
 			}
 		}(result)

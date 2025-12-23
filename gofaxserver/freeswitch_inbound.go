@@ -312,33 +312,60 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		}
 	}
 
-	// Apply per-pair flip-flop policy for non-bridged calls as well.
+	// Apply per-pair flip-flop policy for non-bridged calls, but only for upstream gateways.
+	// Non-upstream (tenant/local) gateways use G.711 only (no T.38).
 	if !enableBridge {
-		pairAllowT38 = e.server.ShouldAllowT38ForPair(srcNum, dstNum, pairDecisionTime)
-		if !pairAllowT38 {
+		// Check if this is an upstream gateway call
+		isUpstreamGateway := false
+		for _, upstream := range e.server.UpstreamFsGateways {
+			if strings.EqualFold(gateway, upstream) {
+				isUpstreamGateway = true
+				break
+			}
+		}
+
+		if !isUpstreamGateway {
+			// Non-upstream calls: disable T.38 entirely (G.711 only)
 			logf(logrus.InfoLevel,
-				"Per-pair policy (non-bridge): disabling T.38 for %s → %s (flip-flop within TTL)",
+				"T.38 disabled for non-upstream gateway %s (G.711 only)",
 				map[string]interface{}{
-					"uuid":       channelUUID.String(),
-					"src_num":    srcNum,
-					"dst_num":    dstNum,
-					"pair_ttl_s": T38PairTTL.Seconds(),
+					"uuid":    channelUUID.String(),
+					"gateway": gateway,
+					"src_num": srcNum,
+					"dst_num": dstNum,
 				},
-				srcNum, dstNum,
+				gateway,
 			)
 			enableT38 = false
 			requestT38 = false
 		} else {
-			logf(logrus.InfoLevel,
-				"Per-pair policy (non-bridge): allowing T.38 for %s → %s (first or flipped)",
-				map[string]interface{}{
-					"uuid":       channelUUID.String(),
-					"src_num":    srcNum,
-					"dst_num":    dstNum,
-					"pair_ttl_s": T38PairTTL.Seconds(),
-				},
-				srcNum, dstNum,
-			)
+			// Upstream gateway: apply per-pair flip-flop T.38 policy
+			pairAllowT38 = e.server.ShouldAllowT38ForPair(srcNum, dstNum, pairDecisionTime)
+			if !pairAllowT38 {
+				logf(logrus.InfoLevel,
+					"Per-pair policy (non-bridge): disabling T.38 for %s → %s (flip-flop within TTL)",
+					map[string]interface{}{
+						"uuid":       channelUUID.String(),
+						"src_num":    srcNum,
+						"dst_num":    dstNum,
+						"pair_ttl_s": T38PairTTL.Seconds(),
+					},
+					srcNum, dstNum,
+				)
+				enableT38 = false
+				requestT38 = false
+			} else {
+				logf(logrus.InfoLevel,
+					"Per-pair policy (non-bridge): allowing T.38 for %s → %s (first or flipped)",
+					map[string]interface{}{
+						"uuid":       channelUUID.String(),
+						"src_num":    srcNum,
+						"dst_num":    dstNum,
+						"pair_ttl_s": T38PairTTL.Seconds(),
+					},
+					srcNum, dstNum,
+				)
+			}
 		}
 	}
 
