@@ -20,10 +20,11 @@ package gofaxlib
 import (
 	"errors"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 
 	"github.com/fiorix/go-eventsocket/eventsocket"
 	"github.com/google/uuid"
@@ -134,7 +135,43 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 	case "CUSTOM":
 		// Faxing results have changed
 		action := ""
-		switch ev.Get("Event-Subclass") {
+		subclass := ev.Get("Event-Subclass")
+
+		// Debug: Log all fax-related headers for SpanDSP events
+		if strings.HasPrefix(subclass, "spandsp::") {
+			// Build a map of all fax-related headers
+			faxHeaders := make(map[string]string)
+			for key, value := range ev.Header {
+				// Capture all Fax-* headers and other relevant ones
+				if strings.HasPrefix(key, "Fax-") ||
+					key == "Event-Subclass" ||
+					key == "Channel-Call-Uuid" ||
+					strings.Contains(key, "fax_v17") ||
+					strings.Contains(key, "fax_ecm") ||
+					strings.Contains(key, "fax_t38") ||
+					strings.Contains(key, "fax_result") {
+					// Type-assert the value to string
+					if strVal, ok := value.(string); ok {
+						faxHeaders[key] = strVal
+					} else {
+						faxHeaders[key] = fmt.Sprintf("%v", value)
+					}
+				}
+			}
+			f.logManager.SendLog(f.logManager.BuildLog(
+				"FaxResult",
+				"SpanDSP event: %s",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"uuid":        f.UUID.String(),
+					"subclass":    subclass,
+					"fax_headers": faxHeaders,
+				},
+				subclass,
+			))
+		}
+
+		switch subclass {
 		case "spandsp::rxfaxnegociateresult",
 			"spandsp::txfaxnegociateresult":
 			f.NegotiateCount++

@@ -174,33 +174,45 @@ func (t *FaxTracker) MarkWaiting(jobID uuid.UUID) {
 
 // MarkReceiving sets the receiving phase for inbound fax reception.
 func (t *FaxTracker) MarkReceiving(jobID uuid.UUID) {
+	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if st, ok := t.byJob[jobID]; ok {
 		st.Phase = PhaseReceiving
-		st.UpdatedAt = time.Now()
+		if st.StartedAt.IsZero() {
+			st.StartedAt = now
+		}
+		st.UpdatedAt = now
 	}
 }
 
 // MarkBridging sets the bridging phase for fax transcoding/bridge calls.
 func (t *FaxTracker) MarkBridging(jobID uuid.UUID, bridgeDirection string, bridgeGateway string) {
+	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if st, ok := t.byJob[jobID]; ok {
 		st.Phase = PhaseBridging
 		st.EndpointLabel = bridgeDirection
 		st.EndpointValue = bridgeGateway
-		st.UpdatedAt = time.Now()
+		if st.StartedAt.IsZero() {
+			st.StartedAt = now
+		}
+		st.UpdatedAt = now
 	}
 }
 
 // MarkSending sets the sending phase when actively transmitting fax data.
 func (t *FaxTracker) MarkSending(jobID uuid.UUID) {
+	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if st, ok := t.byJob[jobID]; ok {
 		st.Phase = PhaseSending
-		st.UpdatedAt = time.Now()
+		if st.StartedAt.IsZero() {
+			st.StartedAt = now
+		}
+		st.UpdatedAt = now
 	}
 }
 
