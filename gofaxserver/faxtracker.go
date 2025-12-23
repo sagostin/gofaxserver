@@ -5,17 +5,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"gofaxserver/gofaxlib"
+
+	"github.com/google/uuid"
 )
 
 type FaxPhase string
 
 const (
-	PhaseRouted  FaxPhase = "ROUTED"     // enqueued/routed into Queue
-	PhaseAttempt FaxPhase = "ATTEMPTING" // an attempt is in-flight
-	PhaseWaiting FaxPhase = "WAITING"    // backoff between attempts
-	PhaseDone    FaxPhase = "DONE"       // finished (success/fail)
+	PhaseRouted    FaxPhase = "ROUTED"     // enqueued/routed into Queue
+	PhaseAttempt   FaxPhase = "ATTEMPTING" // an attempt is in-flight (outbound)
+	PhaseReceiving FaxPhase = "RECEIVING"  // receiving an inbound fax
+	PhaseBridging  FaxPhase = "BRIDGING"   // bridging/transcoding a call
+	PhaseSending   FaxPhase = "SENDING"    // actively sending fax data
+	PhaseWaiting   FaxPhase = "WAITING"    // backoff between attempts
+	PhaseDone      FaxPhase = "DONE"       // finished (success/fail)
 )
 
 type FaxRunState struct {
@@ -164,6 +168,38 @@ func (t *FaxTracker) MarkWaiting(jobID uuid.UUID) {
 	defer t.mu.Unlock()
 	if st, ok := t.byJob[jobID]; ok {
 		st.Phase = PhaseWaiting
+		st.UpdatedAt = time.Now()
+	}
+}
+
+// MarkReceiving sets the receiving phase for inbound fax reception.
+func (t *FaxTracker) MarkReceiving(jobID uuid.UUID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st, ok := t.byJob[jobID]; ok {
+		st.Phase = PhaseReceiving
+		st.UpdatedAt = time.Now()
+	}
+}
+
+// MarkBridging sets the bridging phase for fax transcoding/bridge calls.
+func (t *FaxTracker) MarkBridging(jobID uuid.UUID, bridgeDirection string, bridgeGateway string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st, ok := t.byJob[jobID]; ok {
+		st.Phase = PhaseBridging
+		st.EndpointLabel = bridgeDirection
+		st.EndpointValue = bridgeGateway
+		st.UpdatedAt = time.Now()
+	}
+}
+
+// MarkSending sets the sending phase when actively transmitting fax data.
+func (t *FaxTracker) MarkSending(jobID uuid.UUID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st, ok := t.byJob[jobID]; ok {
+		st.Phase = PhaseSending
 		st.UpdatedAt = time.Now()
 	}
 }

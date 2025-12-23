@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"gofaxserver/gofaxlib"
 	"io"
 	"math/rand"
@@ -19,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sirupsen/logrus"
 )
@@ -75,6 +76,9 @@ func isGlobalUpstreamGatewayGroup(group []*Endpoint) bool {
 }
 
 func (q *Queue) processFax(f *FaxJob) {
+	// Ensure fax is tracked in the FaxTracker (may already be tracked from inbound)
+	q.server.FaxTracker.Begin(f)
+
 	// Ensure the tracker is marked complete exactly once, on any exit path.
 	var completeOnce sync.Once
 	complete := func(reason string) {

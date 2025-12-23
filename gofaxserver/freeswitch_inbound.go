@@ -437,6 +437,13 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	e.server.FaxTracker.Begin(faxjob)
 
+	// Mark appropriate phase based on call type
+	if enableBridge {
+		e.server.FaxTracker.MarkBridging(faxjob.UUID, bridgeDirection, bridgeGateway)
+	} else {
+		e.server.FaxTracker.MarkReceiving(faxjob.UUID)
+	}
+
 	// --- Result tracking & event loop ----------------------------------------
 	result := gofaxlib.NewFaxResult(channelUUID, e.server.LogManager, enableBridge)
 	es := gofaxlib.NewEventStream(c)
