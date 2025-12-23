@@ -91,12 +91,16 @@ type FaxResult struct {
 	TotalPages       uint   `json:"total_pages,omitempty"`
 	TransferredPages uint   `json:"transferred_pages,omitempty"`
 	Ecm              bool   `json:"ecm,omitempty"`
+	EcmRequested     bool   `json:"ecm_requested,omitempty"` // was ECM requested (vs actually used)
 	RemoteID         string `json:"remote_id,omitempty"`
-	ResultCode       int    `json:"result_code,omitempty"` // SpanDSP, not HylaFAX!
+	LocalID          string `json:"local_id,omitempty"` // local station ID
+	ResultCode       int    `json:"result_code,omitempty"`
 	ResultText       string `json:"result_text,omitempty"`
 	Success          bool   `json:"success"`
 	TransferRate     uint   `json:"transfer_rate,omitempty"`
 	NegotiateCount   uint   `json:"negotiate_count,omitempty"`
+	T38Status        string `json:"t38_status,omitempty"`   // "negotiated", "rejected", etc.
+	V17Disabled      bool   `json:"v17_disabled,omitempty"` // was V.17 disabled
 	bridge           bool
 	PageResults      []PageResult `json:"page_results,omitempty"`
 }
@@ -178,15 +182,34 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 			if ecm := ev.Get("Fax-Ecm-Used"); ecm == "on" {
 				f.Ecm = true
 			}
+			// Capture ECM requested (whether ECM was requested, even if not used)
+			if ecmReq := ev.Get("Variable_fax_ecm_requested"); ecmReq == "1" {
+				f.EcmRequested = true
+			}
 			f.RemoteID = ev.Get("Fax-Remote-Station-Id")
+			f.LocalID = ev.Get("Fax-Local-Station-Id")
+			f.T38Status = ev.Get("Fax-T38-Status")
+			// V17 disabled tracking
+			if v17 := ev.Get("Variable_fax_v17_disabled"); v17 == "1" {
+				f.V17Disabled = true
+			}
 			if rate, err := strconv.Atoi(ev.Get("Fax-Transfer-Rate")); err == nil {
 				f.TransferRate = uint(rate)
 			}
 			f.logManager.SendLog(f.logManager.BuildLog(
 				"FaxResult",
-				"Remote ID: \"%v\", Transfer Rate: %v, ECM=%v",
+				"Negotiation: RemoteID=%q, LocalID=%q, Rate=%v, ECM=%v, T38=%v",
 				logrus.InfoLevel,
-				map[string]interface{}{"uuid": f.UUID.String()}, f.RemoteID, f.TransferRate, f.Ecm))
+				map[string]interface{}{
+					"uuid":          f.UUID.String(),
+					"remote_id":     f.RemoteID,
+					"local_id":      f.LocalID,
+					"transfer_rate": f.TransferRate,
+					"ecm":           f.Ecm,
+					"ecm_requested": f.EcmRequested,
+					"t38_status":    f.T38Status,
+					"v17_disabled":  f.V17Disabled,
+				}, f.RemoteID, f.LocalID, f.TransferRate, f.Ecm, f.T38Status))
 
 		case "spandsp::rxfaxpageresult":
 			action = "received"

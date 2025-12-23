@@ -57,12 +57,16 @@ type FaxJobResult struct {
 	TotalPages       uint       `json:"total_pages"`
 	TransferredPages uint       `json:"transferred_pages"`
 	ECM              bool       `json:"ecm"`
+	EcmRequested     bool       `json:"ecm_requested"` // was ECM requested
 	RemoteID         string     `json:"remote_id"`
+	LocalID          string     `json:"local_id"` // local station ID
 	ResultCode       int        `json:"result_code"`
 	ResultText       string     `json:"result_text"`
 	Success          bool       `json:"success"`
 	TransferRate     uint       `json:"transfer_rate"`
 	NegotiateCount   uint       `json:"negotiate_count"`
+	T38Status        string     `json:"t38_status"`   // "negotiated", "rejected", etc.
+	V17Disabled      bool       `json:"v17_disabled"` // was V.17 disabled
 	PageResults      string     `json:"page_results"`
 
 	// NEW: bridge / transcoding metadata
@@ -203,12 +207,16 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		record.TotalPages = job.Result.TotalPages
 		record.TransferredPages = job.Result.TransferredPages
 		record.ECM = job.Result.Ecm
+		record.EcmRequested = job.Result.EcmRequested
 		record.RemoteID = job.Result.RemoteID
+		record.LocalID = job.Result.LocalID
 		record.ResultCode = job.Result.ResultCode
 		record.ResultText = job.Result.ResultText
 		record.Success = job.Result.Success
 		record.TransferRate = job.Result.TransferRate
 		record.NegotiateCount = job.Result.NegotiateCount
+		record.T38Status = job.Result.T38Status
+		record.V17Disabled = job.Result.V17Disabled
 
 		if pageR, err := json.Marshal(job.Result.PageResults); err == nil {
 			record.PageResults = string(pageR)
