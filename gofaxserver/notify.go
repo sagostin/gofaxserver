@@ -6,8 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/go-pdf/fpdf"
-	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
 	"io"
 	"mime/multipart"
@@ -20,6 +18,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-pdf/fpdf"
+	"github.com/sirupsen/logrus"
 )
 
 type NotifyFaxResults struct {
@@ -362,6 +363,32 @@ func SendEmailWithAttachment(subject, to, body string, attachmentPaths []string)
 func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destinations []NotifyDestination, firstPageTiffPDF string) {
 	var notifyWg sync.WaitGroup
 
+	// Log the start of notify processing with destination summary
+	destTypes := make(map[string]int)
+	for _, d := range destinations {
+		destTypes[d.Type]++
+	}
+	q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+		"Notify",
+		"starting notify dispatch",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"uuid":              nFR.FaxJob.UUID.String(),
+			"destination_count": len(destinations),
+			"destination_types": destTypes,
+		},
+	))
+
+	if len(destinations) == 0 {
+		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+			"Notify",
+			"no notify destinations configured, skipping",
+			logrus.DebugLevel,
+			map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+		))
+		return
+	}
+
 	faxReport, err := nFR.GenerateFaxResultsPDF()
 	if err != nil {
 		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
@@ -394,6 +421,17 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						logrus.ErrorLevel,
 						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
 					))
+				} else {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						"email_report sent successfully",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"uuid":        nFR.FaxJob.UUID.String(),
+							"destination": dest.Destination,
+							"type":        "email_report",
+						},
+					))
 				}
 			case "email_full", "email_full_failure":
 				// Send an email notification with the PDF report attached.
@@ -425,6 +463,17 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
 						logrus.ErrorLevel,
 						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+				} else {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						"email_full sent successfully",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"uuid":        nFR.FaxJob.UUID.String(),
+							"destination": dest.Destination,
+							"type":        dest.Type,
+						},
 					))
 				}
 
@@ -500,7 +549,17 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					} else {
 						resp.Body.Close()
 						if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-							// todo success!
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Notify",
+								"webhook notification sent successfully",
+								logrus.InfoLevel,
+								map[string]interface{}{
+									"uuid":        nFR.FaxJob.UUID.String(),
+									"destination": dest.Destination,
+									"status_code": resp.StatusCode,
+									"type":        "webhook",
+								},
+							))
 						} else {
 							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 								"Notify",
@@ -606,7 +665,19 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						break
 					}
 					resp.Body.Close()
-					if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							"webhook_form notification sent successfully",
+							logrus.InfoLevel,
+							map[string]interface{}{
+								"uuid":        nFR.FaxJob.UUID.String(),
+								"destination": dest.Destination,
+								"status_code": resp.StatusCode,
+								"type":        "webhook_form",
+							},
+						))
+					} else {
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("webhook_form responded with status %d", resp.StatusCode),
@@ -626,6 +697,17 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 	}
 	notifyWg.Wait()
 	os.Remove(faxReport)
+
+	// Log completion of all notify dispatches
+	q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+		"Notify",
+		"notify dispatch completed",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"uuid":              nFR.FaxJob.UUID.String(),
+			"destination_count": len(destinations),
+		},
+	))
 }
 
 func firstPageTiff(uuid, inputPath string) (string, error) {

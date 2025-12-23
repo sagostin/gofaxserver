@@ -30,6 +30,12 @@ type FaxJobResult struct {
 	Endpoints      string    `json:"endpoints"` // JSON-encoded endpoints slice
 	SourceInfo     string    `json:"source_info"`
 
+	// Result classification
+	ResultType    string `json:"result_type"`    // "reception", "bridge", "transmission", "delivery"
+	AttemptNumber int    `json:"attempt_number"` // retry attempt number (1 = first try)
+	EndpointID    uint   `json:"endpoint_id"`    // ID of the endpoint used
+	EndpointType  string `json:"endpoint_type"`  // Type: "gateway", "webhook", etc.
+
 	// FaxJob fields
 	NPages     int           `json:"npages"`
 	DataFormat string        `json:"data_format"`
@@ -42,29 +48,29 @@ type FaxJobResult struct {
 	TotTries   int           `json:"tot_tries"`
 	JobTime    time.Duration `json:"job_time"`
 	ConnTime   time.Duration `json:"conn_time"`
-	Ts         time.Time     `json:"ts"`
+	Ts         *time.Time    `json:"ts"` // pointer to allow NULL
 
 	// FaxResult fields (from job.Result)
-	StartTs          time.Time `json:"start_ts"`
-	EndTs            time.Time `json:"end_ts"`
-	HangupCause      string    `json:"hangup_cause"`
-	TotalPages       uint      `json:"total_pages"`
-	TransferredPages uint      `json:"transferred_pages"`
-	ECM              bool      `json:"ecm"`
-	RemoteID         string    `json:"remote_id"`
-	ResultCode       int       `json:"result_code"`
-	ResultText       string    `json:"result_text"`
-	Success          bool      `json:"success"`
-	TransferRate     uint      `json:"transfer_rate"`
-	NegotiateCount   uint      `json:"negotiate_count"`
-	PageResults      string    `json:"page_results"`
+	StartTs          *time.Time `json:"start_ts"` // pointer to allow NULL
+	EndTs            *time.Time `json:"end_ts"`   // pointer to allow NULL
+	HangupCause      string     `json:"hangup_cause"`
+	TotalPages       uint       `json:"total_pages"`
+	TransferredPages uint       `json:"transferred_pages"`
+	ECM              bool       `json:"ecm"`
+	RemoteID         string     `json:"remote_id"`
+	ResultCode       int        `json:"result_code"`
+	ResultText       string     `json:"result_text"`
+	Success          bool       `json:"success"`
+	TransferRate     uint       `json:"transfer_rate"`
+	NegotiateCount   uint       `json:"negotiate_count"`
+	PageResults      string     `json:"page_results"`
 
 	// NEW: bridge / transcoding metadata
 	IsBridge        bool          `json:"is_bridge"`
 	BridgeDirection string        `json:"bridge_direction"` // "pbx_to_upstream" / "upstream_to_pbx"
 	BridgeGateway   string        `json:"bridge_gateway"`
-	BridgeStartTs   time.Time     `json:"bridge_start_ts"`
-	BridgeEndTs     time.Time     `json:"bridge_end_ts"`
+	BridgeStartTs   *time.Time    `json:"bridge_start_ts"` // pointer to allow NULL
+	BridgeEndTs     *time.Time    `json:"bridge_end_ts"`   // pointer to allow NULL
 	BridgeDuration  time.Duration `json:"bridge_duration"`
 	BridgeT38       bool          `json:"bridge_t38"` // was T.38 gateway actually enabled?
 	SoftmodemSrc    bool          `json:"softmodem_src"`
@@ -75,6 +81,14 @@ type FaxJobResult struct {
 	SoftmodemFallback bool `json:"softmodem_fallback"` // was softmodem fallback override active
 
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// timePtr returns a pointer to the time, or nil if it's the zero value.
+func timePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
@@ -88,6 +102,38 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 	if len(job.Endpoints) > 0 {
 		if data, err := json.Marshal(job.Endpoints); err == nil {
 			endpointsJSON = string(data)
+		}
+	}
+
+	// Infer result type and extract endpoint metadata
+	resultType := "reception" // default: receiving a fax
+	var endpointID uint
+	var endpointType string
+	attemptNumber := 1
+
+	if job.IsBridge {
+		resultType = "bridge"
+	} else if len(job.Endpoints) > 0 {
+		ep := job.Endpoints[0]
+		endpointID = ep.ID
+		endpointType = ep.EndpointType
+
+		switch ep.EndpointType {
+		case "gateway":
+			// Outbound transmission to a gateway (e.g., sending to PBX or upstream)
+			resultType = "transmission"
+		case "webhook":
+			// Delivery attempt (webhook notification)
+			resultType = "delivery"
+		default:
+			resultType = "delivery"
+		}
+
+		// For delivery attempts, track attempt number via TotDials or TotTries
+		if job.TotDials > 0 {
+			attemptNumber = job.TotDials
+		} else if job.TotTries > 0 {
+			attemptNumber = job.TotTries
 		}
 	}
 
@@ -106,6 +152,12 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		Header:         job.Header,
 		Endpoints:      endpointsJSON,
 
+		// Result classification
+		ResultType:    resultType,
+		AttemptNumber: attemptNumber,
+		EndpointID:    endpointID,
+		EndpointType:  endpointType,
+
 		NPages:     job.NPages,
 		DataFormat: job.DataFormat,
 		SignalRate: job.SignalRate,
@@ -117,14 +169,14 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		TotTries:   job.TotTries,
 		JobTime:    job.JobTime,
 		ConnTime:   job.ConnTime,
-		Ts:         job.Ts,
+		Ts:         timePtr(job.Ts),
 
 		// bridge metadata – will be non-zero for transcoded calls
 		IsBridge:        job.IsBridge,
 		BridgeDirection: job.BridgeDirection,
 		BridgeGateway:   job.BridgeGateway,
-		BridgeStartTs:   job.BridgeStartTs,
-		BridgeEndTs:     job.BridgeEndTs,
+		BridgeStartTs:   timePtr(job.BridgeStartTs),
+		BridgeEndTs:     timePtr(job.BridgeEndTs),
 		BridgeDuration:  job.BridgeEndTs.Sub(job.BridgeStartTs),
 		BridgeT38:       job.BridgeT38,
 		SoftmodemSrc:    job.SoftmodemSrc,
@@ -145,8 +197,8 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 
 	// If a FaxResult exists, fill in its fields. For bridged calls it may be nil.
 	if job.Result != nil {
-		record.StartTs = job.Result.StartTs
-		record.EndTs = job.Result.EndTs
+		record.StartTs = timePtr(job.Result.StartTs)
+		record.EndTs = timePtr(job.Result.EndTs)
 		record.HangupCause = job.Result.HangupCause
 		record.TotalPages = job.Result.TotalPages
 		record.TransferredPages = job.Result.TransferredPages
@@ -160,6 +212,21 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 
 		if pageR, err := json.Marshal(job.Result.PageResults); err == nil {
 			record.PageResults = string(pageR)
+		}
+	}
+
+	// For bridge calls, infer success from hangup cause if SpanDSP didn't report
+	if job.IsBridge && !record.Success {
+		hangup := record.HangupCause
+		if hangup == "" && job.Result != nil {
+			hangup = job.Result.HangupCause
+		}
+		// NORMAL_CLEARING indicates successful call completion
+		if hangup == "NORMAL_CLEARING" {
+			record.Success = true
+			if record.ResultText == "" {
+				record.ResultText = "Bridge completed"
+			}
 		}
 	}
 
