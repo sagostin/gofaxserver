@@ -2,8 +2,9 @@ package gofaxserver
 
 import (
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Tenant struct {
@@ -227,6 +228,30 @@ func (s *Server) getEndpointsForNumber(number string) ([]*Endpoint, error) {
 	}
 
 	return nil, fmt.Errorf("no valid endpoints found for number %s", number)
+}
+
+// getEndpointsForBridge returns endpoints for bridge detection, INCLUDING priority 666 endpoints.
+// Priority 666 means "don't deliver inbound faxes here" but the endpoint should still be usable
+// as a SOURCE gateway for outbound bridge calls to upstream or other bridge-enabled destinations.
+func (s *Server) getEndpointsForBridge(number string) ([]*Endpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// First check for endpoints tied to the specific number (no priority 666 filtering).
+	if eps, exists := s.NumberEndpoints[number]; exists && len(eps) > 0 {
+		return eps, nil
+	}
+
+	// If no number-specific endpoints, get the tenant endpoints.
+	tn, exists := s.TenantNumbers[number]
+	if !exists {
+		return nil, fmt.Errorf("number %s not found", number)
+	}
+	if eps, exists := s.TenantEndpoints[tn.TenantID]; exists && len(eps) > 0 {
+		return eps, nil
+	}
+
+	return nil, fmt.Errorf("no endpoints found for number %s", number)
 }
 
 // AddTenantUser adds a new tenant user to the database after encrypting the password.

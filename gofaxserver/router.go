@@ -3,9 +3,10 @@ package gofaxserver
 import (
 	"errors"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Router struct {
@@ -296,16 +297,16 @@ func (r *Router) detectAndRouteToBridge(dstNumber string, srcNumber string, srcG
 }
 
 func (s *Server) checkForBridge(numberToCheck string) (string, bool, error) {
-	epList, err := s.getEndpointsForNumber(numberToCheck)
-	//logrus.Printf("epList: %v", epList)
+	// Use getEndpointsForBridge which INCLUDES priority 666 endpoints.
+	// Priority 666 means "don't deliver inbound faxes here" but the endpoint
+	// can still be used as a SOURCE for outbound bridge calls.
+	epList, err := s.getEndpointsForBridge(numberToCheck)
 	if err != nil {
 		return "", false, err
 	}
 	for _, endpoint := range epList {
-		//logrus.Printf("endpoint: %v", endpoint)
 		if endpoint.Bridge && endpoint.EndpointType == "gateway" {
 			epParts := strings.Split(endpoint.Endpoint, ":")
-			//logrus.Printf("endpoint 2: %v", epParts[0])
 			return epParts[0], true, nil
 		}
 	}
