@@ -297,10 +297,10 @@ func (r *Router) detectAndRouteToBridge(dstNumber string, srcNumber string, srcG
 }
 
 func (s *Server) checkForBridge(numberToCheck string) (string, bool, error) {
-	// Use getEndpointsForBridge which INCLUDES priority 666 endpoints.
-	// Priority 666 means "don't deliver inbound faxes here" but the endpoint
-	// can still be used as a SOURCE for outbound bridge calls.
-	epList, err := s.getEndpointsForBridge(numberToCheck)
+	// Use getEndpointsForNumber which EXCLUDES priority 666 endpoints.
+	// Priority 666 means the endpoint should NOT receive inbound faxes/bridge calls.
+	// Source detection for outbound is handled separately via getEndpointByName.
+	epList, err := s.getEndpointsForNumber(numberToCheck)
 	if err != nil {
 		return "", false, err
 	}
