@@ -13,3 +13,4 @@ packaging/*.changes
 packaging/*.deb
 .vscode
 .env
+backups/
