@@ -113,7 +113,7 @@ Old backups are automatically pruned each time a backup runs:
 | .env snapshots | 90 days | `BACKUP_KEEP_DAYS` |
 | FreeSWITCH (`.tar.gz`) | 30 days | `BACKUP_KEEP_DAYS` |
 
----
+-- -
 
 ## 5. Restore Procedures
 
