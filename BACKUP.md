@@ -2,13 +2,14 @@
 
 ## Overview
 
-The `scripts/` directory contains five backup scripts:
+The `scripts/` directory contains six backup scripts:
 
 | Script | Purpose |
 |---|---|
 | `backup-db.sh` | Dump PostgreSQL database (gzipped) |
 | `backup-env.sh` | Snapshot `.env` file |
 | `backup-freeswitch.sh` | Archive `/etc/freeswitch` (tarball) |
+| `backup-gofaxserver-config.sh` | Snapshot `/etc/gofaxserver/config.json` |
 | `backup-ftp-upload.sh` | Upload backup files to an FTP server |
 | `backup-all.sh` | Runs all of the above in sequence |
 
@@ -50,6 +51,7 @@ sudo ./scripts/backup-all.sh
 ./scripts/backup-db.sh                    # database only
 ./scripts/backup-env.sh                   # .env only
 sudo ./scripts/backup-freeswitch.sh       # freeswitch only (needs root)
+sudo ./scripts/backup-gofaxserver-config.sh  # gofaxserver config only (needs root)
 ```
 
 ### Custom backup directory
@@ -112,6 +114,7 @@ Old backups are automatically pruned each time a backup runs:
 | Database (`.sql.gz`) | 30 days | `BACKUP_KEEP_DAYS` |
 | .env snapshots | 90 days | `BACKUP_KEEP_DAYS` |
 | FreeSWITCH (`.tar.gz`) | 30 days | `BACKUP_KEEP_DAYS` |
+| GoFaxServer config (`config.json`) | 30 days | `BACKUP_KEEP_DAYS` |
 
 -- -
 
@@ -181,6 +184,17 @@ sudo tar xzf ./backups/freeswitch/freeswitch_20260317_030000.tar.gz -C /etc/
 sudo systemctl restart freeswitch
 ```
 
+### 5d. Restore GoFaxServer Configuration
+
+```bash
+# List available snapshots
+ls -lh ./backups/gofaxserver-config/
+
+# Restore (overwrites current /etc/gofaxserver/config.json)
+sudo cp ./backups/gofaxserver-config/config_20260317_030000.json /etc/gofaxserver/config.json
+sudo chmod 600 /etc/gofaxserver/config.json
+```
+
 ---
 
 ## 6. Downloading Backups from FTP
@@ -209,4 +223,5 @@ curl -u backupuser:backuppassword \
 | Restore DB (Docker) | `gunzip -c backup.sql.gz \| docker exec -i postgres psql -U fax -d fax` |
 | Restore .env | `cp ./backups/env/.env_TIMESTAMP ./.env` |
 | Restore FreeSWITCH | `sudo tar xzf backup.tar.gz -C /etc/` |
+| Restore GoFaxServer config | `sudo cp ./backups/gofaxserver-config/config_TIMESTAMP /etc/gofaxserver/config.json` |
 | Check backups | `ls -lhR ./backups/` |

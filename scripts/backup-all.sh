@@ -21,7 +21,7 @@ echo ""
 
 FAILED=0
 
-echo "── [1/3] PostgreSQL database ──"
+echo "── [1/4] PostgreSQL database ──"
 if "$SCRIPT_DIR/backup-db.sh" "$BACKUP_ROOT/db"; then
   echo ""
 else
@@ -30,7 +30,7 @@ else
   echo ""
 fi
 
-echo "── [2/3] Environment file (.env) ──"
+echo "── [2/4] Environment file (.env) ──"
 if "$SCRIPT_DIR/backup-env.sh" "$BACKUP_ROOT/env"; then
   echo ""
 else
@@ -39,7 +39,7 @@ else
   echo ""
 fi
 
-echo "── [3/3] FreeSWITCH configs ──"
+echo "── [3/4] FreeSWITCH configs ──"
 if "$SCRIPT_DIR/backup-freeswitch.sh" "$BACKUP_ROOT/freeswitch"; then
   echo ""
 else
@@ -48,9 +48,18 @@ else
   echo ""
 fi
 
+echo "── [4/4] GoFaxServer config ──"
+if "$SCRIPT_DIR/backup-gofaxserver-config.sh" "$BACKUP_ROOT/gofaxserver-config"; then
+  echo ""
+else
+  echo "WARNING: GoFaxServer config backup failed!" >&2
+  FAILED=$((FAILED + 1))
+  echo ""
+fi
+
 # ── FTP Upload (optional) ──────────────────────────────────
 echo "── [FTP] Uploading backups ──"
-for SUBDIR in db env freeswitch; do
+for SUBDIR in db env freeswitch gofaxserver-config; do
   DIR="$BACKUP_ROOT/$SUBDIR"
   [[ -d "$DIR" ]] || continue
   if "$SCRIPT_DIR/backup-ftp-upload.sh" "$DIR" "$SUBDIR"; then
