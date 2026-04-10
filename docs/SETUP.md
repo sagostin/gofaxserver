@@ -249,6 +249,26 @@ activate-tbcustomerconfig
 
 ---
 
+## Python TUI (Optional)
+
+For an interactive terminal-based setup wizard, use the Python TUI script:
+
+```bash
+# Install dependencies
+pip install prompt_toolkit requests
+
+# Set environment variables
+export FAX_API_URL=http://<FAX_SERVER>:8080
+export FAX_API_KEY=<your_api_key>
+
+# Run the TUI
+python scripts/setup-tenant-tui.py
+```
+
+The TUI provides a step-by-step wizard for creating tenants, endpoints, and numbers. FreeSWITCH gateway configuration must still be done manually.
+
+---
+
 ## Related Documentation
 
 - [TENANTS.md](TENANTS.md) - Detailed tenant modes and configuration
