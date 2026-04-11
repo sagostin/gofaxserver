@@ -150,9 +150,17 @@ For transcoded/bridged calls, this field is generally **not used**.
 
 ## Step 7: Add Endpoint
 
-Endpoint format: `<GATEWAY_XML_NAME>:<PBX_IP>`
+Endpoint format for gateways: `<GATEWAY_XML_NAME>:<PBX_IP>`
 
-### Relay Mode
+### Endpoint Types
+
+| Type | Description | Endpoint Format |
+|------|-------------|-----------------|
+| `gateway` | SIP gateway to PBX | `xml_name:ip` |
+| `webhook` | HTTP POST delivery | Full URL (e.g., `https://...`) |
+| `email` | Email delivery | Email address |
+
+### Gateway Endpoint (Relay Mode)
 
 ```bash
 curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
@@ -167,7 +175,7 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
   }'
 ```
 
-### Transcoding/Bridge Mode (Recommended for New Customers)
+### Gateway Endpoint (Transcoding/Bridge Mode - Recommended for New Customers)
 
 ```bash
 curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
@@ -184,6 +192,92 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
 ```
 
 The `bridge: true` flag enables T.38/G.711 transcoding for this endpoint.
+
+### Webhook Endpoint
+
+For HTTP-based fax delivery:
+
+```bash
+curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "tenant",
+    "type_id": <TENANT_ID>,
+    "endpoint_type": "webhook",
+    "endpoint": "https://your-webhook-server.com/fax/receive",
+    "priority": 0
+  }'
+```
+
+### Email Endpoint
+
+For email-based fax delivery:
+
+```bash
+curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "tenant",
+    "type_id": <TENANT_ID>,
+    "endpoint_type": "email",
+    "endpoint": "fax@destination.com",
+    "priority": 0
+  }'
+```
+
+### Priority Method
+
+The `priority` field controls failover behavior:
+
+| Priority Value | Behavior |
+|----------------|----------|
+| `0` | Highest priority (primary endpoint) |
+| `1+` | Lower priority (failover endpoints) |
+| `666` | Special value - endpoint does not receive inbound faxes |
+
+**How priority works:**
+- Lower numbers = higher preference
+- If the primary endpoint (priority 0) fails, the system attempts the next highest priority
+- Priority 666 is used for source gateways in outbound-only bridge scenarios
+
+**Example - Gateway with Failover:**
+```bash
+# Primary gateway
+curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "tenant",
+    "type_id": <TENANT_ID>,
+    "endpoint_type": "gateway",
+    "endpoint": "pbx_primary:192.168.1.10",
+    "priority": 0
+  }'
+
+# Failover gateway
+curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "tenant",
+    "type_id": <TENANT_ID>,
+    "endpoint_type": "gateway",
+    "endpoint": "pbx_secondary:192.168.1.11",
+    "priority": 1
+  }'
+```
+
+### Endpoint Scope
+
+Endpoints can be scoped at different levels:
+
+| Type | Description |
+|------|-------------|
+| `tenant` | Applies to all numbers in the tenant |
+| `number` | Applies to a specific number only (takes precedence over tenant) |
+| `global` | Fallback for all tenants when no tenant/number endpoint exists |
 
 ---
 
