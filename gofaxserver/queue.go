@@ -669,6 +669,16 @@ func (q *Queue) processFax(f *FaxJob) {
 	}
 	wg.Wait()
 
+	// Determine if all attempts failed by checking results map
+	allAttemptsFailed := true
+	for _, attempt := range notifyFaxResults.Results {
+		if attempt.Result != nil && attempt.Result.Success {
+			allAttemptsFailed = false
+			break
+		}
+	}
+	notifyFaxResults.AllAttemptsFailed = allAttemptsFailed
+
 	// ----------------- Build first-page preview & notify destinations
 	defer func(path string) {
 		if err := os.Remove(path); err != nil {

@@ -24,8 +24,9 @@ import (
 )
 
 type NotifyFaxResults struct {
-	Results map[string]*FaxJob `json:"results,omitempty"`
-	FaxJob  *FaxJob            `json:"fax_job,omitempty"`
+	Results           map[string]*FaxJob `json:"results,omitempty"`
+	FaxJob            *FaxJob            `json:"fax_job,omitempty"`
+	AllAttemptsFailed bool               `json:"all_attempts_failed,omitempty"`
 }
 
 type NotifyDestination struct {
@@ -434,12 +435,14 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					))
 				}
 			case "email_full", "email_full_failure":
-				// Send an email notification with the PDF report attached.
-				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
-
-				// if the type is only for failures then
 				if dest.Type == "email_full_failure" {
-					if nFR.FaxJob.Result.Success {
+					if !nFR.AllAttemptsFailed {
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							"skipping email_full_failure: not all attempts failed",
+							logrus.InfoLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						))
 						break
 					}
 				}
