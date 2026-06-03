@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 func (lm *LogManager) LoadTemplates() {
@@ -110,7 +111,7 @@ func (c *LokiClient) PushLog(labels map[string]string, entry LogEntry) error {
 		req.SetBasicAuth(c.Username, c.Password)
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request to Loki: %w", err)
@@ -129,7 +130,7 @@ func NewLogManager(lokiClient *LokiClient) *LogManager {
 	lm := &LogManager{
 		Templates:  make(map[string]string),
 		LokiClient: lokiClient,
-		LogChannel: make(chan *LoggingFormat),
+		LogChannel: make(chan *LoggingFormat, 512),
 	}
 	lm.wg.Add(1)
 	go lm.processLogChannel()
@@ -170,10 +171,13 @@ func (lm *LogManager) formatTemplate(templateName string, args ...interface{}) s
 	return fmt.Sprintf(template, args...)
 }
 
-// SendLog sends a log to Loki asynchronously via the log channel.
 func (lm *LogManager) SendLog(log *LoggingFormat) {
 	log.Print()
-	lm.LogChannel <- log
+	select {
+	case lm.LogChannel <- log:
+	default:
+		logrus.Warn("log channel full, dropping log")
+	}
 }
 
 // processLogChannel processes logs from the channel and sends them to Loki.
