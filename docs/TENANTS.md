@@ -13,7 +13,7 @@ Represents a customer organization.
 type Tenant struct {
     ID      uint           `gorm:"primaryKey" json:"id"`
     Name    string         `json:"name"`
-    Notify  string         `json:"notify"` // email_report->...,webhook_form->...,etc.
+    Notify  string         `json:"notify"` // notify list, comma-separated: type->dest,type->dest
     Numbers []TenantNumber `gorm:"foreignKey:TenantID" json:"numbers"`
 }
 ```
@@ -23,39 +23,41 @@ type Tenant struct {
 A phone number assigned to a tenant.
 
 ```go
-// gofaxserver/tenants.go:22-28
+// gofaxserver/tenants.go:26-33
 type TenantNumber struct {
     ID       uint   `gorm:"primaryKey" json:"id"`
     TenantID uint   `gorm:"index;not null" json:"tenant_id"`
-    Number   string `gorm:"unique;not null" json:"number"`
+    Number   string `gorm:"unique;not null" json:"number"` // 10 digits or whatever format matches the dialplan transforms
     Name     string `json:"name"`     // Caller ID name
     Header   string `json:"header"`   // Fax header displayed at top
-    Notify   string `json:"notify"`   // Per-number notification settings
+    Notify   string `json:"notify"`   // Per-number override; falls back to tenant-level if empty
 }
 ```
 
 ### Endpoint
 
-Connection point for fax routing.
+A connection point for fax routing.
 
 ```go
-// gofaxserver/endpoints.go
+// gofaxserver/endpoints.go:23-31
 type Endpoint struct {
-    ID            uint   `gorm:"primaryKey" json:"id"`
-    Type          string `json:"type"`           // "tenant", "number", "global"
-    TypeID        uint   `json:"type_id"`        // TenantID or TenantNumber ID
-    EndpointType  string `json:"endpoint_type"`  // "gateway", "webhook", "email"
-    Endpoint      string `json:"endpoint"`       // "xml_name:ip" or URL
-    Priority      uint   `json:"priority"`       // Lower = higher priority
-    Bridge        bool   `json:"bridge"`         // Enable transcoding
+    ID           uint   `gorm:"primaryKey" json:"id"`
+    Type         string `json:"type"`          // "tenant", "number", or "global"
+    TypeID       uint   `json:"type_id"`       // Tenant ID, TenantNumber ID, or 0
+    EndpointType string `json:"endpoint_type"` // "gateway", "webhook", "email"
+    Endpoint     string `json:"endpoint"`      // gateway: "xml_name:publicIP"; webhook: URL; email: addr
+    Priority     uint   `json:"priority"`      // Lower = higher priority
+    Bridge       bool   `json:"bridge"`        // Enable T.38/G.711 transcoding
 }
 ```
 
-**Endpoint type values:**
-- `type`: `"tenant"` | `"number"` | `"global"`
-- `endpoint_type`: `"gateway"` | `"webhook"` | `"email"`
+**Type values:**
+- `type` ∈ `{tenant, number, global}`
+- `endpoint_type` ∈ `{gateway, webhook, email}`
 
-**Priority 666**: Special value meaning "do not receive inbound faxes". Used for source gateways in outbound bridge scenarios.
+**Priority 666** — special value meaning "do not receive inbound faxes". The endpoint is filtered out of `getEndpointsForNumber` (inbound delivery) but is still present in `getEndpointsForBridge` for use as a source gateway in outbound bridge calls.
+
+**Priority 999** — reserved for the implicit upstream-fallback group the Router synthesizes when no tenant/number endpoint matches (see [Architecture](ARCHITECTURE.md)).
 
 ---
 
@@ -83,7 +85,7 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
   }'
 ```
 
-**Router behavior** (`gofaxserver/router.go:65-85`):
+**Router behavior** (`gofaxserver/router.go:31-231`):
 - Incoming fax from upstream → lookup endpoint for destination number
 - Endpoint found → queue fax directly to that gateway
 - No transcoding occurs
@@ -114,10 +116,10 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
   }'
 ```
 
-**Router behavior** (`gofaxserver/router.go:130-175`):
-- Detects if call came from upstream via `UpstreamFsGateways` list
-- If `bridge: true` endpoint found, initiates T.38/G.711 conversion
-- Falls back to G.711 softmodem if T.38 negotiation fails
+**Router/bridge behavior** (`gofaxserver/router.go:250-313` and `freeswitch_inbound.go:217-313`):
+- `detectAndRouteToBridge` returns `(bridgeGateway, true)` when the call came from an upstream gateway AND the destination has a bridge-enabled tenant/number endpoint.
+- The inbound leg is bridged to the destination gateway with `t38_gateway self nocng` on either side, transparently transcoding between T.38 and G.711.
+- Falls back to G.711 softmodem if T.38 negotiation fails (per-pair flip-flop and per-number softmodem fallback flag).
 
 ---
 
@@ -125,16 +127,14 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
 
 The system implements intelligent T.38 flip-flop:
 
-1. **Upstream gateways only** - T.38 enabled only for calls to/from carriers
-2. **Flip-flop retry** - First call to number pair uses T.38; retry within 15 minutes uses G.711
-3. **Softmodem fallback** - Numbers with repeated T.38 failures automatically switch to G.711
-4. **Local endpoints** - Calls to/from tenant gateways always use G.711
+1. **Upstream gateways only** — T.38 enabled only for calls to/from carriers (`isUpstreamGateway` check in `freeswitch_inbound.go:317-340`).
+2. **Flip-flop retry** — First call to a number pair (no recent state within TTL) defaults to T.38 allowed; on a retry within the 15-minute TTL, T.38 is flipped to disabled. Implementation: `ShouldAllowT38ForPair` (`server.go:50-64`) returns `true` if no recent state, else `!LastUsedT38`.
+3. **Softmodem fallback** — Numbers with the fallback flag in FreeSWITCH `mod_db` (realm `fallback`) force T.38 off for that side of the call.
+4. **Local endpoints** — Calls to/from tenant gateways always use G.711.
 
 ```go
-// gofaxserver/server.go:47-61
-const (
-    T38PairTTL = 15 * time.Minute
-)
+// gofaxserver/server.go:42-45
+const T38PairTTL = 15 * time.Minute
 ```
 
 ---
@@ -160,7 +160,7 @@ Lower priority number = higher preference. If primary fails, secondary is tried.
 
 ## Number-Specific Endpoints
 
-Endpoints can be assigned directly to a number (not just tenant-level):
+Endpoints can be assigned directly to a number (not just tenant-level). `type_id` is the `TenantNumber.ID` (DB primary key, **not** the phone-number string):
 
 ```bash
 curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
@@ -174,13 +174,13 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
   }'
 ```
 
-Number-specific endpoints take precedence over tenant endpoints.
+Number-specific endpoints take precedence over tenant endpoints (`tenants.go:196-231` — number scope is checked first).
 
 ---
 
-## Global Endpoints
+## Global Upstream Endpoints
 
-For upstream carrier gateways used by all tenants:
+Upstream carrier gateways shared by all tenants. Registered with `type=global, type_id=0` via the same `/admin/endpoint` API:
 
 ```bash
 curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
@@ -189,18 +189,20 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
     "type": "global",
     "type_id": 0,
     "endpoint_type": "gateway",
-    "endpoint": "upstream_carrier",
-    "priority": 999
+    "endpoint": "upstream_carrier:198.51.100.10",
+    "priority": 0
   }'
 ```
 
-These are fallback endpoints when no tenant/number-specific endpoint exists.
+Global gateway endpoints are loaded into `Server.UpstreamFsGateways` and used as a fan-out fallback when no tenant/number endpoint matches. The Queue treats them as a single aggregated group with `isGlobalUpstreamGatewayGroup` detection — see `queue.go:64-76, 275-364`.
+
+> **Why `endpoint` includes the IP even for upstream?** gofaxserver's `fsGatewayACL` matches inbound source IP against the `Endpoint` value, so the `xml_name:publicIP` format is required for inbound ACL to pass.
 
 ---
 
 ## Notification Configuration
 
-The notify field specifies destinations for failed fax notifications. Multiple destinations can be configured, separated by commas.
+The `notify` field on a tenant and on each tenant number specifies destinations for fax completion notifications. The field is parsed by `gofaxserver/notify.go:parseNotifyString` (split on commas → split on `->`).
 
 ### Notify Field Format
 
@@ -220,22 +222,26 @@ email_report->support@customer.com,webhook_form->https://n8n.example.com/webhook
 | `email_report->` | Email with PDF report only | Fax result report (attempts, status, timestamps) |
 | `email_full->` | Email with report + original fax | PDF report + original fax TIFF file attached |
 | `email_full_failure->` | Like `email_full` but only on failure | Only sent when fax fails; original fax included |
-| `webhook->` | HTTP POST with JSON payload | Base64-encoded PDF report + fax data as JSON |
+| `webhook->` | HTTP POST with JSON payload | Base64-encoded PDF report + fax job data as JSON |
 | `webhook_form->` | Multipart form POST | First page PDF attached to form data |
 
 **Notes:**
-- `email_report` sends a PDF report with attempt history but no fax attachment
-- `email_full` includes the actual fax TIFF file as an attachment (large)
-- `email_full_failure` is like `email_full` but only triggers on failed faxes
-- `webhook` sends a JSON POST with base64-encoded PDF report and fax job data
-- `webhook_form` sends a multipart form POST with the first page of the fax as a PDF attachment (useful for n8n workflows)
+- `email_report` sends a PDF report with attempt history but no fax attachment.
+- `email_full` includes the actual fax TIFF file as an attachment (large).
+- `email_full_failure` is like `email_full` but only triggers on failed faxes (`all_attempts_failed == true`).
+- `webhook` sends a JSON POST with base64-encoded PDF report and fax job data.
+- `webhook_form` sends a multipart form POST with the first page of the fax as a PDF attachment (useful for n8n workflows).
+- Unknown types (e.g. a bare `email->` per the inline comment in `tenants.go:13`) are logged and dropped — only the documented types above are dispatched.
 
 ### Multiple Recipients
 
-Separate multiple email addresses with semicolons:
+Multiple email addresses for the **same** notification type are separated by `;` — only valid for `email_*` types (the SMTP layer splits on `;` at `notify.go:304-307`):
+
 ```
 email_report->addr1@customer.com;addr2@customer.com
 ```
+
+Multiple webhooks require separate `webhook->` entries, comma-separated.
 
 ### Tenant-Level Notifications
 
@@ -266,21 +272,18 @@ curl -X PUT http://<FAX_SERVER>:8080/admin/number/<ID> \
 
 ### Notification Processing
 
-Notifications are processed asynchronously after fax completion:
+Notifications are processed asynchronously after fax completion. Number-level `notify` takes precedence over tenant-level; an empty number-level falls back to the tenant's `notify`.
 
 ```go
-// gofaxserver/notify.go:152-205
+// gofaxserver/notify.go:153-206
 func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error)
 ```
-
-Priority: Number-level notify > Tenant-level notify
-
-If a number has an empty notify field, it falls back to the tenant's notify settings.
 
 ---
 
 ## Related Documentation
 
-- [SETUP.md](SETUP.md) - Step-by-step setup procedure
-- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture
-- [API_REFERENCE.md](API_REFERENCE.md) - Full API documentation
+- [SETUP.md](SETUP.md) — Step-by-step setup procedure
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
+- [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation
+- [GATEWAYS.md](GATEWAYS.md) — FreeSWITCH gateway configuration

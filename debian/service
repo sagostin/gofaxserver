@@ -1,13 +1,24 @@
 [Unit]
-Description=GOfax.IP Fax over IP Bridge
-After=network.target local-fs.target
+Description=gofaxserver - Multi-tenant Fax over IP server
+Documentation=https://github.com/sagostin/gofaxserver
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
-User=uucp
-ExecStart=/usr/bin/gofaxd
-BindPaths=/etc/hylafax:/var/spool/hylafax/etc
-WorkingDirectory=/var/spool/hylafax
-Restart=always
+Type=simple
+User=gofax
+Group=gofax
+ExecStart=/usr/bin/gofaxserver -c /etc/gofaxserver/config.json
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/gofaxserver /tmp
 
 [Install]
 WantedBy=multi-user.target

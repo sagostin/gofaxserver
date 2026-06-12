@@ -5,7 +5,7 @@ include /usr/share/dpkg/pkg-info.mk
 	dh $@ --buildsystem=golang --with=golang --with=systemd
 
 override_dh_auto_build:
-	dh_auto_build -- -ldflags "-X main.version=$(DEB_VERSION_EPOCH_UPSTREAM)"
+	dh_auto_build -- -ldflags "-X main.version=$(DEB_VERSION_UPSTREAM)"
 
 override_dh_auto_install:
 	dh_auto_install -- --no-source
@@ -14,3 +14,7 @@ override_dh_installinit:
 	dh_installinit --noscripts
 
 override_dh_auto_test:
+
+# Create the gofax system user/group on package install
+override_dh_installsystemd:
+	dh_installsystemd --name=gofaxserver

@@ -1,20 +1,26 @@
 # FreeSWITCH Gateway Configuration
 
-This document details the configuration of FreeSWITCH gateways for connecting customer PBXes to the fax relay system.
+This document details FreeSWITCH gateway configuration for connecting customer PBXes and upstream carriers to gofaxserver. It also covers the matching `gofaxserver` endpoint entries.
 
 ## Gateway Files
 
-Gateway configuration files are stored in:
+Gateway XML configuration files are stored in:
 ```
 /etc/freeswitch/gateways/
 ```
 
-Template files are available in:
+Templates are available in:
 ```
 gofaxserver/examples/freeswitch/gateways/
 ```
 
-## Gateway Template
+The `fax` Sofia profile (`examples/freeswitch/autoload_configs/sofia.conf.xml`) loads everything in that directory via:
+
+```xml
+<X-PRE-PROCESS cmd="include" data="../gateways/*.xml"/>
+```
+
+## Gateway Templates
 
 ### PBX Gateway (Customer Connection)
 
@@ -31,7 +37,7 @@ gofaxserver/examples/freeswitch/gateways/
 </include>
 ```
 
-### SBC Gateway (Carrier/Upstream Connection)
+### SBC / Upstream Gateway (Carrier Connection)
 
 ```xml
 <!-- gofaxserver/examples/freeswitch/gateways/sbc_example.xml -->
@@ -46,6 +52,8 @@ gofaxserver/examples/freeswitch/gateways/
     </gateway>
 </include>
 ```
+
+SBC templates set `extension-in-contact=true` and `ignore-early-media=true` — both of which the gofaxserver routing code relies on (see [TENANTS.md](TENANTS.md) for T.38 logic).
 
 ## Gateway Parameters
 
@@ -64,7 +72,9 @@ gofaxserver/examples/freeswitch/gateways/
 ### 1. Copy the Template
 
 ```bash
-cp /etc/freeswitch/gateways/pbx_example.xml /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
+cp examples/freeswitch/gateways/pbx_example.xml /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
+# or for an upstream carrier:
+cp examples/freeswitch/gateways/sbc_example.xml /etc/freeswitch/gateways/sbc_<CARRIERNAME>.xml
 ```
 
 ### 2. Edit the Gateway File
@@ -79,7 +89,7 @@ Update the following:
 
 ### 3. Load the Gateway
 
-In FreeSwitch CLI (`fs_cli`):
+In FreeSWITCH CLI (`fs_cli`):
 
 ```bash
 sofia profile fax rescan
@@ -91,12 +101,12 @@ sofia profile fax rescan
 sofia status gateway pbx_<CUSTOMERNAME>
 ```
 
-## FreeSwitch CLI Commands
+## FreeSWITCH CLI Commands
 
 ### General
 
 ```bash
-# Enter FreeSwitch CLI
+# Enter FreeSWITCH CLI
 fs_cli
 
 # Exit
@@ -136,11 +146,11 @@ sofia/killgw fax pbx_<NAME>
 
 The gateway name in the XML file (`name="pbx_<CUSTOMERNAME>"`) must match:
 1. The filename sans `.xml` extension
-2. The prefix used in the endpoint configuration API call
+2. The prefix used in the `/admin/endpoint` API call
 
 For example, if gateway file is `pbx_acme.xml` with `name="pbx_acme"`:
 - API endpoint value: `pbx_acme:<PBX_IP>`
-- This maps the gateway to a specific PBX IP address
+- This is what gofaxserver's `fsGatewayACL` uses to match the inbound source IP for ACL pass.
 
 ## Realm Configuration
 
@@ -160,6 +170,25 @@ The `realm` parameter specifies how FreeSWITCH identifies the remote SIP peer:
 ```xml
 <param name="realm" value="pbx.customer.example.com"/>
 ```
+
+## ACL Matching (gofaxserver side)
+
+gofaxserver matches inbound source IPs against the `endpoint` value of registered endpoints via `fsGatewayACL` (`gofaxserver/endpoints.go:235-243`):
+
+```go
+func (s *Server) fsGatewayACL(ip string) (string, error) {
+    for _, k := range s.GatewayEndpointsACL {
+        if strings.Contains(k, ip) {
+            return k, nil
+        }
+    }
+    return "", errors.New("unable to find matching gateway from sending IP")
+}
+```
+
+`GatewayEndpointsACL` is built from every endpoint with `endpoint_type=gateway` regardless of scope (`endpoints.go:60-62`). For the ACL to pass, the inbound source IP must appear as a substring of one of the registered endpoint strings — which is why gateway endpoints must include the public IP in `xml_name:publicIP` format.
+
+If the ACL fails, the inbound call is rejected with `respond 401` (`freeswitch_inbound.go:180-192`).
 
 ## Non-Register Mode
 
@@ -192,6 +221,8 @@ For forwarded calls, the diversion header may contain the original caller:
 Diversion: <sip:+15551234567@pbx.example.com>;privacy=off;reason=unconditional
 ```
 
+To make gofaxserver parse the Diversion header for the called number instead of `sip_to_user`, set `faxing.recipient_from_diversion_header: true` in `config.json` (`freeswitch_inbound.go:168-178`).
+
 ## Extension Handling
 
 ### auto_to_user
@@ -210,6 +241,27 @@ Automatically sets the extension to match the To header username.
 
 Use a fixed extension for all calls through this gateway.
 
+## Upstream / Global Endpoints
+
+Upstream carrier gateways are represented in gofaxserver as endpoints with `type=global, type_id=0`. They are registered the same way as tenant endpoints, via `POST /admin/endpoint`:
+
+```bash
+curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "global",
+    "type_id": 0,
+    "endpoint_type": "gateway",
+    "endpoint": "sbc_carrier1:198.51.100.10",
+    "priority": 0
+  }'
+```
+
+Global gateway endpoints are loaded into `Server.UpstreamFsGateways` and used as a fan-out fallback when no tenant/number endpoint matches. The Queue aggregates them into a single FreeSWITCH call (`isGlobalUpstreamGatewayGroup` in `queue.go:64-76`).
+
+See [TENANTS.md](TENANTS.md) for the full priority/scope semantics.
+
 ## Common Issues
 
 ### Gateway Not Registering
@@ -220,15 +272,26 @@ Use a fixed extension for all calls through this gateway.
 
 ### Calls Not Routing to Gateway
 
-1. Verify gateway name matches in XML and API
+1. Verify gateway name matches in XML and the `/admin/endpoint` value
 2. Run `sofia profile fax rescan`
 3. Check `sofia status gateway pbx_<NAME>`
+4. Confirm `fsGatewayACL` would pass for the source IP — the `endpoint` value must include the gateway's public IP
+
+### ACL Failure (401 from gofaxserver)
+
+If the inbound leg is failing with `respond 401`:
+
+1. Check the gateway endpoint entry is registered (`/admin/reload` if recently added)
+2. Verify the `endpoint` value contains the public IP of the PBX/SBC
+3. View the FreeSWITCH log to see the actual `sip_network_ip` variable for the call
+4. Confirm `GatewayEndpointsACL` is populated (it is rebuilt on every `/admin/reload` and on endpoint create/update/delete)
 
 ### One-Way Audio
 
 1. Enable RTP debugging: `sofia global siptrace on`
 2. Check NAT settings
 3. Verify RTP ports are open
+4. Confirm the Sofia `fax` profile's `local-network-acl` matches your network (`sofia.conf.xml:35`)
 
 ## Example: Complete Gateway Configuration
 
@@ -237,28 +300,43 @@ Use a fixed extension for all calls through this gateway.
     <gateway name="pbx_acme">
         <!-- Customer PBX identification -->
         <param name="realm" value="192.168.1.100"/>
-        
+
         <!-- Routing -->
         <param name="extension" value="auto_to_user"/>
-        
+
         <!-- Caller ID -->
         <param name="caller-id-in-from" value="true"/>
-        
+
         <!-- Contact format -->
         <param name="extension-in-contact" value="false"/>
-        
+
         <!-- Authentication -->
         <param name="register" value="false"/>
-        
+
         <!-- Media -->
         <param name="ignore-early-media" value="true"/>
     </gateway>
 </include>
 ```
 
+And the matching gofaxserver endpoint:
+
+```bash
+curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "tenant",
+    "type_id": 1,
+    "endpoint_type": "gateway",
+    "endpoint": "pbx_acme:192.168.1.100",
+    "priority": 0
+  }'
+```
+
 ## Related Documentation
 
-- [SETUP.md](SETUP.md) - Step-by-step setup procedure
-- [TENANTS.md](TENANTS.md) - Tenant and endpoint configuration
-- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture
-- [API_REFERENCE.md](API_REFERENCE.md) - Full API documentation
+- [SETUP.md](SETUP.md) — Step-by-step setup procedure
+- [TENANTS.md](TENANTS.md) — Tenant and endpoint configuration
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
+- [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation

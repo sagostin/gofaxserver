@@ -1,0 +1,28 @@
+#!/bin/sh
+set -e
+
+if ! getent group gofax >/dev/null; then
+    addgroup --system --quiet gofax
+fi
+
+if ! getent passwd gofax >/dev/null; then
+    adduser --system --quiet \
+        --ingroup gofax \
+        --no-create-home \
+        --home /var/lib/gofaxserver \
+        --gecos "gofaxserver service account" \
+        --shell /usr/sbin/nologin \
+        gofax
+fi
+
+# Ensure the temp/state directory exists and is owned by the service user
+mkdir -p /var/lib/gofaxserver
+chown -R gofax:gofax /var/lib/gofaxserver
+chmod 0750 /var/lib/gofaxserver
+
+# Restrict the sample config to root (operator should copy and chmod 600)
+chmod 0640 /etc/gofaxserver/config.json.sample 2>/dev/null || true
+
+#DEBHELPER#
+
+exit 0

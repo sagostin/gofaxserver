@@ -261,7 +261,7 @@ func (s *Server) Start() {
 
 	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"Server",
-		fmt.Sprintf("started web server on %s"),
+		"started web server on %s",
 		logrus.InfoLevel,
 		nil, gofaxlib.Config.Web.Listen,
 	))

@@ -1,32 +1,27 @@
-Source: gofaxip
+Source: gofaxserver
 Section: net
-Priority: extra
-Maintainer: Markus Lindenberg <lindenberg@gonicus.de>
-Uploaders: Markus Lindenberg <lindenberg@gonicus.de>
-Build-Depends: debhelper (>= 9),
+Priority: optional
+Maintainer: gofaxserver maintainers
+Build-Depends: debhelper (>= 10),
                dh-golang,
-               golang-go,
-Standards-Version: 3.9.7
-Homepage: https://github.com/gonicus/gofaxip
-XS-Go-Import-Path: github.com/gonicus/gofaxip
+               golang-go (>= 1.22),
+Standards-Version: 4.5.0
+Homepage: https://github.com/sagostin/gofaxserver
+XS-Go-Import-Path: gofaxserver
 
-Package: gofaxip
+Package: gofaxserver
 Architecture: any
 Built-Using: ${misc:Built-Using}
 Depends: ${shlibs:Depends},
          ${misc:Depends},
-         libtiff-tools,
-         hylafax-server,
-         freeswitch,
-         freeswitch-mod-commands,
-         freeswitch-mod-dptools,
-         freeswitch-mod-event-socket,
-         freeswitch-mod-sofia,
-         freeswitch-mod-spandsp,
-         freeswitch-mod-tone-stream,
-         freeswitch-mod-db,
-         freeswitch-mod-syslog,
-         freeswitch-mod-logfile,
-Conflicts: freeswitch-sysvinit,
-           freeswitch-systemd
-Description: Fax Over IP backend for HylaFAX using FreeSWITCH
+         postgresql-client,
+         ghostscript,
+         imagemagick,
+         adduser,
+Description: Multi-tenant Fax over IP server (FreeSWITCH Event Socket)
+ gofaxserver is a Go-based fax relay/bridge that interfaces directly with
+ FreeSWITCH via the Event Socket protocol. It supports T.38 negotiation,
+ G.711 fallback, and per-tenant routing across multiple gateway types.
+ .
+ FreeSWITCH itself is not bundled — install it separately and point the
+ `freeswitch.event_*_socket` config values at the FreeSWITCH host.

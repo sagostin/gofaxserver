@@ -1,14 +1,14 @@
 # Customer Setup Guide
 
-This document describes the procedure for adding a new customer/tenant to the Fax Relay system.
+This document describes the procedure for adding a new customer/tenant to gofaxserver.
 
 ## Overview
 
-The fax relay system consists of multiple components:
-- **FreeSWITCH** (`gofaxserver/examples/freeswitch/`) - SIP gateway and T.38 termination
-- **gofaxserver** (`gofaxserver/server.go`) - Multi-tenant fax routing and management
-- **PostgreSQL** - Persistent storage for tenants, numbers, and endpoints
-- **REST API** - Administration interface on port 8080
+The fax relay system consists of:
+- **FreeSWITCH** (`examples/freeswitch/`) — SIP gateway and T.38 termination. Listens for inbound ESL on `:8022`.
+- **gofaxserver** (`gofaxserver/server.go`, entry point `gofaxserver/cmd/gofaxserver/main.go`) — Multi-tenant fax routing and management.
+- **PostgreSQL** — Persistent storage for tenants, numbers, endpoints, tenant users, and fax job results. Schema is auto-migrated on first startup.
+- **REST API** — Administration interface on `:8080` (or `web.listen` from `config.json`).
 
 ## Supported Integration Modes
 
@@ -21,7 +21,7 @@ See [TENANTS.md](TENANTS.md) for detailed configuration differences.
 
 ---
 
-## Step 1: Connect to the Fax Relay Server
+## Step 1: Connect to the Fax Server
 
 ```bash
 ssh <ADMIN_USER>@<FAX_SERVER_HOST>
@@ -32,10 +32,14 @@ sudo su
 
 ## Step 2: Configure the FreeSWITCH Gateway
 
-Copy the template gateway configuration for the new customer:
+Templates are in `examples/freeswitch/gateways/`. Copy the appropriate one for this customer:
 
 ```bash
-cp /etc/freeswitch/gateways/pbx_example.xml /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
+# Customer PBX gateway
+cp examples/freeswitch/gateways/pbx_example.xml /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
+
+# Upstream carrier / SBC gateway (if this is for an upstream trunk)
+cp examples/freeswitch/gateways/sbc_example.xml /etc/freeswitch/gateways/sbc_<CARRIERNAME>.xml
 ```
 
 Edit the gateway file and update:
@@ -53,9 +57,11 @@ Edit the gateway file and update:
 ```
 
 **Key gateway parameters:**
-- `realm` - The public host or domain of the customer's PBX
-- `extension` - How to route calls to this gateway (default: `auto_to_user`)
-- `register` - Set to `false` for IP-based authentication
+- `realm` — The public host or domain of the remote peer. **This is also matched by gofaxserver's `fsGatewayACL`** (the endpoint's `endpoint` value `xml_name:publicIP` must contain this IP) for inbound ACL to pass.
+- `extension` — How to route calls to this gateway (default: `auto_to_user`).
+- `register` — Set to `false` for IP-based authentication.
+
+> **Tip:** For upstream/SBC gateways, prefer the `sbc_example.xml` template — it sets `extension-in-contact=true` and `ignore-early-media=true`, both of which the routing code relies on.
 
 ---
 
@@ -72,12 +78,12 @@ On the customer's PBX:
    - Rule to match internal extension for physical fax machine (FXS gateway)
 
 3. **Inbound Configuration**
-   - Assign a Fax DID number, OR
+   - Assign a Fax DID number, **or**
    - Add user to a Fax group
 
 ---
 
-## Step 4: Access FreeSwitch CLI
+## Step 4: Access FreeSWITCH CLI
 
 ```bash
 fs_cli
@@ -91,18 +97,20 @@ Exit with `/quit`.
 # Disable SIP trace (reduce noise)
 sofia global siptrace off
 
-# Reload gateway configurations
+# Reload gateway configurations on the 'fax' profile
 sofia profile fax rescan
 
 # Check gateway status
 sofia status gateway pbx_<CUSTOMERNAME>
 ```
 
+The `fax` profile name comes from `examples/freeswitch/autoload_configs/sofia.conf.xml` and points its dialplan at `socket:127.0.0.1:8022 async full` — the same port gofaxserver listens on for inbound ESL.
+
 ---
 
-## Step 5: Reload Gateway in FreeSwitch
+## Step 5: Reload Gateway in FreeSWITCH
 
-After creating the gateway XML file, scan it in the FreeSwitch CLI:
+After creating the gateway XML file, scan it in the FreeSWITCH CLI:
 
 ```bash
 sofia profile fax rescan
@@ -124,11 +132,11 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/tenant \
   }'
 ```
 
-**Response includes an ID** - save this as `<TENANT_ID>` for subsequent steps.
+**Response includes an ID** — save this as `<TENANT_ID>` for subsequent steps.
 
 ### About the `notify` Field
 
-The notify field specifies destinations for **failed fax notifications**. Multiple destinations can be combined, separated by commas.
+The notify field specifies destinations for **fax completion notifications**. Multiple destinations can be combined, separated by commas. The parser (`gofaxserver/notify.go:parseNotifyString`) splits first on commas, then on `->`, so each segment must be `<type>-><destination>`.
 
 **Supported types:**
 | Type | Description |
@@ -136,29 +144,39 @@ The notify field specifies destinations for **failed fax notifications**. Multip
 | `email_report-><email>` | Email with PDF report only |
 | `email_full-><email>` | Email with PDF report + original fax attachment |
 | `email_full_failure-><email>` | Like `email_full` but only sent on failed faxes |
-| `webhook-><URL>` | HTTP POST with base64-encoded PDF report |
-| `webhook_form-><URL>` | Multipart form POST with first page PDF (for n8n) |
+| `webhook-><URL>` | HTTP POST with JSON payload (base64 PDF report + fax job data) |
+| `webhook_form-><URL>` | Multipart form POST with first page PDF attached (for n8n) |
 
 **Example:**
 ```
 email_full_failure->support@customer.com,webhook_form->https://n8n.example.com/webhook/123
 ```
 
-For transcoded/bridged calls, this field is generally **not used**.
+For transcoded/bridged calls, this field is generally **not used** (the source/dest tenants each generate their own notifications).
+
+Multiple email addresses for the same notification type are separated by `;` — only valid for `email_*` types (the SMTP layer splits on `;`).
 
 ---
 
 ## Step 7: Add Endpoint
 
-Endpoint format for gateways: `<GATEWAY_XML_NAME>:<PBX_IP>`
+Endpoint format for gateways: `<GATEWAY_XML_NAME>:<PBX_IP>` (the `publicIP` is what gofaxserver's `fsGatewayACL` checks against the inbound source IP).
 
 ### Endpoint Types
 
-| Type | Description | Endpoint Format |
-|------|-------------|-----------------|
-| `gateway` | SIP gateway to PBX | `xml_name:ip` |
-| `webhook` | HTTP POST delivery | Full URL (e.g., `https://...`) |
-| `email` | Email delivery | Email address |
+| Type | Description | Endpoint Format | `type_id` |
+|------|-------------|------------------|-----------|
+| `gateway` | SIP gateway to PBX | `xml_name:ip` | per scope |
+| `webhook` | HTTP POST delivery | Full URL (e.g., `https://...`) | per scope |
+| `email` | Email delivery | Email address | per scope |
+
+**Endpoint scope** (set by `type`):
+
+| `type` | Description | `type_id` |
+|--------|-------------|-----------|
+| `tenant` | Applies to all numbers in the tenant | Tenant ID |
+| `number` | Applies to a specific number only (overrides tenant) | TenantNumber ID (DB primary key) |
+| `global` | Upstream carrier gateway; fallback for all tenants | `0` |
 
 ### Gateway Endpoint (Relay Mode)
 
@@ -175,7 +193,7 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
   }'
 ```
 
-### Gateway Endpoint (Transcoding/Bridge Mode - Recommended for New Customers)
+### Gateway Endpoint (Transcoding/Bridge Mode — Recommended for New Customers)
 
 ```bash
 curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
@@ -195,8 +213,6 @@ The `bridge: true` flag enables T.38/G.711 transcoding for this endpoint.
 
 ### Webhook Endpoint
 
-For HTTP-based fax delivery:
-
 ```bash
 curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
   -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
@@ -212,8 +228,6 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
 
 ### Email Endpoint
 
-For email-based fax delivery:
-
 ```bash
 curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
   -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
@@ -227,22 +241,39 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
   }'
 ```
 
-### Priority Method
+### Global Upstream Endpoint
 
-The `priority` field controls failover behavior:
+Upstream carrier gateways are registered as `type=global, type_id=0`. They are loaded into `UpstreamFsGateways` and used as a fan-out fallback when no tenant/number endpoint matches.
+
+```bash
+curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "global",
+    "type_id": 0,
+    "endpoint_type": "gateway",
+    "endpoint": "sbc_carrier1:198.51.100.10",
+    "priority": 0
+  }'
+```
+
+### Priority
 
 | Priority Value | Behavior |
 |----------------|----------|
 | `0` | Highest priority (primary endpoint) |
 | `1+` | Lower priority (failover endpoints) |
-| `666` | Special value - endpoint does not receive inbound faxes |
+| `666` | Endpoint is **filtered out for inbound delivery** but still usable as a source gateway for outbound bridge calls |
+| `999` | Reserved for the implicit upstream-fallback group |
 
 **How priority works:**
 - Lower numbers = higher preference
 - If the primary endpoint (priority 0) fails, the system attempts the next highest priority
-- Priority 666 is used for source gateways in outbound-only bridge scenarios
+- Priority 666 lets you mark an endpoint as "outbound-only" for bridge scenarios
 
-**Example - Gateway with Failover:**
+**Example — Gateway with Failover:**
+
 ```bash
 # Primary gateway
 curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
@@ -269,16 +300,6 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/endpoint \
   }'
 ```
 
-### Endpoint Scope
-
-Endpoints can be scoped at different levels:
-
-| Type | Description |
-|------|-------------|
-| `tenant` | Applies to all numbers in the tenant |
-| `number` | Applies to a specific number only (takes precedence over tenant) |
-| `global` | Fallback for all tenants when no tenant/number endpoint exists |
-
 ---
 
 ## Step 8: Add Phone Numbers
@@ -291,11 +312,12 @@ curl -X POST http://<FAX_SERVER_HOST>:8080/admin/number \
     "tenant_id": <TENANT_ID>,
     "number": "<10_DIGIT_NUMBER>",
     "name": "<DISPLAY_NAME>",
-    "header": "<FAX_HEADER>"
+    "header": "<FAX_HEADER>",
+    "notify": "email_full_failure->failures@customer.com"
   }'
 ```
 
-Add each number with a separate command.
+Add each number with a separate command. The optional `notify` field overrides the tenant-level `notify` for faxes involving this number.
 
 ---
 
@@ -312,7 +334,7 @@ This hot-reloads tenants, numbers, and endpoints from the database into memory.
 
 ## Step 10: Configure SBC Digitmap (If Applicable)
 
-If using a Session Border Controller:
+If using a Session Border Controller (third-party — not part of gofaxserver):
 
 ```bash
 # Remove old numbers from previous NAP
@@ -331,31 +353,40 @@ activate-tbcustomerconfig
 
 1. Send a test fax **inbound** (external → PBX → fax relay)
 2. Send a test fax **outbound** (fax relay → PBX → external)
-3. Verify logs appear in Grafana dashboard
+3. Verify logs appear in stdout / Loki / Grafana
 
 ---
 
 ## Step 12: Monitoring
 
-- Check active fax jobs: `curl http://<FAX_SERVER_HOST>:8080/admin/faxes`
-- View fax status by UUID: `curl "http://<FAX_SERVER_HOST>:8080/fax/status?uuid=<JOB_UUID>"`
-- FreeSWITCH logs: `fs_cli` with `sofia global siptrace on` for debugging
+- Active fax jobs: `curl http://<FAX_SERVER_HOST>:8080/admin/faxes` (admin auth)
+- Fax status by UUID: `curl "http://<FAX_SERVER_HOST>:8080/fax/status?uuid=<JOB_UUID>"` (tenant user auth, not admin)
+- FreeSWITCH debugging: `fs_cli` then `sofia global siptrace on`
+- Loki queries: filter by `job="faxserver"` and the component type (`Server.StartUp`, `Router`, `Queue`, etc.)
+
+---
+
+## Dialplan Transformations
+
+Caller/callee numbers are normalized before any tenant lookup. The default rules (`gofaxserver/server.go:loadDialplan`) are:
+
+1. `^1(\d{10}).*$` → `$1` — strip a leading `1` (US country code) when 10 digits remain.
+2. `^(\d{10}).*$` → `$1` — truncate anything beyond 10 digits.
+
+Custom rules can be added in `loadDialplan`. Each rule is a regex (`*regexp.Regexp`) and a replacement string (supports `$1`, `$2`, ...).
 
 ---
 
 ## Python TUI (Optional)
 
-For an interactive terminal-based setup wizard, use the Python TUI script:
+For an interactive terminal-based setup wizard:
 
 ```bash
-# Install dependencies
 pip install prompt_toolkit requests
 
-# Set environment variables
 export FAX_API_URL=http://<FAX_SERVER>:8080
 export FAX_API_KEY=<your_api_key>
 
-# Run the TUI
 python scripts/setup-tenant-tui.py
 ```
 
@@ -365,7 +396,7 @@ The TUI provides a step-by-step wizard for creating tenants, endpoints, and numb
 
 ## Related Documentation
 
-- [TENANTS.md](TENANTS.md) - Detailed tenant modes and configuration
-- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture
-- [API_REFERENCE.md](API_REFERENCE.md) - Full API documentation
-- [GATEWAYS.md](GATEWAYS.md) - FreeSWITCH gateway configuration details
+- [TENANTS.md](TENANTS.md) — Detailed tenant modes and configuration
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
+- [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation
+- [GATEWAYS.md](GATEWAYS.md) — FreeSWITCH gateway configuration details

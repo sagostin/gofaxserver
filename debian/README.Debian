@@ -1,0 +1,40 @@
+debian/README.Debian
+====================
+
+gofaxserver
+-----------
+
+This package installs the gofaxserver binary built from
+`gofaxserver/cmd/gofaxserver/main.go` plus a sample configuration file at
+`/etc/gofaxserver/config.json.sample`.
+
+Post-install steps
+------------------
+
+1. Create the database and user (see README.md "Database Setup").
+
+2. Create a dedicated system user (the package does this automatically):
+
+       adduser --system --group --no-create-home --home /var/lib/gofaxserver gofax
+
+3. Copy and edit the configuration:
+
+       sudo cp /etc/gofaxserver/config.json.sample /etc/gofaxserver/config.json
+       sudo chmod 600 /etc/gofaxserver/config.json
+       sudoedit /etc/gofaxserver/config.json
+       # - set web.api_key to a strong random value
+       # - set psk to a strong random value (used to encrypt tenant-user passwords)
+       # - configure the database.* and freeswitch.* sections
+
+4. Install and configure FreeSWITCH separately (use the `examples/freeswitch/`
+   tree from the source repo as a starting point for `autoload_configs/` and
+   `gateways/`).
+
+5. Enable and start the service:
+
+       sudo systemctl daemon-reload
+       sudo systemctl enable --now gofaxserver
+
+6. Verify the API is up:
+
+       curl -u admin:YOUR_API_KEY http://localhost:8080/admin/faxes

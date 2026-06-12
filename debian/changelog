@@ -1,3 +1,13 @@
+gofaxserver (0.1.0-1) unstable; urgency=medium
+
+  * Rebrand from gofaxip (HylaFAX) to gofaxserver (Iris/GORM).
+  * Package the binary built from gofaxserver/cmd/gofaxserver/main.go.
+  * Replace hylafax-server dependency with postgresql-client,
+    ghostscript, and imagemagick (PDF -> TIFF conversion of outgoing faxes).
+  * Add gofax system user/group; configuration at /etc/gofaxserver/config.json.
+
+ -- gofaxserver maintainers <noreply@example.com>  Fri, 12 Jun 2026 12:00:00 +0000
+
 gofaxip (1.4-2) unstable; urgency=medium
 
   * Set WorkingDirectory for gofaxd for Debian 12
@@ -61,4 +71,3 @@ gofaxip (1.0-1) unstable; urgency=medium
   * Fix repository layout
 
  -- Markus Lindenberg <lindenberg@gonicus.de>  Thu, 01 Dec 2016 10:42:23 +0100
-

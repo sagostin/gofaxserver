@@ -33,7 +33,18 @@ FTP_PORT=21
 FTP_REMOTE_DIR=/backups
 ```
 
-> **Note:** If `FTP_HOST` is not set, the FTP upload step is silently skipped.
+> **Note:** If `FTP_HOST` is not set, the FTP upload step is silently skipped (handled by `backup-ftp-upload.sh` via `[ -z "$FTP_HOST" ]` check at the top of the script). All other steps run regardless.
+
+### Which env vars are read by which script
+
+| Script | Reads |
+|--------|-------|
+| `backup-db.sh` | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_HOST`, `POSTGRES_PORT`, `BACKUP_KEEP_DAYS` |
+| `backup-env.sh` | `BACKUP_KEEP_DAYS` |
+| `backup-freeswitch.sh` | `BACKUP_KEEP_DAYS` |
+| `backup-gofaxserver-config.sh` | `BACKUP_KEEP_DAYS` |
+| `backup-ftp-upload.sh` | `FTP_HOST`, `FTP_USER`, `FTP_PASS`, `FTP_PORT`, `FTP_REMOTE_DIR` (all optional) |
+| `backup-all.sh` | All of the above (chained) |
 
 ---
 
@@ -84,6 +95,8 @@ Add:
 ```cron
 0 3 * * * cd /opt/gofaxserver && ./scripts/backup-all.sh >> /var/log/gofax-backup.log 2>&1
 ```
+
+> **Tip:** Use `sudo crontab -e` (not `crontab -e`) when your project lives in a root-owned path or your `.env`/config files require root to read.
 
 ### Database-only backup every 6 hours
 

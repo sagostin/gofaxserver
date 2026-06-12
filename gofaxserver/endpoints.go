@@ -124,6 +124,14 @@ func (s *Server) addEndpointToDB(endpoint *Endpoint) error {
 			return fmt.Errorf("tenant number with id %d not found", endpoint.TypeID)
 		}
 		s.NumberEndpoints[numberStr] = append(s.NumberEndpoints[numberStr], endpoint)
+	case "global":
+		// Global endpoints represent upstream carrier gateways shared across all tenants.
+		// type_id is unused (0); only the gateway name (Endpoint) matters for routing.
+		if endpoint.EndpointType == "gateway" {
+			gwName := strings.Split(endpoint.Endpoint, ":")[0]
+			s.UpstreamFsGateways = append(s.UpstreamFsGateways, gwName)
+		}
+		s.Endpoints[endpoint.Type+"/"+endpoint.Endpoint] = endpoint
 	default:
 		return fmt.Errorf("unknown endpoint type: %s", endpoint.Type)
 	}
@@ -170,6 +178,12 @@ func (s *Server) updateEndpoint(endpoint *Endpoint) error {
 			return fmt.Errorf("tenant number with id %d not found", endpoint.TypeID)
 		}
 		s.NumberEndpoints[numberStr] = append(s.NumberEndpoints[numberStr], endpoint)
+	case "global":
+		if endpoint.EndpointType == "gateway" {
+			gwName := strings.Split(endpoint.Endpoint, ":")[0]
+			s.UpstreamFsGateways = append(s.UpstreamFsGateways, gwName)
+		}
+		s.Endpoints[endpoint.Type+"/"+endpoint.Endpoint] = endpoint
 	default:
 		return fmt.Errorf("unknown endpoint type: %s", endpoint.Type)
 	}
@@ -198,6 +212,12 @@ func (s *Server) addEndpoint(endpoint *Endpoint) error {
 			return fmt.Errorf("tenant number with id %d not found", endpoint.TypeID)
 		}
 		s.NumberEndpoints[numberStr] = append(s.NumberEndpoints[numberStr], endpoint)
+	case "global":
+		if endpoint.EndpointType == "gateway" {
+			gwName := strings.Split(endpoint.Endpoint, ":")[0]
+			s.UpstreamFsGateways = append(s.UpstreamFsGateways, gwName)
+		}
+		s.Endpoints[endpoint.Type+"/"+endpoint.Endpoint] = endpoint
 	default:
 		return fmt.Errorf("unknown endpoint type: %s", endpoint.Type)
 	}
@@ -226,6 +246,28 @@ func (s *Server) removeEndpoint(endpointID uint) error {
 				s.NumberEndpoints[numberStr] = append(endpoints[:i], endpoints[i+1:]...)
 				return nil
 			}
+		}
+	}
+
+	// Remove from global endpoints (UpstreamFsGateways + Endpoints map).
+	for i, gwName := range s.UpstreamFsGateways {
+		// Find the matching endpoint by its gateway-name prefix.
+		matched := false
+		for _, ep := range s.Endpoints {
+			if ep.ID == endpointID && ep.Type == "global" && strings.HasPrefix(ep.Endpoint, gwName+":") || (ep.ID == endpointID && ep.Type == "global" && ep.Endpoint == gwName) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			s.UpstreamFsGateways = append(s.UpstreamFsGateways[:i], s.UpstreamFsGateways[i+1:]...)
+			break
+		}
+	}
+	for k, ep := range s.Endpoints {
+		if ep.ID == endpointID {
+			delete(s.Endpoints, k)
+			return nil
 		}
 	}
 

@@ -40,9 +40,13 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Delete("/endpoint/{id}", s.handleDeleteEndpoint)
 
 		admin.Post("/user", s.handleAddTenantUser)
-		admin.Put("/user/{id}", s.handleAddTenantUser)
+		admin.Put("/user/{id}", s.handleUpdateTenantUser)
 		admin.Delete("/user/{id}", s.handleDeleteTenantUser)
 	}
+
+	// Tenant-user self-service authentication endpoint (no middleware;
+	// the handler itself validates the Basic Auth credentials).
+	app.Post("/tenant/user/authenticate", s.handleAuthenticateTenantUser)
 
 	fax := app.Party("/fax", s.basicTenantUserAuthMiddleware)
 	{

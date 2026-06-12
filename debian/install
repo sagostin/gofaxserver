@@ -1,1 +1,1 @@
-gofax.conf etc/
+config.json.sample etc/gofaxserver/config.json.sample
