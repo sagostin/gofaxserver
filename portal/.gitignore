@@ -1,0 +1,10 @@
+# Frontend deps & local config with secrets
+node_modules/
+config.json
+.env
+
+# Built binary (go build -o gofaxportal ./cmd/portal)
+/gofaxportal
+
+# Logs
+*.log

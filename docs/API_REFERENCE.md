@@ -84,6 +84,63 @@ Phases: `ROUTED`, `ATTEMPTING`, `RECEIVING`, `BRIDGING`, `SENDING`, `WAITING`, `
 
 ---
 
+### List Resources (Read-Only)
+
+Read-only listing endpoints intended for reconciliation by external tools (e.g. the portal). All live under `/admin` auth and never mutate state.
+
+#### List Tenants
+
+```
+GET /admin/tenants
+```
+
+**Response:** array of tenants, each with its numbers preloaded:
+
+```json
+[
+  {
+    "id": 1,
+    "name": "Acme Corp",
+    "notify": "",
+    "numbers": [
+      { "id": 1, "tenant_id": 1, "number": "5551234567", "name": "Main Fax", "header": "ACME Corp", "notify": "" }
+    ]
+  }
+]
+```
+
+#### List Numbers
+
+```
+GET /admin/numbers[?tenant_id=<ID>]
+```
+
+**Response:** flat array of `tenant_numbers` rows, optionally filtered by tenant.
+
+#### List Users
+
+```
+GET /admin/users[?tenant_id=<ID>]
+```
+
+**Response:** array of users with the encrypted password **redacted**:
+
+```json
+[
+  { "id": 1, "tenant_id": 1, "username": "svc_acme", "api_key": "..." }
+]
+```
+
+#### List Endpoints
+
+```
+GET /admin/endpoints[?type=<tenant|number|global>][&type_id=<ID>]
+```
+
+**Response:** flat array of `endpoints` rows, optionally filtered by scope type and/or type_id.
+
+---
+
 ### Tenant Management
 
 #### Create Tenant

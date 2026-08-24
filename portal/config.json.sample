@@ -1,0 +1,28 @@
+{
+  "listen": ":8081",
+  "cookie_secure": false,
+  "database": {
+    "host": "localhost",
+    "port": "5432",
+    "user": "gofaxportal",
+    "password": "change-me",
+    "database": "gofaxportal",
+    "sslmode": "disable",
+    "timezone": "America/Vancouver"
+  },
+  "session_secret": "change-me-long-random-string",
+  "encryption_key": "change-me-different-long-random-string",
+  "gofaxserver": {
+    "base_url": "http://127.0.0.1:8080",
+    "admin_api_key": "your-gofaxserver-web-api-key"
+  },
+  "poll_interval_seconds": 5,
+  "upload_max_mb": 20,
+  "login_rate_per_minute": 5,
+  "send_rate_per_hour": 120,
+  "bootstrap_admin": {
+    "username": "admin",
+    "password": "",
+    "email": ""
+  }
+}

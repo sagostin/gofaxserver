@@ -340,3 +340,4 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
 - [TENANTS.md](TENANTS.md) — Tenant and endpoint configuration
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
 - [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation
+- [PORTAL.md](PORTAL.md) — Web portal (see its runbook for onboarding customers with PBX gateways)

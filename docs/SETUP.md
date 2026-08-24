@@ -400,3 +400,4 @@ The TUI provides a step-by-step wizard for creating tenants, endpoints, and numb
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
 - [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation
 - [GATEWAYS.md](GATEWAYS.md) — FreeSWITCH gateway configuration details
+- [PORTAL.md](PORTAL.md) — Web portal for end-user faxing (automates most of this setup)

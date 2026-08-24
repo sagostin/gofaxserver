@@ -204,6 +204,16 @@ Global gateway endpoints are loaded into `Server.UpstreamFsGateways` and used as
 
 The `notify` field on a tenant and on each tenant number specifies destinations for fax completion notifications. The field is parsed by `gofaxserver/notify.go:parseNotifyString` (split on commas → split on `->`).
 
+### When Notifications Fire (Direction Semantics)
+
+Notifications fire when a queued fax job **concludes (after all retries)**, regardless of direction:
+
+- **Outbound transmissions** (e.g. `POST /fax/send`) resolve destinations from the **source side**: the *caller* number's `notify` first, falling back to the *source tenant's* `notify` (`notify.go:processNotifyDestinations`, src branch; `SrcTenantID` is stamped from the caller number in `router.go:routeFax`).
+- **Inbound receptions** resolve from the **destination side**: the *callee* number's `notify` first, falling back to the destination tenant's `notify`.
+- Both sides receive notifications for the same job when both are known tenants/numbers.
+
+`email_report` is sent on job completion **whether the attempts succeeded or failed** — the attached report rows show per-attempt status. Only `email_full_failure` gates on failure.
+
 ### Notify Field Format
 
 ```
@@ -226,7 +236,7 @@ email_report->support@customer.com,webhook_form->https://n8n.example.com/webhook
 | `webhook_form->` | Multipart form POST | First page PDF attached to form data |
 
 **Notes:**
-- `email_report` sends a PDF report with attempt history but no fax attachment.
+- `email_report` sends a PDF report with attempt history but no fax attachment; it fires on completion in both directions (success or failure).
 - `email_full` includes the actual fax TIFF file as an attachment (large).
 - `email_full_failure` is like `email_full` but only triggers on failed faxes (`all_attempts_failed == true`).
 - `webhook` sends a JSON POST with base64-encoded PDF report and fax job data.
@@ -287,3 +297,4 @@ func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
 - [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation
 - [GATEWAYS.md](GATEWAYS.md) — FreeSWITCH gateway configuration
+- [PORTAL.md](PORTAL.md) — Web portal (uses notify strings for user receipts)

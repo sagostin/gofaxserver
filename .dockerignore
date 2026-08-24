@@ -1,0 +1,24 @@
+# VCS / IDE
+.git
+.idea
+.vscode
+
+# Local runtime data — never ship in build context
+postgres/
+backups/
+faxtmp/
+.env
+
+# Node artifacts (frontend builds inside its own stage)
+portal/frontend/node_modules
+
+# Docs, samples and local-only assets (not needed by either image build)
+*.md
+docs/
+examples/
+testdata/
+scripts/
+debian/
+packaging/
+gofaxserver.excalidraw
+.ruff_cache

@@ -1,0 +1,79 @@
+package poller
+
+import (
+	"testing"
+	"time"
+
+	"gofaxportal/internal/fsclient"
+	"gofaxportal/internal/models"
+)
+
+var base = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+func row(success bool, attempt, pages int, resultText, cause string) fsclient.FaxStatusRow {
+	return fsclient.FaxStatusRow{
+		JobUUID: "j-1", ResultType: "transmission", AttemptNumber: attempt,
+		StartTs: base.Add(time.Duration(attempt) * time.Minute),
+		EndTs:   base.Add(time.Duration(attempt)*time.Minute + 30*time.Second),
+		Success: success, TransferredPages: pages, ResultText: resultText, HangupCause: cause,
+	}
+}
+
+func TestDecideSuccess(t *testing.T) {
+	d := decide([]fsclient.FaxStatusRow{row(false, 1, 1, "NO ANSWER", ""), row(true, 2, 4, "OK", "")},
+		false, true, true, base.Add(-time.Minute), base.Add(10*time.Minute))
+	if !d.terminal || d.status != models.JobSuccess {
+		t.Fatalf("want terminal success, got %+v", d)
+	}
+	if d.pages != 4 || d.attempts != 2 || d.resultText != "OK" {
+		t.Fatalf("aggregation wrong: %+v", d)
+	}
+	if d.completed == nil {
+		t.Fatal("completed timestamp required on success")
+	}
+}
+
+func TestDecideFailedAfterSeenActiveAndGone(t *testing.T) {
+	rows := []fsclient.FaxStatusRow{row(false, 1, 0, "", "NORMAL_CLEARING")}
+	d := decide(rows, false, true, true, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobFailed {
+		t.Fatalf("want failed, got %+v", d)
+	}
+	if d.lastErr != "NORMAL_CLEARING" && d.lastErr == "" {
+		t.Fatalf("last error should fall back to hangup cause: %+v", d)
+	}
+}
+
+func TestDecideFailedWhenSnapshotUnavailable(t *testing.T) {
+	rows := []fsclient.FaxStatusRow{row(false, 1, 0, "", "USER_BUSY")}
+	d := decide(rows, false, false /* snapshot fetch failed */, false, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobFailed {
+		t.Fatalf("snapshot-unavailable + rows should fail after grace, got %+v", d)
+	}
+}
+
+func TestDecideStillQueuedBeforeGraceOrSighting(t *testing.T) {
+	rows := []fsclient.FaxStatusRow{row(false, 1, 0, "", "NORMAL_CLEARING")}
+	// Not yet past failure grace.
+	d := decide(rows, false, true, true, base.Add(-10*time.Second), base)
+	if d.terminal || d.status != models.JobSending {
+		t.Fatalf("within grace should remain sending, got %+v", d)
+	}
+	// Never seen active and tracker reachable → could still start; keep queued.
+	d = decide(rows, false, true, false, base.Add(-5*time.Minute), base)
+	if d.terminal || d.status != models.JobQueued {
+		t.Fatalf("unseen job with reachable tracker stays queued, got %+v", d)
+	}
+	// No rows at all, nothing seen.
+	d = decide(nil, false, true, false, base.Add(-time.Hour), base)
+	if d.terminal || d.status != models.JobQueued || d.attempts != 0 {
+		t.Fatalf("silent job stays queued, got %+v", d)
+	}
+}
+
+func TestDecideInFlightSending(t *testing.T) {
+	d := decide(nil, true /* in active set */, true, false, base.Add(-time.Minute), base)
+	if d.terminal || d.status != models.JobSending || !d.sawActive {
+		t.Fatalf("in-flight job should be sending, got %+v", d)
+	}
+}

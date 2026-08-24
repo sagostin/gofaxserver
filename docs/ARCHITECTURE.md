@@ -150,6 +150,10 @@ Defined in `gofaxserver/web.go:19-66`:
 /admin/*  - Basic auth against web.api_key
   GET    /reload                - Hot-reload config from DB
   GET    /faxes                 - List active fax jobs
+  GET    /tenants               - List tenants (numbers preloaded)
+  GET    /numbers               - List tenant numbers (optional ?tenant_id=)
+  GET    /users                 - List tenant users, redacted (optional ?tenant_id=)
+  GET    /endpoints             - List endpoints (optional ?type=&type_id=)
   POST   /tenant                - Create tenant
   PUT    /tenant/{id}           - Update tenant
   DELETE /tenant/{id}           - Delete tenant

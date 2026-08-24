@@ -37,6 +37,8 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [gofaxserver.excalidraw](gofaxserver.excalidraw) for a visual diagram.
 
+> **Fax Portal:** a separate multi-tenant web UI (`portal/`, own binary + DB) that lets end users send faxes and track jobs through this API — see [docs/PORTAL.md](docs/PORTAL.md).
+
 ### Core Components
 
 | Component | File | Description |
@@ -185,6 +187,10 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for the full reference. Quick
 |--------|----------|-------------|
 | GET | `/admin/reload` | Hot-reload configuration from database |
 | GET | `/admin/faxes` | List active fax jobs with real-time tracking |
+| GET | `/admin/tenants` | List all tenants (numbers preloaded) |
+| GET | `/admin/numbers?tenant_id=` | List tenant numbers (optional filter) |
+| GET | `/admin/users?tenant_id=` | List tenant users, passwords redacted (optional filter) |
+| GET | `/admin/endpoints?type=&type_id=` | List endpoints (optional filters) |
 | POST | `/admin/tenant` | Create a new tenant |
 | PUT | `/admin/tenant/{id}` | Update tenant |
 | DELETE | `/admin/tenant/{id}` | Delete tenant |

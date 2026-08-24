@@ -226,7 +226,39 @@ curl -u backupuser:backuppassword \
 
 ---
 
-## 7. Quick Reference
+## 7. Fax Portal Database
+
+The portal (`portal/`) keeps its **own** PostgreSQL database (`gofaxportal` by
+default) holding portal users, number assignments, job history, and the audit
+log. Back it up alongside the main fax database:
+
+```bash
+# Dump (credentials per portal/sample.env)
+PGPASSWORD="$PORTAL_DB_PASSWORD" pg_dump \
+  -h "$PORTAL_DB_HOST" -p "$PORTAL_DB_PORT" \
+  -U "$PORTAL_DB_USER" "$PORTAL_DB_NAME" | gzip \
+  > ./backups/db/gofaxportal_$(date +%Y%m%d_%H%M%S).sql.gz
+```
+
+**Restore:**
+
+```bash
+gunzip -c ./backups/db/gofaxportal_TIMESTAMP.sql.gz | \
+  PGPASSWORD="$PORTAL_DB_PASSWORD" psql \
+    -h "$PORTAL_DB_HOST" -p "$PORTAL_DB_PORT" \
+    -U "$PORTAL_DB_USER" -d "$PORTAL_DB_NAME"
+```
+
+> **Critical:** the portal DB stores per-organization gofaxserver
+> service-account passwords sealed with AES-256-GCM using the portal's
+> `encryption_key` (`PORTAL_ENCRYPTION_KEY`). A restored database without the
+> matching key makes those credentials permanently undecryptable — always back
+> up the portal secrets (env/config) together with the database. Schema
+> auto-migrates on portal start, so restoring into an empty database is fine.
+
+---
+
+## 8. Quick Reference
 
 | Task | Command |
 |---|---|

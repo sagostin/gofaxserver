@@ -1,0 +1,45 @@
+services:
+  gofaxportal:
+    build:
+      context: ..
+      dockerfile: portal/Dockerfile
+    image: gofaxportal:latest
+    container_name: gofaxportal
+    environment:
+      - PORTAL_COOKIE_SECURE=${PORTAL_COOKIE_SECURE:-true}
+      - PORTAL_DB_HOST=${PORTAL_DB_HOST:-127.0.0.1}
+      - PORTAL_DB_PORT=${PORTAL_DB_PORT:-5432}
+      - PORTAL_DB_USER=${PORTAL_DB_USER:-gofaxportal}
+      - PORTAL_DB_PASSWORD=${PORTAL_DB_PASSWORD}
+      - PORTAL_DB_NAME=${PORTAL_DB_NAME:-gofaxportal}
+      - PORTAL_SESSION_SECRET=${PORTAL_SESSION_SECRET}
+      - PORTAL_ENCRYPTION_KEY=${PORTAL_ENCRYPTION_KEY}
+      - PORTAL_GOFAX_BASE_URL=${PORTAL_GOFAX_BASE_URL:-http://127.0.0.1:8080}
+      - PORTAL_ADMIN_API_KEY=${PORTAL_ADMIN_API_KEY}
+      - PORTAL_BOOTSTRAP_USERNAME=${PORTAL_BOOTSTRAP_USERNAME:-admin}
+      - PORTAL_BOOTSTRAP_PASSWORD=${PORTAL_BOOTSTRAP_PASSWORD}
+    # Option A (env-only, default): no config file needed.
+    # Option B (config file): uncomment and provide ./config.json
+    #   (see config.json.sample); env vars still override file values.
+    # volumes:
+    #   - ./config.json:/etc/gofaxportal/config.json:ro
+    network_mode: host
+    restart: always
+
+  # Optional TLS reverse proxy. Start with:
+  #   cp Caddyfile.sample Caddyfile && $EDITOR Caddyfile
+  #   docker compose --profile tls up -d
+  caddy:
+    image: caddy:2-alpine
+    container_name: gofaxportal-caddy
+    profiles: ["tls"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    network_mode: host
+    restart: always
+
+volumes:
+  caddy_data:
+  caddy_config:
