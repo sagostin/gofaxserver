@@ -14,6 +14,34 @@ Browser ──(session cookie)──► Portal :8081 ──┬─(admin:<API_KEY
 
 Neither the admin API key nor service-account passwords ever reach the browser.
 
+## Quick start (from zero)
+
+0. **Deploy the updated gofaxserver** — it must be running a build that
+   includes the read-only list endpoints (`GET /admin/tenants|numbers|users|
+   endpoints`) or Admin → Reconcile will fail. Everything else works on older
+   builds too.
+1. **Create the portal database** (SQL under [Build & run](#build--run)) —
+   schema auto-migrates on first start.
+2. **Secrets & env** — `cd portal && cp sample.env .env`, fill the five
+   required values (see [Configuration](#configuration) /
+   [How config reaches the container](#how-config-reaches-the-container)):
+   `PORTAL_SESSION_SECRET`, `PORTAL_ENCRYPTION_KEY` (back it up with the DB!),
+   `PORTAL_ADMIN_API_KEY` (= gofaxserver `web.api_key`), `PORTAL_DB_PASSWORD`,
+   `PORTAL_BOOTSTRAP_PASSWORD`.
+3. **Start it** — `docker compose up -d --build` (host networking, :8081), or
+   build the binary locally with `go build -o gofaxportal ./cmd/portal`.
+4. **TLS** — `cp Caddyfile.sample Caddyfile`, set your hostname,
+   `docker compose --profile tls up -d` (see [TLS with Caddy](#tls-with-caddy-recommended)).
+5. **First login** — sign in with the bootstrap admin, then immediately
+   Admin → Users → Reset PW (the bootstrap password lives in plaintext env
+   until rotated); afterwards the bootstrap env vars can be blanked.
+6. **Provision a customer** — Admin → Orgs: create org (auto-provisions the
+   gofaxserver tenant + service account) → Numbers: add number → Users: create
+   fax user → Numbers: assign number to the user (also wires the receipt
+   email). If the customer needs a PBX gateway, follow
+   [Adding a new customer whose PBX delivers/receives via FreeSWITCH](#adding-a-new-customer-whose-pbx-deliversreceives-via-freeswitch).
+7. **Verify** — walk the [First-run smoke checklist](#first-run-smoke-checklist).
+
 ## Concepts
 
 - **Organization** — a portal tenant. Creating one provisions a matching
@@ -196,6 +224,19 @@ CREATE USER gofaxportal WITH PASSWORD '...';
 GRANT ALL PRIVILEGES ON DATABASE gofaxportal TO gofaxportal;
 GRANT ALL ON SCHEMA public TO gofaxportal;
 ```
+
+## First-run smoke checklist
+
+After deployment, walk this once against your live gofaxserver:
+
+1. `curl https://<portal-host>/api/health` → `{"status":"ok"}`
+2. Log in with the bootstrap admin → change its password (Admin → Users → Reset PW)
+3. Create an org (Admin → Orgs) — this provisions the gofaxserver tenant + `svc_*` account
+4. Add a number to the org, create a fax user, assign the number to them
+5. Log in as the user, send a small test PDF
+6. Watch My Faxes flip `queued → sending → success/failed` (poller ticks every ~5 s)
+7. Confirm the `email_report` receipt lands in the user's inbox
+8. Admin → Orgs → **Reconcile** should report a clean diff
 
 ## API surface (session cookie + CSRF)
 

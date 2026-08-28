@@ -130,7 +130,18 @@ func (s *Server) adminUpdateOrg(ctx iris.Context) {
 	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
 		newName := strings.TrimSpace(*req.Name)
-		if uerr := s.FX.UpdateTenant(org.GofaxTenantID, newName, ""); uerr != nil {
+		// Preserve the tenant-level notify: UpdateTenant rewrites the row, and
+		// an empty string would silently clear any notify set out-of-band.
+		liveTenants, lerr := s.FX.ListTenants()
+		notify := ""
+		if lerr == nil {
+			for _, t := range liveTenants {
+				if t.ID == org.GofaxTenantID {
+					notify = t.Notify
+				}
+			}
+		}
+		if uerr := s.FX.UpdateTenant(org.GofaxTenantID, newName, notify); uerr != nil {
 			ctx.StatusCode(502)
 			ctx.JSON(map[string]string{"error": "upstream rename failed: " + uerr.Error()})
 			return
