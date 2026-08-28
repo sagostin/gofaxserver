@@ -40,7 +40,7 @@ export const useAuthStore = defineStore('auth', {
         await api('/auth/logout', { method: 'POST' })
       } finally {
         this.me = null
-        window.location.href = '/login'
+        window.location.href = '/portal/login'
       }
     },
   },

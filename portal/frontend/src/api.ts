@@ -24,9 +24,9 @@ export async function api<T = any>(path: string, opts: any = {}): Promise<T> {
   if (!['GET', 'HEAD'].includes(method)) {
     headers['X-CSRF-Token'] = csrf
   }
-  const res = await fetch('/api' + path, { ...opts, method, body, headers })
+  const res = await fetch('/portal/api' + path, { ...opts, method, body, headers })
   if (res.status === 401 && !path.startsWith('/auth')) {
-    window.location.href = '/login'
+    window.location.href = '/portal/login'
     throw new ApiError('session expired', 401)
   }
   const data = res.status === 204 ? null : await res.json().catch(() => null)

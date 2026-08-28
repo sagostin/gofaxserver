@@ -45,7 +45,10 @@ func (s *Server) BuildApp() *iris.Application {
 		ctx.JSON(map[string]string{"error": "internal server error"})
 	})
 
-	apiParty := app.Party("/api")
+	// The portal API and SPA live under /portal so a single Caddy host can
+	// split traffic: /portal/* → portal, everything else → gofaxserver.
+	// Existing gofaxserver API clients are unaffected either way.
+	apiParty := app.Party("/portal/api")
 	apiParty.Post("/auth/login", s.handleLogin)
 	apiParty.Get("/health", func(ctx iris.Context) {
 		ctx.JSON(map[string]string{"status": "ok"})
@@ -97,18 +100,22 @@ func (s *Server) BuildApp() *iris.Application {
 	admin.Get("/jobs/{id:uint}/live", s.adminJobLive)
 	admin.Get("/audit", s.adminAuditLog)
 
-	// Unknown /api paths must return JSON 404s, never the SPA shell.
+	// Unknown /portal/api paths must return JSON 404s, never the SPA shell.
 	apiParty.HandleMany("GET POST PUT PATCH DELETE", "/{p:path}", func(ctx iris.Context) {
 		ctx.StatusCode(iris.StatusNotFound)
 		ctx.JSON(map[string]string{"error": "not found"})
 	})
 
-	// --- embedded SPA (registered last; explicit routes win over wildcards) ---
+	// Convenience redirect: / lands on the SPA (HandleDir canonicalizes
+	// /portal/ -> /portal itself).
+	app.Get("/", func(ctx iris.Context) { ctx.Redirect("/portal") })
+
+	// --- embedded SPA under /portal (registered last; explicit routes win) ---
 	distFS, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
 		panic("embedded dist missing: " + err.Error())
 	}
-	app.HandleDir("/", http.FS(distFS), iris.DirOptions{
+	app.HandleDir("/portal", http.FS(distFS), iris.DirOptions{
 		IndexName: "/index.html",
 		SPA:       true,
 	})

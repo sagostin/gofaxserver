@@ -1,22 +1,34 @@
 # Fax Portal — Caddy reverse proxy with automatic HTTPS.
 #
-# 1. Copy this file to `Caddyfile` next to docker-compose.yml and set your
-#    DNS name (it must resolve to this host; ports 80/443 must be reachable
-#    for Let's Encrypt).
-# 2. Start:  docker compose --profile tls up -d
+# Single hostname split by path:
+#   https://fax.example.com/portal/*        → portal  (127.0.0.1:8081)
+#   https://fax.example.com/fax/send, /admin/*, … → gofaxserver (127.0.0.1:8080)
 #
-# The portal listens on 127.0.0.1:8081 (host networking). gofaxserver (:8080)
-# intentionally has NO public site block — its admin API should stay on the
-# internal network / firewall.
+# Existing gofaxserver API clients keep working byte-for-byte through the
+# same hostname (or can keep hitting :8080 directly — either works).
+#
+# Setup:
+# 1. Copy this file to `Caddyfile` next to docker-compose.yml and set your
+#    DNS name (must resolve to this host; 80/443 reachable for Let's Encrypt).
+# 2. Start:  docker compose --profile tls up -d
 
 fax.example.com {
 	encode gzip
 
-	# Reverse proxy to the portal.
-	reverse_proxy 127.0.0.1:8081 {
-		health_uri /api/health
-		health_interval 15s
-		health_timeout 5s
+	# Portal UI + portal API (path-prefixed).
+	@portal path /portal /portal/*
+	handle @portal {
+		reverse_proxy 127.0.0.1:8081 {
+			health_uri /portal/api/health
+			health_interval 15s
+			health_timeout 5s
+		}
+	}
+
+	# Everything else: gofaxserver API, proxied through unchanged.
+	# /fax/send, /fax/status, /tenant/user/authenticate, /admin/*, /health
+	handle {
+		reverse_proxy 127.0.0.1:8080
 	}
 
 	header {
@@ -29,14 +41,21 @@ fax.example.com {
 }
 
 # ---------------------------------------------------------------------------
-# Optional: expose gofaxserver behind TLS for internal/admin use only.
-# Prefer keeping :8080 firewalled; if you must expose it, restrict sources:
+# Optional hardening: restrict the gofaxserver admin API by source IP while
+# leaving tenant-user fax endpoints public:
 #
-# api.example.com {
-# 	@internal remote 10.0.0.0/8 192.168.0.0/16
-# 	handle @internal {
+# fax.example.com {
+# 	@portal path /portal /portal/*
+# 	handle @portal { reverse_proxy 127.0.0.1:8081 }
+#
+# 	@adminApi path /admin/*
+# 	@internal remote_ip 10.0.0.0/8 192.168.0.0/16
+# 	handle @adminApi {
+# 		@notInternal not remote_ip 10.0.0.0/8 192.168.0.0/16
+# 		respond @notInternal 403
 # 		reverse_proxy 127.0.0.1:8080
 # 	}
-# 	respond 403
+#
+# 	handle { reverse_proxy 127.0.0.1:8080 }
 # }
 # ---------------------------------------------------------------------------

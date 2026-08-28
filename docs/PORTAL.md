@@ -112,7 +112,7 @@ host (full reference: [GATEWAYS.md](GATEWAYS.md)):
    ```bash
    fs_cli -x "sofia status gateway pbx_<customer>"
    ```
-5. In the portal **Endpoints** tab (or `POST /api/admin/endpoints`) register
+5. In the portal **Endpoints** tab (or `POST /portal/api/admin/endpoints`) register
    the matching endpoint: `type=tenant`, `type_id=<org>`,
    `endpoint_type=gateway`, `endpoint=pbx_<customer>:<PBX_IP>`, desired
    priority (use `666` for outbound-only, i.e. no inbound delivery).
@@ -190,17 +190,29 @@ openssl rand -hex 32   # PORTAL_ENCRYPTION_KEY (back this up with the DB!)
 
 Use `portal/Caddyfile.sample`: copy it to `portal/Caddyfile`, set your DNS
 name, then start the optional Caddy profile (host networking, so it binds
-80/443 directly and proxies to the portal on `127.0.0.1:8081`; certificates
-are issued/renewed automatically):
+80/443 directly; certificates are issued/renewed automatically):
 
 ```bash
 cd portal && cp Caddyfile.sample Caddyfile && $EDITOR Caddyfile
 docker compose --profile tls up -d
 ```
 
+The sample Caddyfile fronts **both** services on one hostname:
+
+- `/portal/*` → portal (`127.0.0.1:8081`)
+- everything else (`/fax/*`, `/admin/*`, `/tenant/*`, `/health`) → gofaxserver
+  (`127.0.0.1:8080`), proxied through byte-for-byte — existing API clients
+  (Basic-auth curl scripts etc.) keep working on the hostname unchanged, and
+  can also keep hitting `:8080` directly if it's firewalled to them.
+
+The sample also includes a commented hardening block that IP-restricts
+`/admin/*` while leaving tenant-user fax endpoints public. If you do **not**
+want gofaxserver's admin API on the hostname at all, delete the fallback
+`handle` block instead and expose only `/portal/*` — clients then continue
+using direct `:8080` access.
+
 Once HTTPS is live keep `PORTAL_COOKIE_SECURE=true` (the compose default) so
-session cookies are marked Secure. gofaxserver (`:8080`) has no public site
-block by design — keep its admin API off the internet.
+session cookies are marked Secure.
 
 ## Build & run
 
@@ -229,7 +241,7 @@ GRANT ALL ON SCHEMA public TO gofaxportal;
 
 After deployment, walk this once against your live gofaxserver:
 
-1. `curl https://<portal-host>/api/health` → `{"status":"ok"}`
+1. `curl https://<host>/portal/api/health` → `{"status":"ok"}`
 2. Log in with the bootstrap admin → change its password (Admin → Users → Reset PW)
 3. Create an org (Admin → Orgs) — this provisions the gofaxserver tenant + `svc_*` account
 4. Add a number to the org, create a fax user, assign the number to them
@@ -240,18 +252,34 @@ After deployment, walk this once against your live gofaxserver:
 
 ## API surface (session cookie + CSRF)
 
-Health: `GET /api/health` (unauthenticated, for monitoring/compose healthchecks).
+## Path layout (behind Caddy or direct)
 
-Auth: `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`.
+The portal serves everything under the `/portal` prefix so one hostname can
+front both services without breaking existing gofaxserver API clients:
 
-Fax users: `GET /api/me/numbers`, `POST /api/faxes` (multipart:
-`file`,`caller_number`,`callee_number`), `GET /api/faxes[?status=]`,
-`GET /api/faxes/{id}`.
+```
+/portal/*        → portal UI (SPA, Vue)
+/portal/api/*    → portal API (session cookie + CSRF)
+/fax/*, /admin/*, /tenant/*, /health → gofaxserver (unchanged)
+```
 
-Admin (`role=admin`): CRUD under `/api/admin/{orgs,numbers,users,endpoints}`,
-`PUT /api/admin/numbers/{id}/assignments`, `GET /api/admin/orgs/{id}/reconcile`,
-`GET /api/admin/faxes/active`, `GET /api/admin/jobs[?org_id=&status=]`,
-`GET /api/admin/jobs/{id}/live`, `GET /api/admin/audit`.
+Direct access still works too: `http://<host>:8081/portal` (portal) and
+`http://<host>:8080/fax/...` (gofaxserver). Session cookies are scoped with
+`Path=/portal`.
+
+Health: `GET /portal/api/health` (unauthenticated, for monitoring/compose/Caddy
+healthchecks).
+
+Auth: `POST /portal/api/auth/login`, `POST /portal/api/auth/logout`, `GET /portal/api/auth/me`.
+
+Fax users: `GET /portal/api/me/numbers`, `POST /portal/api/faxes` (multipart:
+`file`,`caller_number`,`callee_number`), `GET /portal/api/faxes[?status=]`,
+`GET /portal/api/faxes/{id}`.
+
+Admin (`role=admin`): CRUD under `/portal/api/admin/{orgs,numbers,users,endpoints}`,
+`PUT /portal/api/admin/numbers/{id}/assignments`, `GET /portal/api/admin/orgs/{id}/reconcile`,
+`GET /portal/api/admin/faxes/active`, `GET /portal/api/admin/jobs[?org_id=&status=]`,
+`GET /portal/api/admin/jobs/{id}/live`, `GET /portal/api/admin/audit`.
 
 Mutating requests require the `X-CSRF-Token` header returned by login/me.
 

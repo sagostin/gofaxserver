@@ -64,7 +64,7 @@ func (s *Server) handleLogin(ctx iris.Context) {
 	http.SetCookie(ctx.ResponseWriter(), &http.Cookie{
 		Name:     auth.SessionCookie,
 		Value:    token,
-		Path:     "/",
+		Path:     "/portal", // scoped: the portal lives under the /portal prefix
 		HttpOnly: true,
 		Secure:   s.Cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -79,7 +79,7 @@ func (s *Server) handleLogout(ctx iris.Context) {
 		_ = s.Auth.Destroy(c.Value)
 	}
 	http.SetCookie(ctx.ResponseWriter(), &http.Cookie{
-		Name: auth.SessionCookie, Value: "", Path: "/", HttpOnly: true,
+		Name: auth.SessionCookie, Value: "", Path: "/portal", HttpOnly: true,
 		Secure: s.Cfg.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: -1,
 	})
 	s.audit(ctx, "AUTH_LOGOUT", "", nil)
