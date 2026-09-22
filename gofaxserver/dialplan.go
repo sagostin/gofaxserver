@@ -12,6 +12,28 @@ type TransformationRule struct {
 	Replacement string         // Replacement string, e.g., "011$1" to prefix "011"
 }
 
+// DefaultTransformationRules returns the built-in NANP-oriented rules used
+// when no dialplan is configured:
+//  1. Strip a leading "1" from an 11-digit number (US/Canada country code).
+//  2. Truncate a 10+ digit number to its first 10 digits.
+//
+// Rule 2 assumes tenant numbers are stored in 10-digit NANP format. It
+// corrupts non-NANP (e.g. international/E.164) numbers, so deployments
+// outside North America should configure their own `dialplan.rules` in
+// config.json (an empty list disables transformation entirely).
+func DefaultTransformationRules() []TransformationRule {
+	return []TransformationRule{
+		{
+			Pattern:     regexp.MustCompile(`^1(\d{10}).*$`),
+			Replacement: "$1",
+		},
+		{
+			Pattern:     regexp.MustCompile(`^(\d{10}).*$`),
+			Replacement: "$1",
+		},
+	}
+}
+
 // DialplanManager handles number normalization, regex-based transformations,
 // and tenant number lookup for routing.
 type DialplanManager struct {
@@ -23,6 +45,15 @@ func NewDialplanManager(rules []TransformationRule) *DialplanManager {
 	return &DialplanManager{
 		TransformationRules: rules,
 	}
+}
+
+// compileRule compiles a pattern/replacement pair into a TransformationRule.
+func compileRule(pattern, replacement string) (TransformationRule, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return TransformationRule{}, err
+	}
+	return TransformationRule{Pattern: re, Replacement: replacement}, nil
 }
 
 // NormalizeNumber removes non-digit characters from a number.

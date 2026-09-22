@@ -7,9 +7,9 @@ import (
 	"gofaxserver/gofaxlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"log"
 	"os"
 	"os/signal"
-	"regexp"
 	"sync"
 	"syscall"
 	"time"
@@ -289,21 +289,29 @@ func (s *Server) Start() {
 	}
 }
 
+// loadDialplan builds the DialplanManager from configuration.
+//
+// If the `dialplan` section is absent from config.json, the built-in default
+// rules are used (see DefaultTransformationRules). If the section is present,
+// its rules fully replace the defaults — an empty rules list disables
+// transformation entirely. An invalid pattern falls back to the defaults so
+// a typo can never silently break routing.
 func loadDialplan() *DialplanManager {
-	// Define transformation rules:
-	rule1 := TransformationRule{
-		Pattern:     regexp.MustCompile(`^1(\d{10}).*$`),
-		Replacement: "$1",
+	cfg := gofaxlib.Config.Dialplan
+	if cfg == nil {
+		return NewDialplanManager(DefaultTransformationRules())
 	}
 
-	// Rule 2: If the number starts with "001", remove the leading "00"
-	rule2 := TransformationRule{
-		Pattern:     regexp.MustCompile(`^(\d{10}).*$`),
-		Replacement: "$1",
+	rules := make([]TransformationRule, 0, len(cfg.Rules))
+	for _, r := range cfg.Rules {
+		rule, err := compileRule(r.Pattern, r.Replacement)
+		if err != nil {
+			log.Printf("Dialplan: invalid pattern %q (%v); falling back to default rules", r.Pattern, err)
+			return NewDialplanManager(DefaultTransformationRules())
+		}
+		rules = append(rules, rule)
 	}
-
-	// Initialize the DialplanManager with tenant numbers and transformation rules.
-	return NewDialplanManager([]TransformationRule{rule1, rule2})
+	return NewDialplanManager(rules)
 }
 
 // ReloadData reloads endpoints, tenants, and tenant users from the database,

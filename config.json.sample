@@ -25,6 +25,12 @@
       "CALL_REJECTED"
     ]
   },
+  "dialplan": {
+    "rules": [
+      { "pattern": "^1(\\d{10}).*$", "replacement": "$1" },
+      { "pattern": "^(\\d{10}).*$", "replacement": "$1" }
+    ]
+  },
   "database": {
     "host": "localhost",
     "port": "5432",

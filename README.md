@@ -45,7 +45,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [gofaxs
 |-----------|------|-------------|
 | **Event Socket Server** | `gofaxserver/freeswitch_inbound.go`, `freeswitch_outbound.go` | Inbound (`:8022`) and outbound (`:8021`) ESL connections to FreeSWITCH |
 | **Router** | `gofaxserver/router.go` | Routes incoming calls based on number-to-tenant mapping; honors upstream gateway set |
-| **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformations to caller/callee numbers before routing |
+| **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformations to caller/callee numbers before routing; rules configurable via `dialplan` in `config.json` |
 | **Queue** | `gofaxserver/queue.go` | Manages outbound fax jobs with priority-based endpoint selection and retry |
 | **Web Server** | `gofaxserver/web.go` | Iris-based REST API on `:8080` (or `web.listen`) |
 | **FaxTracker** | `gofaxserver/faxtracker.go` | Real-time tracking of in-flight fax jobs |

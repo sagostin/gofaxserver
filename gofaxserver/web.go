@@ -575,14 +575,19 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		UseECM:     false,
 		DisableV17: false,
 		Status:     "WEBHOOK",
+		// Placeholder result marking the job's origin. It must NOT look like a
+		// successful transmission: this result is attached to the routing
+		// progress tick and would otherwise be persisted as a successful
+		// attempt row (result_text "OK", end_ts ~submit time), causing
+		// consumers of /fax/status (e.g. the portal poller) to report success
+		// before any real attempt has run. HangupCause "WEBHOOK" is the
+		// marker used to identify and skip this placeholder.
 		Result: &gofaxlib.FaxResult{
 			UUID:        uuid.New(),
 			StartTs:     time.Now(),
-			EndTs:       time.Now().Add(2 * time.Second),
 			HangupCause: "WEBHOOK",
-			//RemoteID:         "remoteID-placeholder",
-			ResultText: "OK",
-			Success:    true,
+			ResultText:  "queued",
+			Success:     false,
 		},
 		SourceInfo: FaxSourceInfo{
 			Timestamp:  time.Now(),

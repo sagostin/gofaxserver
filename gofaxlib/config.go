@@ -82,6 +82,22 @@ type config struct {
 		FromName    string `json:"from_name,omitempty"`
 	} `json:"smtp"`
 	PSK string `json:"psk"`
+	// Dialplan is optional. When the section is absent, built-in default
+	// transformation rules are used. When present (even with an empty rules
+	// list), the configured rules fully replace the defaults.
+	Dialplan *DialplanConfig `json:"dialplan,omitempty"`
+}
+
+// DialplanRule is a single regex-based number transformation.
+type DialplanRule struct {
+	Pattern     string `json:"pattern"`
+	Replacement string `json:"replacement"`
+}
+
+// DialplanConfig holds the ordered transformation rules applied to
+// caller/callee numbers before tenant lookup and routing.
+type DialplanConfig struct {
+	Rules []DialplanRule `json:"rules"`
 }
 
 // LoadConfig loads the configuration from a JSON file.

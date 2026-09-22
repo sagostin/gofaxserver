@@ -368,12 +368,22 @@ activate-tbcustomerconfig
 
 ## Dialplan Transformations
 
-Caller/callee numbers are normalized before any tenant lookup. The default rules (`gofaxserver/server.go:loadDialplan`) are:
+Caller/callee numbers are normalized before any tenant lookup. Rules are configured in the optional `dialplan` section of `config.json`:
 
-1. `^1(\d{10}).*$` → `$1` — strip a leading `1` (US country code) when 10 digits remain.
-2. `^(\d{10}).*$` → `$1` — truncate anything beyond 10 digits.
+```json
+"dialplan": {
+  "rules": [
+    { "pattern": "^1(\\d{10}).*$", "replacement": "$1" },
+    { "pattern": "^(\\d{10}).*$", "replacement": "$1" }
+  ]
+}
+```
 
-Custom rules can be added in `loadDialplan`. Each rule is a regex (`*regexp.Regexp`) and a replacement string (supports `$1`, `$2`, ...).
+Each rule is a regex pattern and a replacement string (supports `$1`, `$2`, ...). Rules are applied in order to both caller and callee numbers (`gofaxserver/server.go:loadDialplan`).
+
+- **Section absent** (default): the built-in NANP rules are used — strip a leading `1` from 11-digit numbers, then truncate to 10 digits. This matches tenant numbers stored in 10-digit format.
+- **Section present**: the configured rules fully replace the defaults. An empty list (`"rules": []`) disables transformation entirely — recommended for non-NANP (international) deployments, since the default 10-digit truncation corrupts longer numbers.
+- An invalid pattern logs an error at startup and falls back to the default rules.
 
 ---
 

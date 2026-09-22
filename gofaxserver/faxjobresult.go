@@ -95,10 +95,28 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
+// placeholderHangupCause marks the synthetic result attached to a FaxJob at
+// enqueue time (see web.go). It is not a real call outcome and must never be
+// persisted as a FaxJobResult row.
+const placeholderHangupCause = "WEBHOOK"
+
+// isPlaceholderResult reports whether the job carries the synthetic enqueue
+// placeholder result rather than a real attempt/reception outcome.
+func isPlaceholderResult(job *FaxJob) bool {
+	return job != nil && job.Result != nil && job.Result.HangupCause == placeholderHangupCause
+}
+
 func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 	job := qFR.Job
 	if job == nil {
 		return fmt.Errorf("fax job is nil")
+	}
+
+	// Never persist the enqueue placeholder result (e.g. the router's
+	// progress tick). It carries no real attempt data and would show up in
+	// /fax/status as a bogus row.
+	if isPlaceholderResult(job) {
+		return nil
 	}
 
 	// Marshal endpoints to JSON.

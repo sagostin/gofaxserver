@@ -135,6 +135,11 @@ type decision struct {
 	sawActive  bool // tracker observed the job this pass
 }
 
+// placeholderHangupCause marks the synthetic result gofaxserver attaches to a
+// job at enqueue time. Rows carrying it are not real attempts and must be
+// ignored when deciding the terminal state.
+const placeholderHangupCause = "WEBHOOK"
+
 // decide is a pure function so the heuristic is unit-testable.
 //
 // Rules:
@@ -145,6 +150,16 @@ type decision struct {
 //  3. Otherwise still in flight: sending if seen in the tracker or previously
 //     seen there, queued if we've heard nothing yet.
 func decide(rows []fsclient.FaxStatusRow, inActive, activeOK, seenActive bool, submitted, now time.Time) decision {
+	// Drop placeholder rows (enqueue markers), keeping only real attempt rows.
+	real := make([]fsclient.FaxStatusRow, 0, len(rows))
+	for _, r := range rows {
+		if r.HangupCause == placeholderHangupCause {
+			continue
+		}
+		real = append(real, r)
+	}
+	rows = real
+
 	d := decision{status: models.JobQueued, attempts: len(rows)}
 	bestPages := 0
 	var successRow, lastRow *fsclient.FaxStatusRow

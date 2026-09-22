@@ -32,7 +32,7 @@ A visual companion diagram is available in [`../gofaxserver.excalidraw`](../gofa
 | **Event Socket Server (inbound)** | `gofaxserver/freeswitch_inbound.go` | Listens on `event_server_socket` (default `:8022`). Receives channel events, performs dialplan transforms, decides T.38 strategy, handles `rxfax` / bridge execution. |
 | **Event Socket Server (outbound)** | `gofaxserver/freeswitch_outbound.go` | Connects to FreeSWITCH via `event_client_socket` (default `:8021`) to originate calls (`SendFax`) and read/write `mod_db`. |
 | **Router** | `gofaxserver/router.go` | Consumes `FaxJobRouting` channel, resolves tenants, applies priority-based endpoint selection, and enqueues to `Queue`. Bridge detection is in `detectAndRouteToBridge` / `checkForBridge`. |
-| **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformation rules to caller/callee numbers before tenant lookup. Default rules strip a leading `1` and truncate to 10 digits. |
+| **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformation rules to caller/callee numbers before tenant lookup. Rules are configurable via the `dialplan` section in `config.json`; defaults (when unconfigured) strip a leading `1` and truncate to 10 digits. |
 | **Queue** | `gofaxserver/queue.go` | Manages outbound fax jobs grouped by endpoint type → priority, with exponential backoff retries, jitter, and per-endpoint strategy selection. |
 | **Web Server** | `gofaxserver/web.go` | Iris HTTP server on `web.listen` (default `:8080`). Hosts admin, tenant-user, and authenticate parties. |
 | **FaxTracker** | `gofaxserver/faxtracker.go` | In-memory state for in-flight jobs; exposed via `GET /admin/faxes`. |

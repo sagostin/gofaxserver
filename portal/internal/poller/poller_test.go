@@ -77,3 +77,39 @@ func TestDecideInFlightSending(t *testing.T) {
 		t.Fatalf("in-flight job should be sending, got %+v", d)
 	}
 }
+
+// placeholderRow mimics the synthetic result gofaxserver attaches at enqueue
+// time (hangup cause "WEBHOOK"). It is not a real attempt.
+func placeholderRow() fsclient.FaxStatusRow {
+	return fsclient.FaxStatusRow{
+		JobUUID: "j-1", ResultType: "reception",
+		StartTs: base, EndTs: base.Add(2 * time.Second),
+		Success: true, ResultText: "OK", HangupCause: placeholderHangupCause,
+	}
+}
+
+func TestDecideIgnoresPlaceholderRows(t *testing.T) {
+	// Regression: a placeholder success row followed by genuinely failed
+	// attempts must resolve to failed, never success.
+	rows := []fsclient.FaxStatusRow{
+		placeholderRow(),
+		row(false, 1, 0, "", "NORMAL_UNSPECIFIED"),
+		row(false, 2, 0, "", "NORMAL_UNSPECIFIED"),
+	}
+	d := decide(rows, false, true, true, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobFailed {
+		t.Fatalf("placeholder + failed attempts should be failed, got %+v", d)
+	}
+	if d.attempts != 2 {
+		t.Fatalf("placeholder row must not count as an attempt, got %+v", d)
+	}
+}
+
+func TestDecidePlaceholderOnlyStaysQueued(t *testing.T) {
+	// A placeholder row alone must not finalize the job.
+	d := decide([]fsclient.FaxStatusRow{placeholderRow()},
+		false, true, false, base.Add(-5*time.Minute), base)
+	if d.terminal || d.status != models.JobQueued || d.attempts != 0 {
+		t.Fatalf("placeholder-only job stays queued, got %+v", d)
+	}
+}

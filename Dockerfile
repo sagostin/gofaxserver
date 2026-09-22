@@ -5,13 +5,9 @@ FROM golang:1.24.1-bookworm AS builder
 ENV GOPROXY=https://proxy.golang.org,direct
 WORKDIR /app
 
-# Copy module files and download dependencies
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy source code and build the application
+# Copy source code (dependencies are vendored in vendor/, no go mod download needed)
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main ./gofaxserver/cmd/gofaxserver
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -a -installsuffix cgo -o main ./gofaxserver/cmd/gofaxserver
 
 # Stage 2: Final image using Debian Bookworm Slim
 FROM debian:bookworm-slim

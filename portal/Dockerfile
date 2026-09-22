@@ -1,12 +1,13 @@
 # Multi-stage build for the fax portal (frontend + backend in one image).
+# Build from the REPO ROOT:  docker build -f portal/Dockerfile .
 FROM node:20-alpine AS ui
 WORKDIR /src/frontend
-COPY frontend/package.json frontend/package-lock.json* ./
+COPY portal/frontend/package.json portal/frontend/package-lock.json* ./
 RUN npm install --no-fund --no-audit
-COPY frontend/ ./
+COPY portal/frontend/ ./
 RUN npm run build
 
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src/portal
 COPY portal/go.mod portal/go.sum ./
 RUN go mod download || true
