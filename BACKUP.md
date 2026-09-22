@@ -15,6 +15,11 @@ The `scripts/` directory contains six backup scripts:
 
 All backups are saved to `./backups/<type>/` by default, with timestamped filenames.
 
+The database dump covers all gofaxserver tables, including `gateway_templates`,
+`gateway_configs`, and `dialplan_rules`; rendered gateway XML is covered by the
+FreeSWITCH archive (`/etc/freeswitch`). If the portal is deployed, back up its
+`gofaxportal` database the same way (it holds orgs, users, and job history).
+
 ---
 
 ## 1. Configuration

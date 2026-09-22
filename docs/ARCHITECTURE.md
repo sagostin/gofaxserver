@@ -69,15 +69,16 @@ A visual companion diagram is available in [`../gofaxserver.excalidraw`](../gofa
 ## In-Memory Data Structures
 
 ```go
-// gofaxserver/server.go:18-40
+// gofaxserver/server.go
 type Server struct {
     FsSocket        *EventSocketServer   // inbound + outbound ESL
     Router          *Router
     Queue           *Queue
     LogManager      *gofaxlib.LogManager
-    DialplanManager *DialplanManager
     FaxJobRouting   chan *FaxJob         // inbound + /fax/send jobs into the Router
     DB              *gorm.DB
+
+    dialplan atomic.Pointer[DialplanManager] // active manager; hot-swap in "db" mode — access via Dialplan()
 
     mu            sync.RWMutex
     Tenants         map[uint]*Tenant             // keyed by Tenant.ID
@@ -239,6 +240,25 @@ A denormalized record of every fax attempt — one row per attempt, written from
 - `used_t38`, `softmodem_fallback` — T.38 decision tracking
 
 `Endpoints` and `SourceInfo` are stored as JSON strings.
+
+### `gateway_templates`
+
+Database-backed FreeSWITCH gateway XML templates (Go `text/template` syntax).
+Seeded on first start with `sbc` and `pbx`. See [GATEWAYS.md](GATEWAYS.md#api-driven-provisioning-portal).
+
+### `gateway_configs`
+
+Provisioned gateway records: `name` (== XML filename == endpoint prefix),
+`template_id`, `params` (JSON, encrypted at rest with `psk`), `endpoint_id`
+(linked endpoint — protected from direct edits), and registration monitor
+state (`last_state`, `last_state_checked_at`).
+
+### `dialplan_rules`
+
+Number transformation rules for `dialplan.source = "db"` mode: `position`
+(order), `pattern`, `replacement`, `enabled`, `description`. Seeded from the
+config rules (or built-in defaults) on first run; hot-reloaded on every write
+and on `/admin/reload`.
 
 ---
 

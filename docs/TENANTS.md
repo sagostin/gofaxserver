@@ -85,6 +85,11 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
   }'
 ```
 
+> **Note:** gateway endpoints created via gateway provisioning
+> (`POST /admin/gateway` or the portal's Gateways tab) are *managed* — direct
+> `PUT/DELETE /admin/endpoint/{id}` on them is refused with 409. Update or
+> deprovision them through the gateway API instead.
+
 **Router behavior** (`gofaxserver/router.go:31-231`):
 - Incoming fax from upstream → lookup endpoint for destination number
 - Endpoint found → queue fax directly to that gateway

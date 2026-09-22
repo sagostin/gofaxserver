@@ -322,3 +322,12 @@ users|endpoints`; the portal's per-org **Reconcile** button diffs the mirror
 against live state (missing tenants/numbers/users, ID mismatches). The rule:
 **manage gofaxserver tenants through the portal**, treat CLI/curl edits as
 exceptional, and re-run reconcile after them.
+
+## Related Documentation
+
+- [SETUP.md](SETUP.md) — Step-by-step setup procedure
+- [GATEWAYS.md](GATEWAYS.md) — FreeSWITCH gateway configuration + API-driven provisioning
+- [TENANTS.md](TENANTS.md) — Tenant, endpoint, and notify configuration
+- [API_REFERENCE.md](API_REFERENCE.md) — gofaxserver API the portal proxies
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
+
