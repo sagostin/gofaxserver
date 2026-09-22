@@ -166,6 +166,15 @@ func (s *Server) Start() {
 		nil,
 	))
 
+	if err := s.seedGatewayTemplates(); err != nil {
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			fmt.Sprintf("failed to seed gateway templates: %v", err),
+			logrus.ErrorLevel,
+			nil,
+		))
+	}
+
 	err = s.loadTenantNumbers()
 	if err != nil {
 		s.LogManager.SendLog(s.LogManager.BuildLog(

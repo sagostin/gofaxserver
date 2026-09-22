@@ -325,6 +325,8 @@ docker build -t gofaxserver:latest .
 
 The Docker image runs the server as the non-root `appuser` and exposes port 8080 (web) and 8022 (inbound ESL). FreeSWITCH is **not** included in the image — run it on the host or as a separate container and mount `/etc/gofaxserver/config.json` and a writable `temp_dir`.
 
+To enable API-driven FreeSWITCH gateway provisioning (Admin → Gateways in the portal), also set `freeswitch.gateway_config_dir` in `config.json` and mount that directory so both gofaxserver and FreeSWITCH see the same path (e.g. `/etc/freeswitch/gateways`). See [docs/GATEWAYS.md](docs/GATEWAYS.md#api-driven-provisioning-portal).
+
 ### Debian package
 
 A `debian/` directory is provided to build a `.deb` via `dpkg-buildpackage`. See [debian/](debian/) for the manifest and the systemd unit.

@@ -69,6 +69,8 @@ SBC templates set `extension-in-contact=true` and `ignore-early-media=true` — 
 
 ## Creating a New Gateway
 
+Gateways can be created **manually** (below) or **via the API/portal** (next section) when provisioning is enabled.
+
 ### 1. Copy the Template
 
 ```bash
@@ -100,6 +102,55 @@ sofia profile fax rescan
 ```bash
 sofia status gateway pbx_<CUSTOMERNAME>
 ```
+
+## API-Driven Provisioning (Portal)
+
+When `freeswitch.gateway_config_dir` is set in gofaxserver's `config.json`
+(e.g. `/etc/freeswitch/gateways`, shared with the FreeSWITCH host/container
+via mount), the whole manual flow above collapses into one call:
+
+```bash
+curl -X POST http://<FAX_SERVER>:8080/admin/gateway \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "pbx_acme",
+    "template_id": 2,
+    "params": { "realm": "198.51.100.20" },
+    "type": "tenant",
+    "type_id": 7,
+    "priority": 0,
+    "bridge": true
+  }'
+```
+
+This renders the template, atomically writes `<gateway_config_dir>/pbx_acme.xml`,
+runs `reloadxml` + `sofia profile fax rescan` over the event socket, and
+creates the linked endpoint (`endpoint=pbx_acme:198.51.100.20` — the realm is
+used as the ACL IP unless `endpoint_ip` is given). On any failure the file and
+endpoint are rolled back.
+
+Registered (SIP-auth) gateways are supported by the same templates:
+
+```json
+"params": { "realm": "sbc.carrier.com", "register": true, "username": "faxuser", "password": "s3cret" }
+```
+
+Other operations:
+
+- `GET /admin/gateways` — list provisioned gateways with live `sofia status gateway` state
+- `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision)
+- `DELETE /admin/gateway/{name}` — `sofia killgw`, remove XML, rescan, delete linked endpoint
+- `GET|POST /admin/gateway/templates`, `PUT|DELETE /admin/gateway/templates/{id}` — manage templates
+
+Templates are stored in the database (seeded on first start from
+`gofaxserver/templates/gateways/{sbc,pbx}.xml`, which mirror the
+`examples/freeswitch/gateways/` files) and use Go template syntax —
+`{{.realm}}`, `{{if .register}}...{{end}}`, etc. Declared variables are
+exposed via the API so the portal renders a dynamic form per template.
+
+In the portal: **Admin → Gateways** (provision/manage) and **Admin →
+Templates** (edit templates). All actions are audit-logged.
 
 ## FreeSWITCH CLI Commands
 
@@ -173,22 +224,13 @@ The `realm` parameter specifies how FreeSWITCH identifies the remote SIP peer:
 
 ## ACL Matching (gofaxserver side)
 
-gofaxserver matches inbound source IPs against the `endpoint` value of registered endpoints via `fsGatewayACL` (`gofaxserver/endpoints.go:235-243`):
+gofaxserver matches inbound source IPs against the `endpoint` value of registered endpoints via `fsGatewayACL` (`gofaxserver/endpoints.go`).
 
-```go
-func (s *Server) fsGatewayACL(ip string) (string, error) {
-    for _, k := range s.GatewayEndpointsACL {
-        if strings.Contains(k, ip) {
-            return k, nil
-        }
-    }
-    return "", errors.New("unable to find matching gateway from sending IP")
-}
-```
+For entries in the documented `xml_name:publicIP` format, the IP portion after the first `:` is compared **exactly** against the inbound source IP (legacy IP-only entries match on exact equality). Substring matching was removed — an entry for `192.168.1.10` no longer accidentally passes a call from `92.168.1.1`.
 
-`GatewayEndpointsACL` is built from every endpoint with `endpoint_type=gateway` regardless of scope (`endpoints.go:60-62`). For the ACL to pass, the inbound source IP must appear as a substring of one of the registered endpoint strings — which is why gateway endpoints must include the public IP in `xml_name:publicIP` format.
+`GatewayEndpointsACL` is built from every endpoint with `endpoint_type=gateway` regardless of scope. This is why gateway endpoints must include the public IP in `xml_name:publicIP` format.
 
-If the ACL fails, the inbound call is rejected with `respond 401` (`freeswitch_inbound.go:180-192`).
+If the ACL fails, the inbound call is rejected with `respond 401` (`freeswitch_inbound.go`).
 
 ## Non-Register Mode
 
@@ -282,7 +324,7 @@ See [TENANTS.md](TENANTS.md) for the full priority/scope semantics.
 If the inbound leg is failing with `respond 401`:
 
 1. Check the gateway endpoint entry is registered (`/admin/reload` if recently added)
-2. Verify the `endpoint` value contains the public IP of the PBX/SBC
+2. Verify the `endpoint` value is `xml_name:publicIP` with the exact public IP of the PBX/SBC after the colon (matching is exact, not substring)
 3. View the FreeSWITCH log to see the actual `sip_network_ip` variable for the call
 4. Confirm `GatewayEndpointsACL` is populated (it is rebuilt on every `/admin/reload` and on endpoint create/update/delete)
 

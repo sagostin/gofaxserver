@@ -94,33 +94,31 @@ Behavior details worth knowing:
 ## Adding a new customer whose PBX delivers/receives via FreeSWITCH
 
 The portal provisions gofaxserver-side state (tenant, service account,
-numbers, endpoints) but **never touches FreeSWITCH configuration**. If the
-customer needs a PBX gateway, steps 1–4 below are manual on the FreeSWITCH
-host (full reference: [GATEWAYS.md](GATEWAYS.md)):
+numbers, endpoints). FreeSWITCH gateway configuration can also be automated
+when gofaxserver has `freeswitch.gateway_config_dir` set (a path shared with
+the FreeSWITCH host/container, e.g. `/etc/freeswitch/gateways`):
 
-1. Copy the template:
-   ```bash
-   cp examples/freeswitch/gateways/pbx_example.xml \
-      /etc/freeswitch/gateways/pbx_<customer>.xml
-   ```
-2. Edit it: set `name="pbx_<customer>"` and `realm="<PBX public IP/host>"`.
-3. Load the gateway:
-   ```bash
-   fs_cli -x "sofia profile fax rescan"
-   ```
-4. Verify:
-   ```bash
-   fs_cli -x "sofia status gateway pbx_<customer>"
-   ```
-5. In the portal **Endpoints** tab (or `POST /portal/api/admin/endpoints`) register
-   the matching endpoint: `type=tenant`, `type_id=<org>`,
-   `endpoint_type=gateway`, `endpoint=pbx_<customer>:<PBX_IP>`, desired
-   priority (use `666` for outbound-only, i.e. no inbound delivery).
+**Admin → Gateways** — pick a template (`sbc` for upstream carriers, `pbx`
+for customer PBXs), enter the gateway name (e.g. `pbx_<customer>`), the
+`realm` (PBX/SBC host or IP), optional SIP-auth credentials
+(`register` + username/password), the scope (tenant/number/global), priority,
+and whether to use bridge/transcoding mode. Submitting renders the XML into
+the gateways directory, reloads the `fax` sofia profile over the event
+socket, and creates the matching endpoint in one step. The table shows each
+gateway's live `sofia status` state.
 
-Until step 3 is done, inbound calls from that PBX will fail ACL/routing even
-though the endpoint exists in gofaxserver — this is expected. The gateway XML
-+ `fs_cli` reload is the one part of customer onboarding that cannot currently
-be automated from the portal.
+Templates themselves are database-backed and editable under **Admin →
+Templates** (Go template syntax; declared `{{.variables}}` drive the
+provision form). Full parameter reference: [GATEWAYS.md](GATEWAYS.md).
+
+When provisioning is **not** enabled (no `gateway_config_dir`, or no shared
+filesystem with FreeSWITCH), the gateway XML must still be created manually
+on the FreeSWITCH host and loaded with `fs_cli -x "sofia profile fax rescan"`
+— see [GATEWAYS.md](GATEWAYS.md); then register the matching endpoint in the
+portal (**Admin → Endpoints** or `POST /portal/api/admin/endpoints`):
+`type=tenant`, `type_id=<org>`, `endpoint_type=gateway`,
+`endpoint=pbx_<customer>:<PBX_IP>`, desired priority (use `666` for
+outbound-only, i.e. no inbound delivery).
 
 ## Layout
 
@@ -277,6 +275,7 @@ Fax users: `GET /portal/api/me/numbers`, `POST /portal/api/faxes` (multipart:
 `GET /portal/api/faxes/{id}`.
 
 Admin (`role=admin`): CRUD under `/portal/api/admin/{orgs,numbers,users,endpoints}`,
+gateway provisioning under `/portal/api/admin/{gateways,gateway-templates}`,
 `PUT /portal/api/admin/numbers/{id}/assignments`, `GET /portal/api/admin/orgs/{id}/reconcile`,
 `GET /portal/api/admin/faxes/active`, `GET /portal/api/admin/jobs[?org_id=&status=]`,
 `GET /portal/api/admin/jobs/{id}/live`, `GET /portal/api/admin/audit`.
@@ -295,6 +294,12 @@ Mutating requests require the `X-CSRF-Token` header returned by login/me.
   of a user's sessions are revoked on password reset or deactivation.
 - Jobs that never reach a terminal state (e.g. gofaxserver restarted before
   writing attempt rows) are force-marked `failed` after 24 h by the poller.
+- Gateway provisioning runs on gofaxserver behind its admin API key; the
+  portal only proxies it for `role=admin` users and audit-logs every action.
+  Gateway secrets (SIP passwords) are stored encrypted by gofaxserver
+  (`psk`), masked as `********` in API responses, and template params are
+  XML-escaped at render time so values cannot inject markup into FreeSWITCH
+  config.
 
 ## Reconciliation
 

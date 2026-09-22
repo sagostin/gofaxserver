@@ -9,7 +9,8 @@
     "ident": "_undef_",
     "header": "Fax Server",
     "verbose": false,
-    "softmodem_fallback": true
+    "softmodem_fallback": true,
+    "gateway_config_dir": "/etc/freeswitch/gateways"
   },
   "faxing": {
     "temp_dir": "/opt/gofaxip/tmp",

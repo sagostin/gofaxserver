@@ -24,5 +24,9 @@ services:
     volumes:
       - /etc/gofaxserver/config.json:/etc/gofaxserver/config.json
       - /faxtmp:/faxtmp
+      # Optional: enables API-driven FS gateway provisioning (Admin → Gateways
+      # in the portal). Must be the SAME path FreeSWITCH reads its gateway
+      # XML from, and must match freeswitch.gateway_config_dir in config.json.
+      # - /etc/freeswitch/gateways:/etc/freeswitch/gateways
     network_mode: host
     restart: always

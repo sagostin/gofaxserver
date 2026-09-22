@@ -95,6 +95,18 @@ func (s *Server) BuildApp() *iris.Application {
 	endpoints.Put("/{id:uint}", s.adminUpdateEndpoint)
 	endpoints.Delete("/{id:uint}", s.adminDeleteEndpoint)
 
+	gwTemplates := admin.Party("/gateway-templates")
+	gwTemplates.Get("/", s.adminListGatewayTemplates)
+	gwTemplates.Post("/", s.adminCreateGatewayTemplate)
+	gwTemplates.Put("/{id:uint}", s.adminUpdateGatewayTemplate)
+	gwTemplates.Delete("/{id:uint}", s.adminDeleteGatewayTemplate)
+
+	gateways := admin.Party("/gateways")
+	gateways.Get("/", s.adminListGateways)
+	gateways.Post("/", s.adminProvisionGateway)
+	gateways.Put("/{name}", s.adminUpdateGateway)
+	gateways.Delete("/{name}", s.adminDeprovisionGateway)
+
 	admin.Get("/faxes/active", s.adminActiveFaxes)
 	admin.Get("/jobs", s.adminListAllJobs)
 	admin.Get("/jobs/{id:uint}/live", s.adminJobLive)

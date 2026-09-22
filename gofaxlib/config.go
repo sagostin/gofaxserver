@@ -39,6 +39,10 @@ type config struct {
 		Header            string `json:"header"`
 		Verbose           bool   `json:"verbose"`
 		SoftmodemFallback bool   `json:"softmodem_fallback"`
+		// GatewayConfigDir is the directory on a shared filesystem where
+		// FreeSWITCH gateway XML files are written (e.g. /etc/freeswitch/gateways).
+		// Empty disables API-driven gateway provisioning.
+		GatewayConfigDir string `json:"gateway_config_dir"`
 	} `json:"freeswitch"`
 	Faxing struct {
 		TempDir                      string          `json:"temp_dir"` // eg. /opt/gofaxip/tmp

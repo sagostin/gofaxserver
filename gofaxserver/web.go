@@ -1,6 +1,7 @@
 package gofaxserver
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"github.com/google/uuid"
@@ -44,6 +45,16 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Post("/endpoint", s.handleAddEndpoint)
 		admin.Put("/endpoint/{id}", s.handleUpdateEndpoint)
 		admin.Delete("/endpoint/{id}", s.handleDeleteEndpoint)
+
+		// FreeSWITCH gateway provisioning (templates + combined provision calls).
+		admin.Get("/gateway/templates", s.handleListGatewayTemplates)
+		admin.Post("/gateway/templates", s.handleCreateGatewayTemplate)
+		admin.Put("/gateway/templates/{id}", s.handleUpdateGatewayTemplate)
+		admin.Delete("/gateway/templates/{id}", s.handleDeleteGatewayTemplate)
+		admin.Get("/gateways", s.handleListGateways)
+		admin.Post("/gateway", s.handleProvisionGateway)
+		admin.Put("/gateway/{name}", s.handleUpdateGateway)
+		admin.Delete("/gateway/{name}", s.handleDeprovisionGateway)
 
 		admin.Post("/user", s.handleAddTenantUser)
 		admin.Put("/user/{id}", s.handleUpdateTenantUser)
@@ -714,8 +725,8 @@ func (s *Server) basicAuthMiddleware(ctx iris.Context) {
 	// For this example, we'll assume the API key is the password
 	apiKey := credentials[colonIndex+1:]
 
-	// Compare the provided API key with the expected one
-	if apiKey != expectedAPIKey {
+	// Constant-time comparison to avoid leaking the key via timing.
+	if subtle.ConstantTimeCompare([]byte(apiKey), []byte(expectedAPIKey)) != 1 {
 		// Invalid API key
 		unauthorized(ctx, s, "Invalid API key")
 		return

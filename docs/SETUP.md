@@ -32,6 +32,14 @@ sudo su
 
 ## Step 2: Configure the FreeSWITCH Gateway
 
+> **Automated alternative:** if `freeswitch.gateway_config_dir` is set in
+> gofaxserver's `config.json`, gateways can be provisioned end-to-end from the
+> portal (**Admin → Gateways**) or the API (`POST /admin/gateway`) — template
+> render, XML write, `sofia profile fax rescan`, and endpoint creation in one
+> call. See "API-driven provisioning" in [GATEWAYS.md](GATEWAYS.md). The
+> manual flow below still works and is the fallback when provisioning is
+> disabled or gofaxserver and FreeSWITCH share no filesystem.
+
 Templates are in `examples/freeswitch/gateways/`. Copy the appropriate one for this customer:
 
 ```bash
@@ -57,7 +65,7 @@ Edit the gateway file and update:
 ```
 
 **Key gateway parameters:**
-- `realm` — The public host or domain of the remote peer. **This is also matched by gofaxserver's `fsGatewayACL`** (the endpoint's `endpoint` value `xml_name:publicIP` must contain this IP) for inbound ACL to pass.
+- `realm` — The public host or domain of the remote peer. **This is also matched by gofaxserver's `fsGatewayACL`** (the endpoint's `endpoint` value must be `xml_name:publicIP`, and the part after the `:` is compared exactly against the inbound source IP) for inbound ACL to pass.
 - `extension` — How to route calls to this gateway (default: `auto_to_user`).
 - `register` — Set to `false` for IP-based authentication.
 
@@ -109,6 +117,9 @@ The `fax` profile name comes from `examples/freeswitch/autoload_configs/sofia.co
 ---
 
 ## Step 5: Reload Gateway in FreeSWITCH
+
+> Not needed when the gateway was provisioned via the portal/API — the reload
+> (`reloadxml` + `sofia profile fax rescan`) happens automatically.
 
 After creating the gateway XML file, scan it in the FreeSWITCH CLI:
 

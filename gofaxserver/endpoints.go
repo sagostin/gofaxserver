@@ -276,7 +276,18 @@ func (s *Server) removeEndpoint(endpointID uint) error {
 
 func (s *Server) fsGatewayACL(ip string) (string, error) {
 	for _, k := range s.GatewayEndpointsACL {
-		if strings.Contains(k, ip) {
+		// Gateway endpoints are stored as "name:publicIP". Compare the IP
+		// portion exactly — substring matching would let e.g. source IP
+		// "92.168.1.1" match an ACL entry for "192.168.1.10".
+		if idx := strings.Index(k, ":"); idx >= 0 {
+			if k[idx+1:] == ip {
+				return k, nil
+			}
+			continue
+		}
+		// Legacy entries without an IP suffix match only on exact equality
+		// (e.g. an entry that is just an IP address).
+		if k == ip {
 			return k, nil
 		}
 	}

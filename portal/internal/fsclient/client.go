@@ -125,6 +125,49 @@ type Endpoint struct {
 	Bridge       bool   `json:"bridge"`
 }
 
+// GatewayTemplate mirrors gofaxserver's database-backed FS gateway template.
+type GatewayTemplate struct {
+	ID          uint      `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Body        string    `json:"body"`
+	Variables   []string  `json:"variables"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// GatewayConfig mirrors gofaxserver's provisioned-gateway record.
+type GatewayConfig struct {
+	ID         uint            `json:"id"`
+	Name       string          `json:"name"`
+	TemplateID uint            `json:"template_id"`
+	Template   GatewayTemplate `json:"template"`
+	Params     string          `json:"params"`
+	EndpointID uint            `json:"endpoint_id"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
+// GatewayStatus pairs a provisioned gateway with its live sofia state.
+type GatewayStatus struct {
+	Gateway GatewayConfig `json:"gateway"`
+	File    string        `json:"file"`
+	State   string        `json:"state"`
+	Exists  bool          `json:"exists_on_disk"`
+}
+
+// GatewayProvisionSpec is the combined provision payload (XML + endpoint).
+type GatewayProvisionSpec struct {
+	Name       string                 `json:"name"`
+	TemplateID uint                   `json:"template_id"`
+	Params     map[string]interface{} `json:"params"`
+	Scope      string                 `json:"type"`
+	TypeID     uint                   `json:"type_id"`
+	Priority   uint                   `json:"priority"`
+	Bridge     bool                   `json:"bridge"`
+	EndpointIP string                 `json:"endpoint_ip"`
+}
+
 // FaxRunState mirrors the subset of gofaxserver's FaxRunState we need.
 type FaxRunState struct {
 	JobUUID    string    `json:"job_uuid"`
@@ -257,6 +300,50 @@ func (c *Client) UpdateEndpoint(ep Endpoint) error {
 
 func (c *Client) DeleteEndpoint(id uint) error {
 	return c.doAdmin(http.MethodDelete, fmt.Sprintf("/admin/endpoint/%d", id), nil, nil)
+}
+
+// --- gateway templates & provisioning ---
+
+func (c *Client) ListGatewayTemplates() ([]GatewayTemplate, error) {
+	var out []GatewayTemplate
+	err := c.doAdmin(http.MethodGet, "/admin/gateway/templates", nil, &out)
+	return out, err
+}
+
+func (c *Client) CreateGatewayTemplate(tpl GatewayTemplate) (*GatewayTemplate, error) {
+	out := &GatewayTemplate{}
+	err := c.doAdmin(http.MethodPost, "/admin/gateway/templates", tpl, out)
+	return out, err
+}
+
+func (c *Client) UpdateGatewayTemplate(tpl GatewayTemplate) error {
+	return c.doAdmin(http.MethodPut, fmt.Sprintf("/admin/gateway/templates/%d", tpl.ID), tpl, nil)
+}
+
+func (c *Client) DeleteGatewayTemplate(id uint) error {
+	return c.doAdmin(http.MethodDelete, fmt.Sprintf("/admin/gateway/templates/%d", id), nil, nil)
+}
+
+func (c *Client) ListGateways() ([]GatewayStatus, error) {
+	var out []GatewayStatus
+	err := c.doAdmin(http.MethodGet, "/admin/gateways", nil, &out)
+	return out, err
+}
+
+func (c *Client) ProvisionGateway(spec GatewayProvisionSpec) (*GatewayStatus, error) {
+	out := &GatewayStatus{}
+	err := c.doAdmin(http.MethodPost, "/admin/gateway", spec, out)
+	return out, err
+}
+
+func (c *Client) UpdateGateway(name string, spec GatewayProvisionSpec) (*GatewayStatus, error) {
+	out := &GatewayStatus{}
+	err := c.doAdmin(http.MethodPut, "/admin/gateway/"+name, spec, out)
+	return out, err
+}
+
+func (c *Client) DeprovisionGateway(name string) error {
+	return c.doAdmin(http.MethodDelete, "/admin/gateway/"+name, nil, nil)
 }
 
 func (c *Client) ListEndpoints(typeFilter string, typeID uint) ([]Endpoint, error) {

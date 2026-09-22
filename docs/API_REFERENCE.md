@@ -349,6 +349,108 @@ DELETE /admin/endpoint/{id}
 
 ---
 
+### Gateway Provisioning (FreeSWITCH)
+
+API-driven gateway provisioning: renders a database-backed template, writes
+the gateway XML to `freeswitch.gateway_config_dir`, reloads the `fax` sofia
+profile over the event socket, and manages the linked endpoint. Returns 500
+with a clear error when `gateway_config_dir` is not configured.
+
+Gateway `params` are stored encrypted (AES-256 with `psk`) and secret values
+(`password`, anything containing `password`/`secret`) are masked as
+`"********"` in all responses. On update, leaving a secret as `"********"`
+keeps the previously stored value.
+
+#### List Gateways
+
+```
+GET /admin/gateways
+```
+
+**Response:** array of `{gateway, file, state, exists_on_disk}` — `state` is
+parsed from `sofia status gateway <name>`.
+
+#### Provision Gateway (combined XML + endpoint)
+
+```
+POST /admin/gateway
+```
+
+**Payload:**
+
+```json
+{
+  "name": "pbx_acme",
+  "template_id": 2,
+  "params": { "realm": "192.0.2.10", "register": false },
+  "type": "tenant",
+  "type_id": 7,
+  "priority": 0,
+  "bridge": true,
+  "endpoint_ip": ""
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Gateway name (`^[a-z0-9_]+$`); equals the XML filename and endpoint prefix |
+| `template_id` | uint | ID of a gateway template (see below) |
+| `params` | object | Template variables; `realm` required, `register=true` requires `username`+`password` |
+| `type` | string | Linked endpoint scope: `tenant`, `number`, or `global` |
+| `type_id` | uint | Tenant/number ID (0 for `global`) |
+| `priority` | uint | Endpoint priority (`666` = outbound-only) |
+| `bridge` | bool | Bridge/transcoding mode instead of txfax/rxfax |
+| `endpoint_ip` | string | ACL IP for the endpoint value; defaults to `realm` |
+
+On failure at any step, prior steps roll back (file removed, gateway torn
+down, endpoint deleted).
+
+#### Update Gateway
+
+```
+PUT /admin/gateway/{name}
+```
+
+Same payload as provision. Gateways cannot be renamed — delete and
+re-provision instead.
+
+#### Deprovision Gateway
+
+```
+DELETE /admin/gateway/{name}
+```
+
+Kills the gateway (`sofia killgw fax <name>`), removes the XML, rescans the
+profile, and deletes the linked endpoint.
+
+### Gateway Templates
+
+Templates use Go `text/template` syntax (`{{.realm}}`, `{{if .register}}…{{end}}`).
+Seeded on first start with `sbc` and `pbx` (mirrors of
+`examples/freeswitch/gateways/`).
+
+#### List Templates
+
+```
+GET /admin/gateway/templates
+```
+
+**Response:** array of templates, each with a `variables` array extracted
+from the body (for dynamic form rendering).
+
+#### Create / Update / Delete Template
+
+```
+POST   /admin/gateway/templates         {name, description, body}
+PUT    /admin/gateway/templates/{id}    {name, description, body}
+DELETE /admin/gateway/templates/{id}
+```
+
+Bodies are validated (parseable template) on write. Delete is refused while
+provisioned gateways reference the template.
+
+---
+
 ### User Management
 
 #### Create User

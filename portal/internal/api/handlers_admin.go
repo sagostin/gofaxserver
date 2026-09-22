@@ -820,6 +820,164 @@ func (s *Server) adminDeleteEndpoint(ctx iris.Context) {
 	ctx.JSON(map[string]bool{"ok": true})
 }
 
+// ---------- Gateway templates ----------
+
+func (s *Server) adminListGatewayTemplates(ctx iris.Context) {
+	out, err := s.FX.ListGatewayTemplates()
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "failed to list upstream gateway templates: " + err.Error()})
+		return
+	}
+	ctx.JSON(out)
+}
+
+func (s *Server) adminCreateGatewayTemplate(ctx iris.Context) {
+	var tpl fsclient.GatewayTemplate
+	if err := ctx.ReadJSON(&tpl); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	created, err := s.FX.CreateGatewayTemplate(tpl)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream create failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_TEMPLATE_CREATE", fmt.Sprintf("template:%d", created.ID), map[string]string{"name": created.Name})
+	ctx.StatusCode(201)
+	ctx.JSON(created)
+}
+
+func (s *Server) adminUpdateGatewayTemplate(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	var tpl fsclient.GatewayTemplate
+	if err := ctx.ReadJSON(&tpl); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	tpl.ID = id
+	if err := s.FX.UpdateGatewayTemplate(tpl); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream update failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_TEMPLATE_UPDATE", fmt.Sprintf("template:%d", id), map[string]string{"name": tpl.Name})
+	ctx.JSON(tpl)
+}
+
+func (s *Server) adminDeleteGatewayTemplate(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	if err := s.FX.DeleteGatewayTemplate(id); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream delete failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_TEMPLATE_DELETE", fmt.Sprintf("template:%d", id), nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
+// ---------- FreeSWITCH gateway provisioning ----------
+
+func (s *Server) adminListGateways(ctx iris.Context) {
+	out, err := s.FX.ListGateways()
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "failed to list upstream gateways: " + err.Error()})
+		return
+	}
+	ctx.JSON(out)
+}
+
+// validateGatewaySpec sanity-checks the scope fields before proxying; the
+// upstream performs full validation (name, realm, template, XML).
+func (s *Server) validateGatewaySpec(spec *fsclient.GatewayProvisionSpec) string {
+	if !validEndpointTypes[spec.Scope] {
+		return "type must be tenant, number or global"
+	}
+	switch spec.Scope {
+	case "tenant":
+		var cnt int64
+		s.DB.Model(&models.Org{}).Where("id = ?", spec.TypeID).Count(&cnt)
+		if cnt == 0 {
+			return "unknown tenant scope: no such org"
+		}
+	case "number":
+		var cnt int64
+		s.DB.Model(&models.Number{}).Where("id = ?", spec.TypeID).Count(&cnt)
+		if cnt == 0 {
+			return "unknown number scope: no such number id"
+		}
+	case "global":
+		spec.TypeID = 0
+	}
+	return ""
+}
+
+func (s *Server) adminProvisionGateway(ctx iris.Context) {
+	var spec fsclient.GatewayProvisionSpec
+	if err := ctx.ReadJSON(&spec); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	if msg := s.validateGatewaySpec(&spec); msg != "" {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": msg})
+		return
+	}
+	gs, err := s.FX.ProvisionGateway(spec)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream provision failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_PROVISION", "gateway:"+spec.Name, map[string]interface{}{"type": spec.Scope, "type_id": spec.TypeID, "bridge": spec.Bridge})
+	ctx.StatusCode(201)
+	ctx.JSON(gs)
+}
+
+func (s *Server) adminUpdateGateway(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	var spec fsclient.GatewayProvisionSpec
+	if err := ctx.ReadJSON(&spec); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	if msg := s.validateGatewaySpec(&spec); msg != "" {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": msg})
+		return
+	}
+	gs, err := s.FX.UpdateGateway(name, spec)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream update failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_UPDATE", "gateway:"+name, nil)
+	ctx.JSON(gs)
+}
+
+func (s *Server) adminDeprovisionGateway(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	if ctx.URLParam("confirm") != "true" {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "refusing to deprovision gateway without confirm=true query param"})
+		return
+	}
+	if err := s.FX.DeprovisionGateway(name); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream delete failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_DELETE", "gateway:"+name, nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
 // ---------- Faxes / jobs / audit ----------
 
 func (s *Server) adminActiveFaxes(ctx iris.Context) {

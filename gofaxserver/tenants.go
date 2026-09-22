@@ -1,6 +1,7 @@
 package gofaxserver
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"gofaxserver/gofaxlib"
 
@@ -61,7 +62,8 @@ func (s *Server) AuthenticateTenantUser(username, password string) (*TenantUser,
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt provided password: %w", err)
 	}
-	if password != decrypted {
+	// Constant-time comparison to avoid leaking the password via timing.
+	if subtle.ConstantTimeCompare([]byte(password), []byte(decrypted)) != 1 {
 		return nil, fmt.Errorf("invalid password")
 	}
 	return &user, nil
