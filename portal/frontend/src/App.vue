@@ -15,6 +15,7 @@ const links = computed(() => {
       { to: '/admin/endpoints', label: 'Endpoints' },
       { to: '/admin/gateways', label: 'Gateways' },
       { to: '/admin/templates', label: 'Templates' },
+      { to: '/admin/dialplan', label: 'Dialplan' },
       { to: '/admin/active', label: 'Active Faxes' },
       { to: '/admin/jobs', label: 'All Jobs' },
       { to: '/admin/audit', label: 'Audit' },

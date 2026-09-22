@@ -39,6 +39,23 @@ sudo su
 > call. See "API-driven provisioning" in [GATEWAYS.md](GATEWAYS.md). The
 > manual flow below still works and is the fallback when provisioning is
 > disabled or gofaxserver and FreeSWITCH share no filesystem.
+>
+> **Prerequisites for automated provisioning (FreeSWITCH as host service):**
+> 1. The sofia profile must include the gateways directory. Our example config
+>    does this (`autoload_configs/sofia.conf.xml`):
+>    `<X-PRE-PROCESS cmd="include" data="../gateways/*.xml"/>` inside
+>    `<profile><gateways>`. If gateways provisioned via the API show as
+>    `not-loaded`, this include is missing.
+> 2. Both processes must be able to write/read the directory. Recommended:
+>    ```bash
+>    chgrp freeswitch /etc/freeswitch/gateways
+>    chmod g+ws /etc/freeswitch/gateways   # setgid: new files inherit the group
+>    usermod -aG freeswitch gofax          # gofaxserver's user joins the group
+>    ```
+>    Rendered files are written `0640`. If ownership must be exact, set
+>    `freeswitch.gateway_config_chown` (e.g. `"freeswitch:freeswitch"`) and run
+>    gofaxserver with permission to chown (root or `CAP_CHOWN`); chown failures
+>    are logged as warnings, not fatal.
 
 Templates are in `examples/freeswitch/gateways/`. Copy the appropriate one for this customer:
 
@@ -395,6 +412,8 @@ Each rule is a regex pattern and a replacement string (supports `$1`, `$2`, ...)
 - **Section absent** (default): the built-in NANP rules are used — strip a leading `1` from 11-digit numbers, then truncate to 10 digits. This matches tenant numbers stored in 10-digit format.
 - **Section present**: the configured rules fully replace the defaults. An empty list (`"rules": []`) disables transformation entirely — recommended for non-NANP (international) deployments, since the default 10-digit truncation corrupts longer numbers.
 - An invalid pattern logs an error at startup and falls back to the default rules.
+
+**Database-backed mode:** set `"source": "db"` in the `dialplan` section to manage rules in the `dialplan_rules` table instead — hot-reloadable without restart via the portal (**Admin → Dialplan**), the API (`/admin/dialplan/rules`), or `/admin/reload`. On first run the table is seeded from your config rules (or the defaults), so switching modes preserves behavior. Rules have a position (order), an enabled flag, and a description; invalid patterns are rejected on write.
 
 ---
 

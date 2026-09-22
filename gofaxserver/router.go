@@ -36,8 +36,8 @@ func (r *Router) routeFax(fax *FaxJob) {
 	origDst := fax.CalleeNumber
 
 	// Apply dialplan transforms
-	srcNum := r.server.DialplanManager.ApplyTransformationRules(fax.CallerIdNumber)
-	dstNum := r.server.DialplanManager.ApplyTransformationRules(fax.CalleeNumber)
+	srcNum := r.server.Dialplan().ApplyTransformationRules(fax.CallerIdNumber)
+	dstNum := r.server.Dialplan().ApplyTransformationRules(fax.CalleeNumber)
 	fax.CalleeNumber = dstNum
 	fax.CallerIdNumber = srcNum
 	fax.Ts = time.Now()

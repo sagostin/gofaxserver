@@ -52,9 +52,19 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Put("/gateway/templates/{id}", s.handleUpdateGatewayTemplate)
 		admin.Delete("/gateway/templates/{id}", s.handleDeleteGatewayTemplate)
 		admin.Get("/gateways", s.handleListGateways)
+		admin.Post("/gateways/adopt", s.handleAdoptGateway)
+		admin.Delete("/gateways/unmanaged/{name}", s.handleDeleteUnmanagedGateway)
 		admin.Post("/gateway", s.handleProvisionGateway)
 		admin.Put("/gateway/{name}", s.handleUpdateGateway)
+		admin.Post("/gateway/{name}/repair", s.handleRepairGateway)
 		admin.Delete("/gateway/{name}", s.handleDeprovisionGateway)
+
+		// Dialplan rule management (active when dialplan.source = "db").
+		admin.Get("/dialplan", s.handleGetDialplan)
+		admin.Post("/dialplan/rules", s.handleCreateDialplanRule)
+		admin.Put("/dialplan/rules/{id}", s.handleUpdateDialplanRule)
+		admin.Delete("/dialplan/rules/{id}", s.handleDeleteDialplanRule)
+		admin.Post("/dialplan/rules/reorder", s.handleReorderDialplanRules)
 
 		admin.Post("/user", s.handleAddTenantUser)
 		admin.Put("/user/{id}", s.handleUpdateTenantUser)
@@ -455,6 +465,11 @@ func (s *Server) handleUpdateEndpoint(ctx iris.Context) {
 		return
 	}
 	ep.ID = uint(id)
+	if gwName, managed := s.gatewayManagingEndpoint(ep.ID); managed {
+		ctx.StatusCode(http.StatusConflict)
+		ctx.JSON(iris.Map{"error": fmt.Sprintf("endpoint is managed by gateway %q; update it via PUT /admin/gateway/%s", gwName, gwName)})
+		return
+	}
 	if err := s.updateEndpoint(&ep); err != nil {
 		ctx.StatusCode(http.StatusInternalServerError)
 		ctx.JSON(iris.Map{"error": "failed to update endpoint: " + err.Error()})
@@ -478,6 +493,11 @@ func (s *Server) handleDeleteEndpoint(ctx iris.Context) {
 	if err != nil {
 		ctx.StatusCode(http.StatusBadRequest)
 		ctx.JSON(iris.Map{"error": "invalid endpoint id"})
+		return
+	}
+	if gwName, managed := s.gatewayManagingEndpoint(uint(id)); managed {
+		ctx.StatusCode(http.StatusConflict)
+		ctx.JSON(iris.Map{"error": fmt.Sprintf("endpoint is managed by gateway %q; deprovision via DELETE /admin/gateway/%s", gwName, gwName)})
 		return
 	}
 	if err := s.removeEndpointFromDB(uint(id)); err != nil {

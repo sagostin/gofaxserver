@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"text/template/parse"
@@ -51,10 +53,14 @@ type GatewayConfig struct {
 	Name       string          `gorm:"uniqueIndex" json:"name"` // gateway name == filename sans .xml == endpoint prefix
 	TemplateID uint            `json:"template_id"`
 	Template   GatewayTemplate `json:"template"`
-	Params     string          `json:"params"` // JSON object of template variables
+	Params     string          `json:"params"` // JSON object of template variables (encrypted at rest)
 	EndpointID uint            `json:"endpoint_id"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	// Registration state tracking (populated by the monitor for
+	// register=true gateways).
+	LastState          string     `json:"last_state"`
+	LastStateCheckedAt *time.Time `json:"last_state_checked_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // GatewayProvisionSpec is the payload for the combined provision call:
@@ -149,6 +155,62 @@ func gatewayDir() (string, error) {
 		return "", errors.New("gateway provisioning is disabled: set freeswitch.gateway_config_dir in config.json")
 	}
 	return dir, nil
+}
+
+// gatewayProfile returns the configured sofia profile hosting the gateways
+// (default "fax").
+func gatewayProfile() string {
+	if p := strings.TrimSpace(gofaxlib.Config.FreeSwitch.GatewayProfile); p != "" {
+		return p
+	}
+	return "fax"
+}
+
+// applyGatewayFileOwner chowns a rendered gateway file when
+// freeswitch.gateway_config_chown is configured ("user:group" or "uid:gid").
+// Failures are logged but non-fatal.
+func applyGatewayFileOwner(log *gofaxlib.LogManager, path string) {
+	spec := strings.TrimSpace(gofaxlib.Config.FreeSwitch.GatewayConfigChown)
+	if spec == "" {
+		return
+	}
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) != 2 {
+		log.SendLog(log.BuildLog("Gateway.Provision", fmt.Sprintf("gateway_config_chown %q invalid (want user:group), skipping chown of %s", spec, path), logrus.WarnLevel, nil))
+		return
+	}
+	uid, err := lookupID(parts[0], true)
+	if err != nil {
+		log.SendLog(log.BuildLog("Gateway.Provision", fmt.Sprintf("gateway_config_chown user %q: %v", parts[0], err), logrus.WarnLevel, nil))
+		return
+	}
+	gid, err := lookupID(parts[1], false)
+	if err != nil {
+		log.SendLog(log.BuildLog("Gateway.Provision", fmt.Sprintf("gateway_config_chown group %q: %v", parts[1], err), logrus.WarnLevel, nil))
+		return
+	}
+	if err := os.Chown(path, uid, gid); err != nil {
+		log.SendLog(log.BuildLog("Gateway.Provision", fmt.Sprintf("chown %s to %s failed (need root/CAP_CHOWN?): %v", path, spec, err), logrus.WarnLevel, nil))
+	}
+}
+
+// lookupID resolves a numeric id or a user/group name.
+func lookupID(s string, isUser bool) (int, error) {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, nil
+	}
+	if isUser {
+		u, err := user.Lookup(s)
+		if err != nil {
+			return 0, err
+		}
+		return strconv.Atoi(u.Uid)
+	}
+	g, err := user.LookupGroup(s)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(g.Gid)
 }
 
 // TemplateVariables parses a template body and returns the sorted, deduplicated
@@ -310,19 +372,19 @@ func fsAPI(cmd string) (string, error) {
 	return strings.TrimSpace(ev.Body), nil
 }
 
-// fsReloadGateways makes FreeSWITCH pick up gateway file changes on the fax profile.
+// fsReloadGateways makes FreeSWITCH pick up gateway file changes on the configured profile.
 func fsReloadGateways() error {
 	if _, err := fsAPI("reloadxml"); err != nil {
 		return err
 	}
-	_, err := fsAPI("sofia profile fax rescan")
+	_, err := fsAPI("sofia profile " + gatewayProfile() + " rescan")
 	return err
 }
 
 // fsKillGateway tears down a single gateway and rescans the profile.
 func fsKillGateway(name string) error {
 	// killgw fails when the gateway was never loaded; that is fine.
-	_, _ = fsAPI("sofia killgw fax " + name)
+	_, _ = fsAPI("sofia killgw " + gatewayProfile() + " " + name)
 	return fsReloadGateways()
 }
 
@@ -342,6 +404,17 @@ func fsGatewayState(name string) string {
 		return "not-loaded"
 	}
 	return "unknown"
+}
+
+// gatewayManagingEndpoint returns the name of the provisioned gateway that
+// owns the given endpoint, if any. Such endpoints must be managed through the
+// gateway provisioning API, not edited directly.
+func (s *Server) gatewayManagingEndpoint(endpointID uint) (string, bool) {
+	var gw GatewayConfig
+	if err := s.DB.Where("endpoint_id = ?", endpointID).First(&gw).Error; err != nil {
+		return "", false
+	}
+	return gw.Name, true
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +488,21 @@ func writeGatewayFile(dir, name, content string) (string, error) {
 	return path, nil
 }
 
+// endpointValue builds the endpoint string for a gateway ("name:ip", or just
+// "name" when no IP is known).
+func endpointValue(name, endpointIP string, params map[string]interface{}) string {
+	ip := endpointIP
+	if ip == "" {
+		if realm, ok := params["realm"].(string); ok {
+			ip = realm
+		}
+	}
+	if ip != "" {
+		return name + ":" + ip
+	}
+	return name
+}
+
 // endpointFromSpec builds the linked Endpoint row for a gateway.
 func endpointFromSpec(spec GatewayProvisionSpec) (*Endpoint, error) {
 	switch spec.Scope {
@@ -422,26 +510,16 @@ func endpointFromSpec(spec GatewayProvisionSpec) (*Endpoint, error) {
 	default:
 		return nil, fmt.Errorf("type must be tenant, number or global, got %q", spec.Scope)
 	}
-	ip := spec.EndpointIP
-	if ip == "" {
-		if realm, ok := spec.Params["realm"].(string); ok {
-			ip = realm
-		}
-	}
 	ep := &Endpoint{
 		Type:         spec.Scope,
 		TypeID:       spec.TypeID,
 		EndpointType: "gateway",
+		Endpoint:     endpointValue(spec.Name, spec.EndpointIP, spec.Params),
 		Priority:     spec.Priority,
 		Bridge:       spec.Bridge,
 	}
 	if spec.Scope == "global" {
 		ep.TypeID = 0
-	}
-	if ip != "" {
-		ep.Endpoint = spec.Name + ":" + ip
-	} else {
-		ep.Endpoint = spec.Name
 	}
 	return ep, nil
 }
@@ -485,6 +563,7 @@ func (s *Server) ProvisionGateway(spec GatewayProvisionSpec) (*GatewayStatus, er
 	if err != nil {
 		return nil, err
 	}
+	applyGatewayFileOwner(s.LogManager, path)
 	if err := fsReloadGateways(); err != nil {
 		os.Remove(path)
 		return nil, fmt.Errorf("wrote %s but FreeSWITCH reload failed (rolled back): %w", path, err)
@@ -569,22 +648,29 @@ func (s *Server) UpdateGateway(name string, spec GatewayProvisionSpec) (*Gateway
 	}
 
 	spec.Name = name
-	ep, err := endpointFromSpec(spec)
-	if err != nil {
-		return nil, err
-	}
-	ep.ID = gw.EndpointID
 
 	path, err := writeGatewayFile(dir, name, rendered)
 	if err != nil {
 		return nil, err
 	}
+	applyGatewayFileOwner(s.LogManager, path)
 	if err := fsReloadGateways(); err != nil {
 		return nil, fmt.Errorf("updated %s but FreeSWITCH reload failed: %w", path, err)
 	}
 
-	if err := s.updateEndpoint(ep); err != nil {
-		return nil, fmt.Errorf("gateway file updated but endpoint update failed: %w", err)
+	// Endpoint handling on update: preserve the linked endpoint's scope,
+	// priority and bridge flag — only the name:ip value may change (e.g. the
+	// peer moved). Adopted gateways (endpoint_id 0) never get an endpoint
+	// created here; provisioning is the only path that creates endpoints.
+	if gw.EndpointID != 0 {
+		var ep Endpoint
+		if err := s.DB.First(&ep, gw.EndpointID).Error; err != nil {
+			return nil, fmt.Errorf("gateway file updated but linked endpoint %d read failed: %w", gw.EndpointID, err)
+		}
+		ep.Endpoint = endpointValue(name, spec.EndpointIP, params)
+		if err := s.updateEndpoint(&ep); err != nil {
+			return nil, fmt.Errorf("gateway file updated but endpoint update failed: %w", err)
+		}
 	}
 	paramsJSON, err := encodeParams(params)
 	if err != nil {
@@ -649,15 +735,50 @@ func (s *Server) DeprovisionGateway(name string) error {
 	return nil
 }
 
-// ListGateways returns all provisioned gateways with their live sofia state.
-func (s *Server) ListGateways() ([]GatewayStatus, error) {
+// GatewayOverview is the full DB + disk picture for the gateways directory.
+type GatewayOverview struct {
+	Gateways  []GatewayStatus `json:"gateways"`
+	Unmanaged []UnmanagedFile `json:"unmanaged"` // XML files on disk with no DB row
+}
+
+// UnmanagedFile is a gateway XML present in the gateway directory that no
+// GatewayConfig row tracks (manually created, or left behind).
+type UnmanagedFile struct {
+	File string `json:"file"` // base filename, e.g. pbx_acme.xml
+	Name string `json:"name"` // parsed <gateway name=...> attribute, empty if unparseable
+}
+
+// gatewayNameFromFile extracts the gateway name attribute from an XML file.
+func gatewayNameFromFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var doc struct {
+		Gateways []struct {
+			Name string `xml:"name,attr"`
+		} `xml:"gateway"`
+	}
+	if err := xml.Unmarshal(data, &doc); err != nil {
+		return "", fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+	}
+	if len(doc.Gateways) == 0 || doc.Gateways[0].Name == "" {
+		return "", fmt.Errorf("no <gateway name=...> found in %s", filepath.Base(path))
+	}
+	return doc.Gateways[0].Name, nil
+}
+
+// ListGateways returns the DB-tracked gateways plus unmanaged files on disk.
+func (s *Server) ListGateways() (*GatewayOverview, error) {
 	var gws []GatewayConfig
 	if err := s.DB.Preload("Template").Find(&gws).Error; err != nil {
 		return nil, err
 	}
 	dir, dirErr := gatewayDir()
-	out := make([]GatewayStatus, 0, len(gws))
+	overview := &GatewayOverview{Gateways: make([]GatewayStatus, 0, len(gws)), Unmanaged: []UnmanagedFile{}}
+	tracked := map[string]bool{}
 	for _, gw := range gws {
+		tracked[gw.Name] = true
 		gw.Params = maskedParamsJSON(gw.Params)
 		gs := GatewayStatus{Gateway: gw, State: fsGatewayState(gw.Name)}
 		if dirErr == nil {
@@ -666,7 +787,134 @@ func (s *Server) ListGateways() ([]GatewayStatus, error) {
 				gs.Exists = true
 			}
 		}
-		out = append(out, gs)
+		overview.Gateways = append(overview.Gateways, gs)
 	}
-	return out, nil
+	if dirErr == nil {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".xml") || strings.HasPrefix(e.Name(), ".") {
+					continue
+				}
+				base := strings.TrimSuffix(e.Name(), ".xml")
+				if tracked[base] {
+					continue
+				}
+				name, _ := gatewayNameFromFile(filepath.Join(dir, e.Name()))
+				overview.Unmanaged = append(overview.Unmanaged, UnmanagedFile{File: e.Name(), Name: name})
+			}
+		}
+	}
+	return overview, nil
+}
+
+// AdoptGateway brings an unmanaged XML file under management: parses the
+// gateway name and records a GatewayConfig row (no template — the file stays
+// as-is until a template is chosen on update).
+func (s *Server) AdoptGateway(file string) (*GatewayStatus, error) {
+	dir, err := gatewayDir()
+	if err != nil {
+		return nil, err
+	}
+	base := filepath.Base(file) // strip any path traversal attempt
+	if !strings.HasSuffix(base, ".xml") {
+		return nil, fmt.Errorf("not an XML file: %q", base)
+	}
+	name, err := gatewayNameFromFile(filepath.Join(dir, base))
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGatewayName(name); err != nil {
+		return nil, fmt.Errorf("file %s declares an unusable gateway name: %w", base, err)
+	}
+	var existing int64
+	s.DB.Model(&GatewayConfig{}).Where("name = ?", name).Count(&existing)
+	if existing > 0 {
+		return nil, fmt.Errorf("gateway %q is already managed", name)
+	}
+	gw := GatewayConfig{Name: name, TemplateID: 0}
+	paramsJSON, err := encodeParams(map[string]interface{}{"name": name})
+	if err != nil {
+		return nil, err
+	}
+	gw.Params = paramsJSON
+	if err := s.DB.Create(&gw).Error; err != nil {
+		return nil, fmt.Errorf("persist gateway config: %w", err)
+	}
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Gateway.Provision",
+		fmt.Sprintf("adopted unmanaged gateway file %s as %s", base, name),
+		logrus.InfoLevel,
+		map[string]interface{}{"gateway": name, "file": base},
+	))
+	return &GatewayStatus{Gateway: gw, File: filepath.Join(dir, base), State: fsGatewayState(name), Exists: true}, nil
+}
+
+// DeleteUnmanagedGateway removes an untracked XML file and tears the gateway
+// down in FreeSWITCH.
+func (s *Server) DeleteUnmanagedGateway(name string) error {
+	if err := validateGatewayName(name); err != nil {
+		return err
+	}
+	dir, err := gatewayDir()
+	if err != nil {
+		return err
+	}
+	var tracked int64
+	s.DB.Model(&GatewayConfig{}).Where("name = ?", name).Count(&tracked)
+	if tracked > 0 {
+		return fmt.Errorf("gateway %q is managed; use DELETE /admin/gateway/%s", name, name)
+	}
+	path := filepath.Join(dir, name+".xml")
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("no unmanaged file for %q: %w", name, err)
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return fsKillGateway(name)
+}
+
+// RepairGateway re-renders a managed gateway from its stored template and
+// params — restoring a file that was deleted or edited out-of-band.
+func (s *Server) RepairGateway(name string) (*GatewayStatus, error) {
+	if err := validateGatewayName(name); err != nil {
+		return nil, err
+	}
+	dir, err := gatewayDir()
+	if err != nil {
+		return nil, err
+	}
+	var gw GatewayConfig
+	if err := s.DB.Preload("Template").Where("name = ?", name).First(&gw).Error; err != nil {
+		return nil, fmt.Errorf("gateway %q: %w", name, err)
+	}
+	if gw.TemplateID == 0 {
+		return nil, fmt.Errorf("gateway %q has no template (adopted from file); assign a template via PUT /admin/gateway/%s first", name, name)
+	}
+	params, err := decodeParams(gw.Params)
+	if err != nil {
+		return nil, err
+	}
+	params["name"] = name
+	rendered, err := renderGatewayTemplate(gw.Template.Body, params)
+	if err != nil {
+		return nil, err
+	}
+	path, err := writeGatewayFile(dir, name, rendered)
+	if err != nil {
+		return nil, err
+	}
+	applyGatewayFileOwner(s.LogManager, path)
+	if err := fsReloadGateways(); err != nil {
+		return nil, fmt.Errorf("rewrote %s but FreeSWITCH reload failed: %w", path, err)
+	}
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Gateway.Provision",
+		fmt.Sprintf("re-rendered gateway %s from template", name),
+		logrus.InfoLevel,
+		map[string]interface{}{"gateway": name, "file": path},
+	))
+	gw.Params = maskedParamsJSON(gw.Params)
+	return &GatewayStatus{Gateway: gw, File: path, State: fsGatewayState(name), Exists: true}, nil
 }

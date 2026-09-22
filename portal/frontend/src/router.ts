@@ -15,6 +15,7 @@ const router = createRouter({
     { path: '/admin/endpoints', component: () => import('./views/admin/EndpointsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/gateways', component: () => import('./views/admin/GatewaysView.vue'), meta: { role: 'admin' } },
     { path: '/admin/templates', component: () => import('./views/admin/TemplatesView.vue'), meta: { role: 'admin' } },
+    { path: '/admin/dialplan', component: () => import('./views/admin/DialplanView.vue'), meta: { role: 'admin' } },
     { path: '/admin/active', component: () => import('./views/admin/ActiveFaxesView.vue'), meta: { role: 'admin' } },
     { path: '/admin/jobs', component: () => import('./views/admin/JobsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/audit', component: () => import('./views/admin/AuditView.vue'), meta: { role: 'admin' } },

@@ -138,10 +138,41 @@ Registered (SIP-auth) gateways are supported by the same templates:
 
 Other operations:
 
-- `GET /admin/gateways` — list provisioned gateways with live `sofia status gateway` state
-- `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision)
+- `GET /admin/gateways` — list provisioned gateways with live `sofia status gateway` state, plus an `unmanaged` array of XML files on disk with no DB record (see below)
+- `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision). The linked endpoint's scope, priority and bridge flag are preserved — only its `name:ip` value tracks realm/`endpoint_ip` changes
 - `DELETE /admin/gateway/{name}` — `sofia killgw`, remove XML, rescan, delete linked endpoint
+- `POST /admin/gateway/{name}/repair` — re-render a managed gateway from its stored template+params (restores a file deleted or edited out-of-band)
 - `GET|POST /admin/gateway/templates`, `PUT|DELETE /admin/gateway/templates/{id}` — manage templates
+
+### Sync between the database and disk
+
+`GET /admin/gateways` reports drift in both directions:
+
+- **Unmanaged files** — XML present in the gateway directory with no DB row
+  (hand-created, or left behind). Each can be **adopted**
+  (`POST /admin/gateways/adopt {file}`) — recorded as managed with no template
+  until one is assigned on update — or **deleted**
+  (`DELETE /admin/gateways/unmanaged/{name}?confirm=true`), which also tears
+  the gateway down in FreeSWITCH.
+- **Missing files** — managed gateways whose XML is gone show
+  `exists_on_disk: false`; repair with `POST /admin/gateway/{name}/repair`.
+
+Endpoints created by provisioning are protected: `PUT/DELETE
+/admin/endpoint/{id}` on a gateway-linked endpoint is refused with a pointer
+to the gateway API, so a gateway can't silently lose its endpoint row.
+
+### Configuration
+
+| Key (`freeswitch` section) | Default | Description |
+|--------|---------|-------------|
+| `gateway_config_dir` | *(empty = disabled)* | Directory gateway XML is written to; must be included by the sofia profile |
+| `gateway_config_chown` | *(empty)* | `user:group` (names or uid:gid) to chown rendered files to; failures log a warning |
+| `gateway_profile` | `fax` | Sofia profile hosting the gateways (used for rescan/killgw/status) |
+| `gateway_monitor_seconds` | `60` | Poll interval for registration state of `register=true` gateways; `-1` disables |
+
+The monitor polls `sofia status gateway` for registered gateways, records
+`last_state` on the gateway row, and logs state transitions (drops at WARN,
+recoveries at INFO). State is visible in `GET /admin/gateways` and the portal.
 
 Templates are stored in the database (seeded on first start from
 `gofaxserver/templates/gateways/{sbc,pbx}.xml`, which mirror the

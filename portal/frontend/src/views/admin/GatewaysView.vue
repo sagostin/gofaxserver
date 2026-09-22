@@ -17,6 +17,7 @@ interface GwStatus {
     template: Tpl
     params: string
     endpoint_id: number
+    last_state: string
     created_at: string
   }
   file: string
@@ -24,8 +25,14 @@ interface GwStatus {
   exists_on_disk: boolean
 }
 
+interface UnmanagedFile {
+  file: string
+  name: string
+}
+
 const templates = ref<Tpl[]>([])
 const gateways = ref<GwStatus[]>([])
+const unmanaged = ref<UnmanagedFile[]>([])
 const error = ref('')
 const busy = ref(false)
 const editing = ref('') // gateway name when in update mode
@@ -58,15 +65,24 @@ watch(selectedTemplate, (tpl) => {
   params.value = next
 })
 
+function parsedParams(gs: GwStatus): Record<string, any> {
+  try { return JSON.parse(gs.gateway.params || '{}') } catch { return {} }
+}
+
+function isRegistered(gs: GwStatus): boolean {
+  return parsedParams(gs).register === true
+}
+
 async function load() {
   error.value = ''
   try {
     const [t, g] = await Promise.all([
       api<Tpl[]>('/admin/gateway-templates'),
-      api<GwStatus[]>('/admin/gateways'),
+      api<{ gateways: GwStatus[]; unmanaged: UnmanagedFile[] }>('/admin/gateways'),
     ])
     templates.value = t || []
-    gateways.value = g || []
+    gateways.value = g.gateways || []
+    unmanaged.value = g.unmanaged || []
     if (!form.value.template_id && templates.value.length) {
       form.value.template_id = templates.value[0].id
     }
@@ -85,16 +101,21 @@ function payload() {
     if (v === '' || v === false) continue // let the server apply defaults
     p[k] = v
   }
-  return {
+  const body: Record<string, any> = {
     name: form.value.name,
     template_id: form.value.template_id,
     params: p,
-    type: form.value.type,
-    type_id: form.value.type === 'global' ? 0 : form.value.type_id,
-    priority: form.value.priority,
-    bridge: form.value.bridge,
     endpoint_ip: form.value.endpoint_ip,
   }
+  // Scope/priority/bridge are only meaningful on provision; on update the
+  // server preserves them from the existing endpoint row.
+  if (!editing.value) {
+    body.type = form.value.type
+    body.type_id = form.value.type === 'global' ? 0 : form.value.type_id
+    body.priority = form.value.priority
+    body.bridge = form.value.bridge
+  }
+  return body
 }
 
 async function submit() {
@@ -113,18 +134,16 @@ async function submit() {
 
 function edit(gs: GwStatus) {
   editing.value = gs.gateway.name
-  let parsed: Record<string, any> = {}
-  try { parsed = JSON.parse(gs.gateway.params || '{}') } catch { /* ignore */ }
   form.value = {
     name: gs.gateway.name,
     template_id: gs.gateway.template_id,
-    type: 'tenant', // scope is stored on the endpoint; admin adjusts via Endpoints tab
+    type: 'tenant', // scope is stored on the endpoint; adjust via the Endpoints tab
     type_id: 0,
     priority: 0,
     bridge: false,
     endpoint_ip: '',
   }
-  params.value = parsed
+  params.value = parsedParams(gs)
 }
 
 async function remove(gs: GwStatus) {
@@ -132,6 +151,33 @@ async function remove(gs: GwStatus) {
   error.value = ''
   try {
     await api(`/admin/gateways/${gs.gateway.name}?confirm=true`, { method: 'DELETE' })
+    await load()
+  } catch (e: any) { error.value = e.message }
+}
+
+async function repair(gs: GwStatus) {
+  error.value = ''
+  try {
+    await api(`/admin/gateways/${gs.gateway.name}/repair`, { method: 'POST' })
+    await load()
+  } catch (e: any) { error.value = e.message }
+}
+
+async function adopt(u: UnmanagedFile) {
+  if (!confirm(`Adopt ${u.file} into managed gateways${u.name ? ` as "${u.name}"` : ''}?`)) return
+  error.value = ''
+  try {
+    await api('/admin/gateways/adopt', { json: { file: u.file } })
+    await load()
+  } catch (e: any) { error.value = e.message }
+}
+
+async function removeUnmanaged(u: UnmanagedFile) {
+  if (!u.name) { error.value = 'Cannot delete: no gateway name could be parsed from this file'; return }
+  if (!confirm(`Delete unmanaged gateway file ${u.file} and tear down "${u.name}" in FreeSWITCH?`)) return
+  error.value = ''
+  try {
+    await api(`/admin/gateways/unmanaged/${u.name}?confirm=true`, { method: 'DELETE' })
     await load()
   } catch (e: any) { error.value = e.message }
 }
@@ -143,7 +189,7 @@ async function remove(gs: GwStatus) {
       <h2>{{ editing ? `Update gateway ${editing}` : 'Provision FreeSWITCH gateway' }}</h2>
       <p class="muted">
         Renders the selected template into the FreeSWITCH gateways directory, reloads the
-        <code>fax</code> sofia profile, and creates the linked endpoint — one step.
+        sofia profile, and creates the linked endpoint — one step.
         The gateway name must match <code>name=</code> in the XML and the endpoint prefix.
       </p>
       <form class="inline" @submit.prevent="submit">
@@ -192,17 +238,42 @@ async function remove(gs: GwStatus) {
         <tbody>
           <tr v-for="gs in gateways" :key="gs.gateway.id">
             <td>{{ gs.gateway.name }}</td>
-            <td>{{ gs.gateway.template?.name || gs.gateway.template_id }}</td>
-            <td>{{ (JSON.parse(gs.gateway.params || '{}')).realm || '' }}</td>
-            <td>{{ gs.state }}</td>
-            <td>{{ gs.exists_on_disk ? 'yes' : 'missing' }}</td>
-            <td>#{{ gs.gateway.endpoint_id }}</td>
+            <td>{{ gs.gateway.template?.name || (gs.gateway.template_id === 0 ? 'adopted' : gs.gateway.template_id) }}</td>
+            <td>{{ parsedParams(gs).realm || '' }}</td>
+            <td>
+              {{ gs.state }}
+              <span v-if="isRegistered(gs) && gs.gateway.last_state" class="muted">(monitored: {{ gs.gateway.last_state }})</span>
+            </td>
+            <td>
+              {{ gs.exists_on_disk ? 'yes' : 'missing' }}
+              <button v-if="!gs.exists_on_disk" class="secondary" style="margin-left:6px" @click="repair(gs)">Re-render</button>
+            </td>
+            <td>{{ gs.gateway.endpoint_id ? '#' + gs.gateway.endpoint_id : '—' }}</td>
             <td class="actions-cell">
               <button class="secondary" @click="edit(gs)">Edit</button>
               <button class="danger" @click="remove(gs)">Deprovision</button>
             </td>
           </tr>
           <tr v-if="!gateways.length"><td colspan="7" class="muted">No gateways provisioned yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div v-if="unmanaged.length" class="panel">
+      <h3>Unmanaged files <span class="muted">(XML in the gateways dir with no DB record)</span></h3>
+      <table>
+        <thead>
+          <tr><th>File</th><th>Gateway name</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="u in unmanaged" :key="u.file">
+            <td>{{ u.file }}</td>
+            <td>{{ u.name || 'unparseable' }}</td>
+            <td class="actions-cell">
+              <button class="secondary" :disabled="!u.name" @click="adopt(u)">Adopt</button>
+              <button class="danger" :disabled="!u.name" @click="removeUnmanaged(u)">Delete</button>
+            </td>
+          </tr>
         </tbody>
       </table>
     </div>

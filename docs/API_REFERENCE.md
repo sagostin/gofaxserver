@@ -347,6 +347,11 @@ PUT /admin/endpoint/{id}
 DELETE /admin/endpoint/{id}
 ```
 
+**Note:** endpoints linked to a provisioned gateway
+(`gateway_configs.endpoint_id`) cannot be updated or deleted through these
+routes — the request is refused with 409 and a pointer to
+`/admin/gateway/{name}`. This keeps gateways from losing their endpoint rows.
+
 ---
 
 ### Gateway Provisioning (FreeSWITCH)
@@ -367,8 +372,31 @@ keeps the previously stored value.
 GET /admin/gateways
 ```
 
-**Response:** array of `{gateway, file, state, exists_on_disk}` — `state` is
-parsed from `sofia status gateway <name>`.
+**Response:** `{gateways: [...], unmanaged: [...]}` — each gateway entry is
+`{gateway, file, state, exists_on_disk}` where `state` is parsed from
+`sofia status gateway <name>` and registered gateways also carry
+`gateway.last_state` from the monitor. `unmanaged` lists XML files on disk
+with no DB record: `[{file, name}]`.
+
+#### Adopt / Delete Unmanaged Gateway Files
+
+```
+POST   /admin/gateways/adopt                    {"file": "pbx_acme.xml"}
+DELETE /admin/gateways/unmanaged/{name}?confirm=true
+```
+
+Adopt records a `gateway_configs` row for an existing file (no template —
+assign one via update). Delete removes the file and tears the gateway down.
+
+#### Repair Gateway
+
+```
+POST /admin/gateway/{name}/repair
+```
+
+Re-renders the gateway XML from its stored template + params (restores a
+missing or out-of-band-edited file) and reloads FreeSWITCH.
+
 
 #### Provision Gateway (combined XML + endpoint)
 
@@ -411,8 +439,11 @@ down, endpoint deleted).
 PUT /admin/gateway/{name}
 ```
 
-Same payload as provision. Gateways cannot be renamed — delete and
-re-provision instead.
+Same payload as provision, except `type`/`type_id`/`priority`/`bridge` may be
+omitted — the linked endpoint's scope, priority and bridge flag are preserved
+regardless; only its `name:ip` value tracks realm/`endpoint_ip` changes.
+Gateways cannot be renamed — delete and re-provision instead. Adopted gateways
+(no linked endpoint) never gain one through update.
 
 #### Deprovision Gateway
 
@@ -448,6 +479,45 @@ DELETE /admin/gateway/templates/{id}
 
 Bodies are validated (parseable template) on write. Delete is refused while
 provisioned gateways reference the template.
+
+---
+
+### Dialplan Rules
+
+Number transformation rules applied to caller/callee numbers before tenant
+lookup and routing. Source is selected by `dialplan.source` in config.json:
+
+- `config` (default) — rules come from `dialplan.rules` in config.json, or the
+  built-in defaults when the section is absent. The CRUD routes below still
+  work but the stored rules are **inactive** until the source is switched.
+- `db` — rules come from the `dialplan_rules` table, hot-reloadable: every
+  mutation below takes effect immediately, and `/admin/reload` also refreshes
+  them. On first run the table is seeded from the config rules (or defaults).
+
+#### Get Dialplan
+
+```
+GET /admin/dialplan
+```
+
+**Response:** `{"source": "config"|"db", "rules": [...]}` ordered by position.
+
+#### Create / Update / Delete Rule
+
+```
+POST   /admin/dialplan/rules           {pattern, replacement, position?, enabled, description}
+PUT    /admin/dialplan/rules/{id}      {pattern, replacement, position, enabled, description}
+DELETE /admin/dialplan/rules/{id}
+```
+
+Patterns are regex-validated on write. Replacement supports capture groups
+(`$1`, `$2`, …). Position defaults to the end of the list on create.
+
+#### Reorder Rules
+
+```
+POST /admin/dialplan/rules/reorder     [{id, position}, ...]
+```
 
 ---
 

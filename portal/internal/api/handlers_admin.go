@@ -891,9 +891,62 @@ func (s *Server) adminListGateways(ctx iris.Context) {
 	ctx.JSON(out)
 }
 
+func (s *Server) adminAdoptGateway(ctx iris.Context) {
+	var req struct {
+		File string `json:"file"`
+	}
+	if err := ctx.ReadJSON(&req); err != nil || req.File == "" {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "file is required"})
+		return
+	}
+	gs, err := s.FX.AdoptGateway(req.File)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream adopt failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_ADOPT", "gateway:"+gs.Gateway.Name, map[string]string{"file": req.File})
+	ctx.StatusCode(201)
+	ctx.JSON(gs)
+}
+
+func (s *Server) adminDeleteUnmanagedGateway(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	if ctx.URLParam("confirm") != "true" {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "refusing to delete unmanaged gateway without confirm=true query param"})
+		return
+	}
+	if err := s.FX.DeleteUnmanagedGateway(name); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream delete failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_DELETE_UNMANAGED", "gateway:"+name, nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
+func (s *Server) adminRepairGateway(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	gs, err := s.FX.RepairGateway(name)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream repair failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_REPAIR", "gateway:"+name, nil)
+	ctx.JSON(gs)
+}
+
 // validateGatewaySpec sanity-checks the scope fields before proxying; the
-// upstream performs full validation (name, realm, template, XML).
+// upstream performs full validation (name, realm, template, XML). Scope
+// fields are only validated when present — updates omit them and the upstream
+// preserves the existing endpoint's scope.
 func (s *Server) validateGatewaySpec(spec *fsclient.GatewayProvisionSpec) string {
+	if spec.Scope == "" {
+		return ""
+	}
 	if !validEndpointTypes[spec.Scope] {
 		return "type must be tenant, number or global"
 	}
@@ -975,6 +1028,81 @@ func (s *Server) adminDeprovisionGateway(ctx iris.Context) {
 		return
 	}
 	s.audit(ctx, "GATEWAY_DELETE", "gateway:"+name, nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
+// ---------- Dialplan rules ----------
+
+func (s *Server) adminGetDialplan(ctx iris.Context) {
+	out, err := s.FX.GetDialplan()
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "failed to read upstream dialplan: " + err.Error()})
+		return
+	}
+	ctx.JSON(out)
+}
+
+func (s *Server) adminCreateDialplanRule(ctx iris.Context) {
+	var rule fsclient.DialplanRule
+	if err := ctx.ReadJSON(&rule); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	created, err := s.FX.CreateDialplanRule(rule)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream create failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "DIALPLAN_RULE_CREATE", fmt.Sprintf("rule:%d", created.ID), map[string]string{"pattern": created.Pattern})
+	ctx.StatusCode(201)
+	ctx.JSON(created)
+}
+
+func (s *Server) adminUpdateDialplanRule(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	var rule fsclient.DialplanRule
+	if err := ctx.ReadJSON(&rule); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	rule.ID = id
+	if err := s.FX.UpdateDialplanRule(rule); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream update failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "DIALPLAN_RULE_UPDATE", fmt.Sprintf("rule:%d", id), map[string]string{"pattern": rule.Pattern})
+	ctx.JSON(rule)
+}
+
+func (s *Server) adminDeleteDialplanRule(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	if err := s.FX.DeleteDialplanRule(id); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream delete failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "DIALPLAN_RULE_DELETE", fmt.Sprintf("rule:%d", id), nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
+func (s *Server) adminReorderDialplanRules(ctx iris.Context) {
+	var order []map[string]uint
+	if err := ctx.ReadJSON(&order); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := s.FX.ReorderDialplanRules(order); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream reorder failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "DIALPLAN_RULES_REORDER", "", nil)
 	ctx.JSON(map[string]bool{"ok": true})
 }
 

@@ -200,8 +200,8 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	)
 
 	// --- Routing transforms ---------------------------------------------------
-	srcNum := e.server.DialplanManager.ApplyTransformationRules(cidNum)
-	dstNum := e.server.DialplanManager.ApplyTransformationRules(recipient)
+	srcNum := e.server.Dialplan().ApplyTransformationRules(cidNum)
+	dstNum := e.server.Dialplan().ApplyTransformationRules(recipient)
 
 	// Optional: Log initial channel UUID right away
 	logf(logrus.DebugLevel, "Inbound channel UUID: %s", map[string]interface{}{"uuid": channelUUID.String()}, channelUUID.String())

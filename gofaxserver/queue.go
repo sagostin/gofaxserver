@@ -265,8 +265,8 @@ func (q *Queue) processFax(f *FaxJob) {
 					}
 
 					// Normalize numbers once
-					srcNum := q.server.DialplanManager.ApplyTransformationRules(f.CallerIdNumber)
-					dstNum := q.server.DialplanManager.ApplyTransformationRules(f.CalleeNumber)
+					srcNum := q.server.Dialplan().ApplyTransformationRules(f.CallerIdNumber)
+					dstNum := q.server.Dialplan().ApplyTransformationRules(f.CalleeNumber)
 
 					// Bridge routing check
 					_, enableBridge := q.server.Router.detectAndRouteToBridge(dstNum, srcNum, f.SourceInfo.Source)

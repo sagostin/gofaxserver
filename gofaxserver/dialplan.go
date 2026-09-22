@@ -1,7 +1,11 @@
 package gofaxserver
 
 import (
+	"fmt"
+	"log"
 	"regexp"
+
+	"gofaxserver/gofaxlib"
 )
 
 // TransformationRule represents a single dialplan transformation.
@@ -10,6 +14,119 @@ import (
 type TransformationRule struct {
 	Pattern     *regexp.Regexp // Regular expression to match
 	Replacement string         // Replacement string, e.g., "011$1" to prefix "011"
+}
+
+// DialplanRule is a database-backed transformation rule, used when
+// dialplan.source = "db". Rules apply in ascending Position order;
+// disabled rules are skipped.
+type DialplanRule struct {
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	Position    int    `gorm:"index" json:"position"`
+	Pattern     string `json:"pattern"`
+	Replacement string `json:"replacement"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+}
+
+// dialplanSource reports where transformation rules come from:
+// "config" (default — the config.json dialplan section, or built-in
+// defaults) or "db" (the dialplan_rules table, hot-reloadable).
+func dialplanSource() string {
+	if gofaxlib.Config.Dialplan != nil && gofaxlib.Config.Dialplan.Source == "db" {
+		return "db"
+	}
+	return "config"
+}
+
+// compileDialplanRules compiles DB rows (already ordered, enabled-only) into
+// TransformationRules. A row with an invalid pattern is skipped with a
+// warning rather than breaking routing entirely.
+func compileDialplanRules(rows []DialplanRule) []TransformationRule {
+	rules := make([]TransformationRule, 0, len(rows))
+	for _, r := range rows {
+		rule, err := compileRule(r.Pattern, r.Replacement)
+		if err != nil {
+			log.Printf("Dialplan: skipping rule %d with invalid pattern %q: %v", r.ID, r.Pattern, err)
+			continue
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+// seedDialplanRules populates the dialplan_rules table on first use: from the
+// config.json rules when a dialplan section exists, otherwise from the
+// built-in defaults. Returns the seed rows (or nil when not seeded).
+func (s *Server) seedDialplanRules() ([]DialplanRule, error) {
+	var count int64
+	if err := s.DB.Model(&DialplanRule{}).Count(&count).Error; err != nil {
+		return nil, err
+	}
+	if count > 0 {
+		return nil, nil
+	}
+
+	type pair struct{ pattern, replacement string }
+	var seeds []pair
+	if cfg := gofaxlib.Config.Dialplan; cfg != nil && len(cfg.Rules) > 0 {
+		for _, r := range cfg.Rules {
+			seeds = append(seeds, pair{r.Pattern, r.Replacement})
+		}
+	} else {
+		for _, r := range DefaultTransformationRules() {
+			seeds = append(seeds, pair{r.Pattern.String(), r.Replacement})
+		}
+	}
+
+	rows := make([]DialplanRule, 0, len(seeds))
+	for i, p := range seeds {
+		if _, err := regexp.Compile(p.pattern); err != nil {
+			log.Printf("Dialplan: skipping invalid seed pattern %q: %v", p.pattern, err)
+			continue
+		}
+		rows = append(rows, DialplanRule{
+			Position:    i,
+			Pattern:     p.pattern,
+			Replacement: p.replacement,
+			Enabled:     true,
+			Description: "seeded from configuration/defaults",
+		})
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if err := s.DB.Create(&rows).Error; err != nil {
+		return nil, fmt.Errorf("seed dialplan rules: %w", err)
+	}
+	log.Printf("Dialplan: seeded %d rule(s) into dialplan_rules", len(rows))
+	return rows, nil
+}
+
+// loadDialplanFromDB builds a DialplanManager from the dialplan_rules table,
+// seeding it first when empty.
+func (s *Server) loadDialplanFromDB() (*DialplanManager, error) {
+	if _, err := s.seedDialplanRules(); err != nil {
+		return nil, err
+	}
+	var rows []DialplanRule
+	if err := s.DB.Where("enabled = ?", true).Order("position ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return NewDialplanManager(compileDialplanRules(rows)), nil
+}
+
+// reloadDialplan rebuilds and atomically swaps the active DialplanManager.
+// In "config" mode this is a no-op (config is read once at startup).
+func (s *Server) reloadDialplan() error {
+	if dialplanSource() != "db" {
+		return nil
+	}
+	dm, err := s.loadDialplanFromDB()
+	if err != nil {
+		return err
+	}
+	s.dialplan.Store(dm)
+	return nil
 }
 
 // DefaultTransformationRules returns the built-in NANP-oriented rules used

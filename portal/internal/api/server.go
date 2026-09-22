@@ -104,8 +104,18 @@ func (s *Server) BuildApp() *iris.Application {
 	gateways := admin.Party("/gateways")
 	gateways.Get("/", s.adminListGateways)
 	gateways.Post("/", s.adminProvisionGateway)
+	gateways.Post("/adopt", s.adminAdoptGateway)
+	gateways.Delete("/unmanaged/{name}", s.adminDeleteUnmanagedGateway)
+	gateways.Post("/{name}/repair", s.adminRepairGateway)
 	gateways.Put("/{name}", s.adminUpdateGateway)
 	gateways.Delete("/{name}", s.adminDeprovisionGateway)
+
+	dialplan := admin.Party("/dialplan")
+	dialplan.Get("/", s.adminGetDialplan)
+	dialplan.Post("/rules", s.adminCreateDialplanRule)
+	dialplan.Put("/rules/{id:uint}", s.adminUpdateDialplanRule)
+	dialplan.Delete("/rules/{id:uint}", s.adminDeleteDialplanRule)
+	dialplan.Post("/rules/reorder", s.adminReorderDialplanRules)
 
 	admin.Get("/faxes/active", s.adminActiveFaxes)
 	admin.Get("/jobs", s.adminListAllJobs)

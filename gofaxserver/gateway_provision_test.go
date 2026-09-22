@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	"gofaxserver/gofaxlib"
 )
 
 func TestTemplateVariablesExtraction(t *testing.T) {
@@ -132,6 +136,34 @@ func TestWriteGatewayFileAtomic(t *testing.T) {
 	}
 }
 
+func TestEndpointValue(t *testing.T) {
+	// Explicit endpoint_ip wins over realm.
+	if got := endpointValue("sbc_gw", "203.0.113.5", map[string]interface{}{"realm": "sbc.example.com"}); got != "sbc_gw:203.0.113.5" {
+		t.Errorf("explicit ip: got %q", got)
+	}
+	// Falls back to realm.
+	if got := endpointValue("pbx_acme", "", map[string]interface{}{"realm": "192.0.2.10"}); got != "pbx_acme:192.0.2.10" {
+		t.Errorf("realm fallback: got %q", got)
+	}
+	// No ip at all → bare name.
+	if got := endpointValue("pbx_acme", "", map[string]interface{}{}); got != "pbx_acme" {
+		t.Errorf("bare name: got %q", got)
+	}
+}
+
+func TestDialplanAccessorNeverNil(t *testing.T) {
+	// A Server that never stored a manager (e.g. DB load failed at startup)
+	// must still return a working manager with the built-in defaults.
+	s := &Server{}
+	d := s.Dialplan()
+	if d == nil {
+		t.Fatal("Dialplan() must never return nil")
+	}
+	if got := d.ApplyTransformationRules("15551234567"); got != "5551234567" {
+		t.Fatalf("fallback defaults not applied: got %q", got)
+	}
+}
+
 func TestEndpointFromSpec(t *testing.T) {
 	ep, err := endpointFromSpec(GatewayProvisionSpec{
 		Name:   "pbx_acme",
@@ -250,5 +282,103 @@ func TestFsGatewayACLExactMatch(t *testing.T) {
 	s.GatewayEndpointsACL = append(s.GatewayEndpointsACL, "10.0.0.7")
 	if _, err := s.fsGatewayACL("10.0.0.7"); err != nil {
 		t.Errorf("legacy IP-only entry should match exactly: %v", err)
+	}
+}
+
+func TestGatewayNameFromFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pbx_acme.xml")
+	if err := os.WriteFile(path, []byte(`<include><gateway name="pbx_acme"><param name="realm" value="1.2.3.4"/></gateway></include>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, err := gatewayNameFromFile(path)
+	if err != nil || name != "pbx_acme" {
+		t.Fatalf("want pbx_acme, got %q (%v)", name, err)
+	}
+
+	bad := filepath.Join(dir, "bad.xml")
+	os.WriteFile(bad, []byte(`<include></include>`), 0o644)
+	if _, err := gatewayNameFromFile(bad); err == nil {
+		t.Fatal("file without gateway name should fail")
+	}
+}
+
+func TestMonitorTransition(t *testing.T) {
+	if changed, _ := monitorTransition("REGED", "REGED"); changed {
+		t.Error("same state should not be a transition")
+	}
+	if changed, level := monitorTransition("REGED", "FAIL_WAIT"); !changed || level != logrus.WarnLevel {
+		t.Error("drop from REGED should warn")
+	}
+	if changed, level := monitorTransition("FAIL_WAIT", "REGED"); !changed || level != logrus.InfoLevel {
+		t.Error("recovery to REGED should be info")
+	}
+	if changed, _ := monitorTransition("", "NOREG"); !changed {
+		t.Error("initial observation should count as transition")
+	}
+}
+
+func TestMonitorInterval(t *testing.T) {
+	old := gofaxlib.Config.FreeSwitch.GatewayMonitorSeconds
+	defer func() { gofaxlib.Config.FreeSwitch.GatewayMonitorSeconds = old }()
+
+	gofaxlib.Config.FreeSwitch.GatewayMonitorSeconds = 0
+	if got := monitorInterval(); got != 60*time.Second {
+		t.Errorf("default should be 60s, got %s", got)
+	}
+	gofaxlib.Config.FreeSwitch.GatewayMonitorSeconds = 5
+	if got := monitorInterval(); got != 5*time.Second {
+		t.Errorf("got %s", got)
+	}
+	gofaxlib.Config.FreeSwitch.GatewayMonitorSeconds = -1
+	if got := monitorInterval(); got != 0 {
+		t.Errorf("negative should disable, got %s", got)
+	}
+}
+
+func TestGatewayProfileDefault(t *testing.T) {
+	old := gofaxlib.Config.FreeSwitch.GatewayProfile
+	defer func() { gofaxlib.Config.FreeSwitch.GatewayProfile = old }()
+
+	gofaxlib.Config.FreeSwitch.GatewayProfile = ""
+	if got := gatewayProfile(); got != "fax" {
+		t.Errorf("default profile should be fax, got %q", got)
+	}
+	gofaxlib.Config.FreeSwitch.GatewayProfile = "external"
+	if got := gatewayProfile(); got != "external" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestCompileDialplanRulesSkipsBadPatterns(t *testing.T) {
+	rows := []DialplanRule{
+		{ID: 1, Pattern: `^1(\d{10}).*$`, Replacement: "$1", Enabled: true},
+		{ID: 2, Pattern: `^([0-9`, Replacement: "$1", Enabled: true}, // invalid
+	}
+	rules := compileDialplanRules(rows)
+	if len(rules) != 1 {
+		t.Fatalf("bad pattern should be skipped, got %d rules", len(rules))
+	}
+	d := NewDialplanManager(rules)
+	if got := d.ApplyTransformationRules("15551234567"); got != "5551234567" {
+		t.Fatalf("remaining rule should apply, got %q", got)
+	}
+}
+
+func TestDialplanSourceToggle(t *testing.T) {
+	old := gofaxlib.Config.Dialplan
+	defer func() { gofaxlib.Config.Dialplan = old }()
+
+	gofaxlib.Config.Dialplan = nil
+	if dialplanSource() != "config" {
+		t.Error("absent section should be config mode")
+	}
+	gofaxlib.Config.Dialplan = &gofaxlib.DialplanConfig{Source: "db"}
+	if dialplanSource() != "db" {
+		t.Error("source=db should be db mode")
+	}
+	gofaxlib.Config.Dialplan = &gofaxlib.DialplanConfig{Source: "config"}
+	if dialplanSource() != "config" {
+		t.Error("explicit config source")
 	}
 }

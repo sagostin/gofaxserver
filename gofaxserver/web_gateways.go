@@ -123,13 +123,58 @@ func (s *Server) handleDeleteGatewayTemplate(ctx iris.Context) {
 }
 
 func (s *Server) handleListGateways(ctx iris.Context) {
-	gws, err := s.ListGateways()
+	overview, err := s.ListGateways()
 	if err != nil {
 		ctx.StatusCode(http.StatusInternalServerError)
 		ctx.JSON(iris.Map{"error": "failed to list gateways: " + err.Error()})
 		return
 	}
-	ctx.JSON(gws)
+	ctx.JSON(overview)
+}
+
+func (s *Server) handleAdoptGateway(ctx iris.Context) {
+	var req struct {
+		File string `json:"file"`
+	}
+	if err := ctx.ReadJSON(&req); err != nil || req.File == "" {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "file is required"})
+		return
+	}
+	gs, err := s.AdoptGateway(req.File)
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+	ctx.StatusCode(http.StatusCreated)
+	ctx.JSON(gs)
+}
+
+func (s *Server) handleDeleteUnmanagedGateway(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	if ctx.URLParam("confirm") != "true" {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "refusing to delete unmanaged gateway without confirm=true query param"})
+		return
+	}
+	if err := s.DeleteUnmanagedGateway(name); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"ok": true})
+}
+
+func (s *Server) handleRepairGateway(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	gs, err := s.RepairGateway(name)
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+	ctx.JSON(gs)
 }
 
 func (s *Server) handleProvisionGateway(ctx iris.Context) {

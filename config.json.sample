@@ -10,7 +10,10 @@
     "header": "Fax Server",
     "verbose": false,
     "softmodem_fallback": true,
-    "gateway_config_dir": "/etc/freeswitch/gateways"
+    "gateway_config_dir": "/etc/freeswitch/gateways",
+    "gateway_config_chown": "freeswitch:freeswitch",
+    "gateway_profile": "fax",
+    "gateway_monitor_seconds": 60
   },
   "faxing": {
     "temp_dir": "/opt/gofaxip/tmp",
@@ -27,6 +30,7 @@
     ]
   },
   "dialplan": {
+    "source": "config",
     "rules": [
       { "pattern": "^1(\\d{10}).*$", "replacement": "$1" },
       { "pattern": "^(\\d{10}).*$", "replacement": "$1" }

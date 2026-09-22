@@ -11,18 +11,21 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 type Server struct {
-	FsSocket        *EventSocketServer   `json:"fs_socket,omitempty"`
-	Router          *Router              `json:"router,omitempty"`
-	Queue           *Queue               `json:"queue,omitempty"`
-	LogManager      *gofaxlib.LogManager `json:"log_manager,omitempty"`
-	DialplanManager *DialplanManager     `json:"dialplan_manager,omitempty"`
-	FaxJobRouting   chan *FaxJob         `json:"fax_job_routing,omitempty"`
-	DB              *gorm.DB             `json:"d_b,omitempty"`
+	FsSocket      *EventSocketServer   `json:"fs_socket,omitempty"`
+	Router        *Router              `json:"router,omitempty"`
+	Queue         *Queue               `json:"queue,omitempty"`
+	LogManager    *gofaxlib.LogManager `json:"log_manager,omitempty"`
+	FaxJobRouting chan *FaxJob         `json:"fax_job_routing,omitempty"`
+	DB            *gorm.DB             `json:"d_b,omitempty"`
+	// dialplan holds the active DialplanManager; swapped atomically on reload
+	// in "db" source mode. Access via Dialplan().
+	dialplan atomic.Pointer[DialplanManager]
 	// In-memory maps for Tenants and TenantNumbers.
 	mu            sync.RWMutex
 	Tenants       map[uint]*Tenant         `json:"tenants,omitempty"`        // keyed by Tenant.ID
@@ -86,6 +89,16 @@ type T38PairState struct {
 	LastSeen    time.Time // when that call finished
 }
 
+// Dialplan returns the active DialplanManager (hot-reload safe). Falls back
+// to the built-in defaults if none has been stored yet, so callers never
+// dereference a nil manager.
+func (s *Server) Dialplan() *DialplanManager {
+	if dm := s.dialplan.Load(); dm != nil {
+		return dm
+	}
+	return NewDialplanManager(DefaultTransformationRules())
+}
+
 func NewServer() *Server {
 	return &Server{FaxJobRouting: make(chan *FaxJob),
 		Tenants:         make(map[uint]*Tenant),
@@ -119,13 +132,17 @@ func (s *Server) Start() {
 		nil,
 	))
 
-	s.DialplanManager = loadDialplan()
-	s.LogManager.SendLog(s.LogManager.BuildLog(
-		"Server.StartUp",
-		fmt.Sprintf("loaded dialplan and transformations"),
-		logrus.InfoLevel,
-		nil,
-	))
+	// In "config" mode the dialplan is static and can be loaded immediately.
+	// In "db" mode it is loaded after the database connection below.
+	if dialplanSource() == "config" {
+		s.dialplan.Store(loadDialplan())
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			fmt.Sprintf("loaded dialplan and transformations (source=config)"),
+			logrus.InfoLevel,
+			nil,
+		))
+	}
 
 	// Shut down receiving lines when killed
 	sigchan := make(chan os.Signal, 1)
@@ -171,6 +188,28 @@ func (s *Server) Start() {
 			"Server.StartUp",
 			fmt.Sprintf("failed to seed gateway templates: %v", err),
 			logrus.ErrorLevel,
+			nil,
+		))
+	}
+
+	if dialplanSource() == "db" {
+		dm, err := s.loadDialplanFromDB()
+		if err != nil {
+			// Never store a nil manager: every routed call dereferences it.
+			// Fall back to the built-in defaults until a successful reload.
+			s.LogManager.SendLog(s.LogManager.BuildLog(
+				"Server.StartUp",
+				fmt.Sprintf("failed to load dialplan from database (using built-in defaults until reload): %v", err),
+				logrus.ErrorLevel,
+				nil,
+			))
+			dm = NewDialplanManager(DefaultTransformationRules())
+		}
+		s.dialplan.Store(dm)
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			fmt.Sprintf("loaded dialplan and transformations (source=db)"),
+			logrus.InfoLevel,
 			nil,
 		))
 	}
@@ -232,6 +271,10 @@ func (s *Server) Start() {
 
 	s.Router = router
 	s.Queue = queue
+
+	// start the gateway registration monitor (no-op unless gateways with
+	// register=true are provisioned; disabled when gateway_monitor_seconds < 0)
+	go s.startGatewayMonitor()
 
 	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"Server",
@@ -324,13 +367,17 @@ func loadDialplan() *DialplanManager {
 }
 
 // ReloadData reloads endpoints, tenants, and tenant users from the database,
-// updating the in-memory maps.
+// updating the in-memory maps. In "db" dialplan mode it also hot-reloads the
+// transformation rules.
 func (s *Server) ReloadData() error {
 	if err := s.loadEndpoints(); err != nil {
 		return fmt.Errorf("failed to reload endpoints: %w", err)
 	}
 	if err := s.reloadTenantsAndNumbers(); err != nil {
 		return fmt.Errorf("failed to reload tenants: %w", err)
+	}
+	if err := s.reloadDialplan(); err != nil {
+		return fmt.Errorf("failed to reload dialplan: %w", err)
 	}
 	return nil
 }

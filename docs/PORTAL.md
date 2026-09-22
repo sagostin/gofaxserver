@@ -105,11 +105,22 @@ for customer PBXs), enter the gateway name (e.g. `pbx_<customer>`), the
 and whether to use bridge/transcoding mode. Submitting renders the XML into
 the gateways directory, reloads the `fax` sofia profile over the event
 socket, and creates the matching endpoint in one step. The table shows each
-gateway's live `sofia status` state.
+gateway's live `sofia status` state — registered gateways additionally show
+the monitor's tracked `last_state`.
+
+The Gateways tab also surfaces **drift** between the database and disk:
+XML files present in the directory with no DB record appear under
+"Unmanaged files" with **Adopt** / **Delete** actions, and managed gateways
+whose file went missing show a **Re-render** repair action. Endpoints created
+by provisioning are marked "⚙ managed" on the Endpoints tab (edit/delete
+there is disabled; gofaxserver's API refuses such edits with 409).
 
 Templates themselves are database-backed and editable under **Admin →
 Templates** (Go template syntax; declared `{{.variables}}` drive the
-provision form). Full parameter reference: [GATEWAYS.md](GATEWAYS.md).
+provision form). The dialplan is editable under **Admin → Dialplan** when
+gofaxserver runs with `dialplan.source = "db"` (the tab shows a banner when
+config-file mode is active and the rules are inactive). Full parameter
+reference: [GATEWAYS.md](GATEWAYS.md).
 
 When provisioning is **not** enabled (no `gateway_config_dir`, or no shared
 filesystem with FreeSWITCH), the gateway XML must still be created manually
@@ -275,7 +286,9 @@ Fax users: `GET /portal/api/me/numbers`, `POST /portal/api/faxes` (multipart:
 `GET /portal/api/faxes/{id}`.
 
 Admin (`role=admin`): CRUD under `/portal/api/admin/{orgs,numbers,users,endpoints}`,
-gateway provisioning under `/portal/api/admin/{gateways,gateway-templates}`,
+gateway provisioning under `/portal/api/admin/{gateways,gateway-templates}`
+(including `gateways/adopt`, `gateways/unmanaged/{name}`, `gateways/{name}/repair`),
+dialplan rules under `/portal/api/admin/dialplan`,
 `PUT /portal/api/admin/numbers/{id}/assignments`, `GET /portal/api/admin/orgs/{id}/reconcile`,
 `GET /portal/api/admin/faxes/active`, `GET /portal/api/admin/jobs[?org_id=&status=]`,
 `GET /portal/api/admin/jobs/{id}/live`, `GET /portal/api/admin/audit`.

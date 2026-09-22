@@ -13,13 +13,25 @@ interface Ep {
 }
 
 const eps = ref<Ep[]>([])
+const managedBy = ref<Record<number, string>>({}) // endpoint_id -> gateway name
 const error = ref('')
 const busy = ref(false)
 const form = ref({ type: 'tenant', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false })
 const confirmGlobal = ref(false)
 
 async function load() {
-  try { eps.value = await api<Ep[]>('/admin/endpoints') } catch (e: any) { error.value = e.message }
+  try {
+    const [list, gw] = await Promise.all([
+      api<Ep[]>('/admin/endpoints'),
+      api<{ gateways: { gateway: { name: string; endpoint_id: number } }[] }>('/admin/gateways').catch(() => null),
+    ])
+    eps.value = list
+    const map: Record<number, string> = {}
+    for (const gs of gw?.gateways || []) {
+      if (gs.gateway.endpoint_id) map[gs.gateway.endpoint_id] = gs.gateway.name
+    }
+    managedBy.value = map
+  } catch (e: any) { error.value = e.message }
 }
 onMounted(load)
 
@@ -86,12 +98,18 @@ async function editPriority(ep: Ep) {
             <td>{{ ep.type }}</td>
             <td>{{ ep.type_id }}</td>
             <td>{{ ep.endpoint_type }}</td>
-            <td>{{ ep.endpoint }}</td>
+            <td>
+              {{ ep.endpoint }}
+              <span v-if="managedBy[ep.id]" class="muted" :title="`Managed by gateway ${managedBy[ep.id]} — edit via the Gateways tab`">⚙ {{ managedBy[ep.id] }}</span>
+            </td>
             <td>{{ ep.priority }}</td>
             <td>{{ ep.bridge ? 'yes' : '' }}</td>
             <td class="actions-cell">
-              <button class="secondary" @click="editPriority(ep)">Edit priority</button>
-              <button class="danger" @click="remove(ep)">Delete</button>
+              <template v-if="!managedBy[ep.id]">
+                <button class="secondary" @click="editPriority(ep)">Edit priority</button>
+                <button class="danger" @click="remove(ep)">Delete</button>
+              </template>
+              <span v-else class="muted">via Gateways</span>
             </td>
           </tr>
         </tbody>

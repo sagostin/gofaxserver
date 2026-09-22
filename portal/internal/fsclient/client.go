@@ -138,14 +138,16 @@ type GatewayTemplate struct {
 
 // GatewayConfig mirrors gofaxserver's provisioned-gateway record.
 type GatewayConfig struct {
-	ID         uint            `json:"id"`
-	Name       string          `json:"name"`
-	TemplateID uint            `json:"template_id"`
-	Template   GatewayTemplate `json:"template"`
-	Params     string          `json:"params"`
-	EndpointID uint            `json:"endpoint_id"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	ID                 uint            `json:"id"`
+	Name               string          `json:"name"`
+	TemplateID         uint            `json:"template_id"`
+	Template           GatewayTemplate `json:"template"`
+	Params             string          `json:"params"`
+	EndpointID         uint            `json:"endpoint_id"`
+	LastState          string          `json:"last_state"`
+	LastStateCheckedAt *time.Time      `json:"last_state_checked_at,omitempty"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
 }
 
 // GatewayStatus pairs a provisioned gateway with its live sofia state.
@@ -166,6 +168,34 @@ type GatewayProvisionSpec struct {
 	Priority   uint                   `json:"priority"`
 	Bridge     bool                   `json:"bridge"`
 	EndpointIP string                 `json:"endpoint_ip"`
+}
+
+// UnmanagedFile is a gateway XML on disk with no DB row tracking it.
+type UnmanagedFile struct {
+	File string `json:"file"`
+	Name string `json:"name"`
+}
+
+// GatewayOverview mirrors gofaxserver's full DB + disk gateway picture.
+type GatewayOverview struct {
+	Gateways  []GatewayStatus `json:"gateways"`
+	Unmanaged []UnmanagedFile `json:"unmanaged"`
+}
+
+// DialplanRule mirrors gofaxserver's DB-backed dialplan rule.
+type DialplanRule struct {
+	ID          uint   `json:"id"`
+	Position    int    `json:"position"`
+	Pattern     string `json:"pattern"`
+	Replacement string `json:"replacement"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+}
+
+// DialplanView is the rule list plus the active source mode.
+type DialplanView struct {
+	Source string         `json:"source"`
+	Rules  []DialplanRule `json:"rules"`
 }
 
 // FaxRunState mirrors the subset of gofaxserver's FaxRunState we need.
@@ -324,9 +354,25 @@ func (c *Client) DeleteGatewayTemplate(id uint) error {
 	return c.doAdmin(http.MethodDelete, fmt.Sprintf("/admin/gateway/templates/%d", id), nil, nil)
 }
 
-func (c *Client) ListGateways() ([]GatewayStatus, error) {
-	var out []GatewayStatus
-	err := c.doAdmin(http.MethodGet, "/admin/gateways", nil, &out)
+func (c *Client) ListGateways() (*GatewayOverview, error) {
+	out := &GatewayOverview{}
+	err := c.doAdmin(http.MethodGet, "/admin/gateways", nil, out)
+	return out, err
+}
+
+func (c *Client) AdoptGateway(file string) (*GatewayStatus, error) {
+	out := &GatewayStatus{}
+	err := c.doAdmin(http.MethodPost, "/admin/gateways/adopt", map[string]string{"file": file}, out)
+	return out, err
+}
+
+func (c *Client) DeleteUnmanagedGateway(name string) error {
+	return c.doAdmin(http.MethodDelete, "/admin/gateways/unmanaged/"+name+"?confirm=true", nil, nil)
+}
+
+func (c *Client) RepairGateway(name string) (*GatewayStatus, error) {
+	out := &GatewayStatus{}
+	err := c.doAdmin(http.MethodPost, "/admin/gateway/"+name+"/repair", nil, out)
 	return out, err
 }
 
@@ -344,6 +390,32 @@ func (c *Client) UpdateGateway(name string, spec GatewayProvisionSpec) (*Gateway
 
 func (c *Client) DeprovisionGateway(name string) error {
 	return c.doAdmin(http.MethodDelete, "/admin/gateway/"+name, nil, nil)
+}
+
+// --- dialplan rules ---
+
+func (c *Client) GetDialplan() (*DialplanView, error) {
+	out := &DialplanView{}
+	err := c.doAdmin(http.MethodGet, "/admin/dialplan", nil, out)
+	return out, err
+}
+
+func (c *Client) CreateDialplanRule(r DialplanRule) (*DialplanRule, error) {
+	out := &DialplanRule{}
+	err := c.doAdmin(http.MethodPost, "/admin/dialplan/rules", r, out)
+	return out, err
+}
+
+func (c *Client) UpdateDialplanRule(r DialplanRule) error {
+	return c.doAdmin(http.MethodPut, fmt.Sprintf("/admin/dialplan/rules/%d", r.ID), r, nil)
+}
+
+func (c *Client) DeleteDialplanRule(id uint) error {
+	return c.doAdmin(http.MethodDelete, fmt.Sprintf("/admin/dialplan/rules/%d", id), nil, nil)
+}
+
+func (c *Client) ReorderDialplanRules(order []map[string]uint) error {
+	return c.doAdmin(http.MethodPost, "/admin/dialplan/rules/reorder", order, nil)
 }
 
 func (c *Client) ListEndpoints(typeFilter string, typeID uint) ([]Endpoint, error) {

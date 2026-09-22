@@ -43,6 +43,15 @@ type config struct {
 		// FreeSWITCH gateway XML files are written (e.g. /etc/freeswitch/gateways).
 		// Empty disables API-driven gateway provisioning.
 		GatewayConfigDir string `json:"gateway_config_dir"`
+		// GatewayConfigChown optionally sets owner:group (names or uid:gid) on
+		// rendered gateway XML files, e.g. "freeswitch:freeswitch". Empty keeps
+		// the writer's ownership.
+		GatewayConfigChown string `json:"gateway_config_chown"`
+		// GatewayProfile is the sofia profile that hosts the gateways.
+		GatewayProfile string `json:"gateway_profile"`
+		// GatewayMonitorSeconds is the poll interval for sofia registration
+		// state tracking of provisioned gateways (0 disables).
+		GatewayMonitorSeconds int `json:"gateway_monitor_seconds"`
 	} `json:"freeswitch"`
 	Faxing struct {
 		TempDir                      string          `json:"temp_dir"` // eg. /opt/gofaxip/tmp
@@ -101,7 +110,11 @@ type DialplanRule struct {
 // DialplanConfig holds the ordered transformation rules applied to
 // caller/callee numbers before tenant lookup and routing.
 type DialplanConfig struct {
-	Rules []DialplanRule `json:"rules"`
+	// Source selects where rules come from: "config" (default — this
+	// section's rules, or built-in defaults when the section is absent) or
+	// "db" (the dialplan_rules table, hot-reloadable via /admin/reload).
+	Source string         `json:"source"`
+	Rules  []DialplanRule `json:"rules"`
 }
 
 // LoadConfig loads the configuration from a JSON file.
