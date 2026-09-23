@@ -9,6 +9,9 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 - **T.38 + G.711 Support** - Full T.38 protocol with intelligent flip-flop fallback to G.711 audio
 - **Fax Bridging** - Transcode faxes between T.38 and audio endpoints
 - **Priority-based Routing** - Failover using multiple gateways with configurable priorities
+- **API-driven Gateway Provisioning** - Create/update/delete FreeSWITCH gateway XML from the REST API or portal, with DB-backed editable templates and automatic ESL reload
+- **Configurable Dialplan** - Number transformation rules from `config.json` or hot-reloadable from the database
+- **Registration Monitor** - Polls Sofia gateway registration state, logs transitions, and exposes health in the portal
 - **RESTful API** - Complete API for tenant administration and fax operations
 - **Comprehensive Logging** - Loki and PostgreSQL integration for detailed audit trails
 - **Flexible Notifications** - Email, webhooks, and customizable notification methods
@@ -26,7 +29,8 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 ├──────────────┴────────────┴─────────────┴────────────┴───────────────┤
 │                            PostgreSQL                                │
 │       (tenants, tenant_numbers, endpoints, tenant_users,            │
-│        fax_job_results — GORM auto-migrated on startup)              │
+│        fax_job_results, gateway_templates, gateway_configs,         │
+│        dialplan_rules — GORM auto-migrated on startup)              │
 └──────────────────────────────────────────────────────────────────────┘
        │              │                                  │
        ▼              ▼                                  ▼
@@ -45,7 +49,9 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [gofaxs
 |-----------|------|-------------|
 | **Event Socket Server** | `gofaxserver/freeswitch_inbound.go`, `freeswitch_outbound.go` | Inbound (`:8022`) and outbound (`:8021`) ESL connections to FreeSWITCH |
 | **Router** | `gofaxserver/router.go` | Routes incoming calls based on number-to-tenant mapping; honors upstream gateway set |
-| **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformations to caller/callee numbers before routing; rules configurable via `dialplan` in `config.json` |
+| **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformations to caller/callee numbers before routing; rules come from `dialplan` in `config.json` (`source: "config"`) or the `dialplan_rules` table (`source: "db"`, hot-reloadable) |
+| **Gateway Provisioning** | `gofaxserver/gateway_provision.go`, `web_gateways.go` | Renders DB-backed templates into `gateway_config_dir`, tracks gateways in `gateway_configs`, reloads FreeSWITCH via ESL |
+| **Gateway Monitor** | `gofaxserver/gateway_monitor.go` | Polls Sofia registration state, logs transitions, persists `last_state` |
 | **Queue** | `gofaxserver/queue.go` | Manages outbound fax jobs with priority-based endpoint selection and retry |
 | **Web Server** | `gofaxserver/web.go` | Iris-based REST API on `:8080` (or `web.listen`) |
 | **FaxTracker** | `gofaxserver/faxtracker.go` | Real-time tracking of in-flight fax jobs |
@@ -100,7 +106,7 @@ GRANT ALL PRIVILEGES ON DATABASE gofaxserver TO gofaxserver;
 GRANT ALL ON SCHEMA public TO gofaxserver;
 ```
 
-The server auto-migrates the schema (tenants, tenant_numbers, endpoints, tenant_users, fax_job_results) on startup — no manual migration step is required.
+The server auto-migrates the schema (tenants, tenant_numbers, endpoints, tenant_users, fax_job_results, gateway_templates, gateway_configs, dialplan_rules) on startup — no manual migration step is required.
 
 ## Configuration
 
@@ -115,7 +121,11 @@ Configuration is stored in `/etc/gofaxserver/config.json`. A complete example (m
     "ident": "gofaxserver",
     "header": "Fax Server",
     "verbose": false,
-    "softmodem_fallback": true
+    "softmodem_fallback": true,
+    "gateway_config_dir": "/etc/freeswitch/gateways",
+    "gateway_config_chown": "freeswitch:freeswitch",
+    "gateway_profile": "fax",
+    "gateway_monitor_seconds": 60
   },
   "faxing": {
     "temp_dir": "/tmp",
@@ -157,6 +167,13 @@ Configuration is stored in `/etc/gofaxserver/config.json`. A complete example (m
     "from_address": "noreply@example.com",
     "from_name": "Fax Server"
   },
+  "dialplan": {
+    "source": "config",
+    "rules": [
+      { "pattern": "^1(\\d{10}).*$", "replacement": "$1" },
+      { "pattern": "^(\\d{10}).*$", "replacement": "$1" }
+    ]
+  },
   "psk": "change-me-32-bytes-of-entropy"
 }
 ```
@@ -166,7 +183,9 @@ Notes:
 - `event_client_socket` (port **8021**) is the outbound ESL connection gofaxserver uses to originate calls and write to `mod_db`.
 - `answer_after` and `wait_time` are in **milliseconds** (`uint64`).
 - `retry_delay` accepts `s/m/h/d` suffixes (e.g. `60s`, `5m`).
-- `psk` is the symmetric key used to encrypt/decrypt tenant user passwords — generate a strong random value in production.
+- `psk` is the symmetric key used to encrypt/decrypt tenant user passwords and gateway credentials — generate a strong random value in production.
+- `gateway_config_dir` enables API-driven provisioning: rendered gateway XML is written there and FreeSWITCH is reloaded over ESL. Leave empty to disable. `gateway_config_chown` optionally chowns files, `gateway_profile` selects the Sofia profile to rescan (default `fax`), `gateway_monitor_seconds` is the registration poll interval (default 60, negative disables). See [docs/GATEWAYS.md](docs/GATEWAYS.md).
+- `dialplan.source` is `"config"` (rules from this file, shown above) or `"db"` (rules from the `dialplan_rules` table, editable via `/admin/dialplan*` and hot-reloaded by `/admin/reload`). Omit the whole `dialplan` section to use the built-in defaults.
 - PostgreSQL SSL mode and timezone can be overridden via `POSTGRES_SSLMODE` and `POSTGRES_TIMEZONE` environment variables (defaults: `disable`, `America/Vancouver`).
 
 ## API Reference
@@ -204,6 +223,19 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for the full reference. Quick
 | PUT | `/admin/user/{id}` | Update tenant user (password re-encrypted if supplied) |
 | DELETE | `/admin/user/{id}` | Delete tenant user |
 | POST | `/admin/fallback` | Set softmodem fallback for a number |
+| GET | `/admin/gateways` | List provisioned gateways + unmanaged XML files found on disk |
+| POST | `/admin/gateway` | Provision a gateway (renders template, writes XML, ESL reload, optional endpoint) |
+| PUT | `/admin/gateway/{name}` | Update a provisioned gateway |
+| DELETE | `/admin/gateway/{name}` | Deprovision a gateway (removes XML + DB record) |
+| POST | `/admin/gateway/{name}/repair` | Re-render XML from DB state |
+| POST | `/admin/gateways/adopt` | Adopt an unmanaged on-disk XML into DB management |
+| DELETE | `/admin/gateways/unmanaged/{name}` | Delete an unmanaged on-disk XML |
+| GET/POST | `/admin/gateway/templates` | List / create gateway templates |
+| PUT/DELETE | `/admin/gateway/templates/{id}` | Update / delete a gateway template |
+| GET | `/admin/dialplan` | Show dialplan source and rules |
+| POST | `/admin/dialplan/rules` | Create a dialplan rule |
+| PUT/DELETE | `/admin/dialplan/rules/{id}` | Update / delete a dialplan rule |
+| POST | `/admin/dialplan/rules/reorder` | Reorder dialplan rules |
 
 ### Fax Endpoints (`/fax`)
 
@@ -289,6 +321,8 @@ Response:
 ```
 
 Global endpoints (`type=global`, `type_id=0`) are the upstream carrier gateways. They are loaded into `UpstreamFsGateways` and used as a fan-out fallback when no tenant/number endpoint matches. They can now be created via the API.
+
+Endpoints created through gateway provisioning (`POST /admin/gateway`) are *managed*: they are linked to a `gateway_configs` row and `PUT/DELETE /admin/endpoint/{id}` returns **409 Conflict** for them — modify or remove them via the `/admin/gateway*` routes instead. For `gateway` endpoints, the value is `name:publicIP` where the ACL match is exact on the IP part (see [docs/GATEWAYS.md](docs/GATEWAYS.md)).
 
 ## Softmodem Fallback
 
