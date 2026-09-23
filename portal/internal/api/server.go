@@ -117,6 +117,16 @@ func (s *Server) BuildApp() *iris.Application {
 	dialplan.Delete("/rules/{id:uint}", s.adminDeleteDialplanRule)
 	dialplan.Post("/rules/reorder", s.adminReorderDialplanRules)
 
+	faxpolicies := admin.Party("/fax-policies")
+	faxpolicies.Get("/", s.adminListFaxPolicies)
+	faxpolicies.Post("/", s.adminCreateFaxPolicyRule)
+	faxpolicies.Put("/{id:uint}", s.adminUpdateFaxPolicyRule)
+	faxpolicies.Delete("/{id:uint}", s.adminDeleteFaxPolicyRule)
+	faxpolicies.Post("/{id:uint}/expire", s.adminExpireFaxPolicyRule)
+	faxpolicies.Get("/resolve", s.adminResolveFaxPolicy)
+	faxpolicies.Get("/pair-states", s.adminListFaxPairStates)
+	faxpolicies.Delete("/pair-states/{id:uint}", s.adminDeleteFaxPairState)
+
 	admin.Get("/faxes/active", s.adminActiveFaxes)
 	admin.Get("/jobs", s.adminListAllJobs)
 	admin.Get("/jobs/{id:uint}/live", s.adminJobLive)

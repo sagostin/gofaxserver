@@ -1106,6 +1106,112 @@ func (s *Server) adminReorderDialplanRules(ctx iris.Context) {
 	ctx.JSON(map[string]bool{"ok": true})
 }
 
+// ---------- Fax policy rules (T.38 / ECM / V.17) ----------
+
+func (s *Server) adminListFaxPolicies(ctx iris.Context) {
+	out, err := s.FX.ListFaxPolicies(ctx.URLParam("number"), ctx.URLParam("origin"))
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "failed to read upstream fax policies: " + err.Error()})
+		return
+	}
+	ctx.JSON(out)
+}
+
+func (s *Server) adminCreateFaxPolicyRule(ctx iris.Context) {
+	var rule fsclient.FaxPolicyRule
+	if err := ctx.ReadJSON(&rule); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	created, err := s.FX.CreateFaxPolicyRule(rule)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream create failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "FAX_POLICY_CREATE", fmt.Sprintf("rule:%d", created.ID), map[string]string{
+		"scope": created.Scope, "effect": created.Effect,
+		"src": created.SrcNumber, "dst": created.DstNumber,
+	})
+	ctx.StatusCode(201)
+	ctx.JSON(created)
+}
+
+func (s *Server) adminUpdateFaxPolicyRule(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	var rule fsclient.FaxPolicyRule
+	if err := ctx.ReadJSON(&rule); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	rule.ID = id
+	if err := s.FX.UpdateFaxPolicyRule(rule); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream update failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "FAX_POLICY_UPDATE", fmt.Sprintf("rule:%d", id), map[string]string{
+		"scope": rule.Scope, "effect": rule.Effect,
+	})
+	ctx.JSON(rule)
+}
+
+func (s *Server) adminDeleteFaxPolicyRule(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	if err := s.FX.DeleteFaxPolicyRule(id); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream delete failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "FAX_POLICY_DELETE", fmt.Sprintf("rule:%d", id), nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
+func (s *Server) adminExpireFaxPolicyRule(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	if err := s.FX.ExpireFaxPolicyRule(id); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream expire failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "FAX_POLICY_EXPIRE", fmt.Sprintf("rule:%d", id), nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
+func (s *Server) adminResolveFaxPolicy(ctx iris.Context) {
+	out, err := s.FX.ResolveFaxPolicy(ctx.URLParam("src"), ctx.URLParam("dst"), ctx.URLParamDefault("type", "softmodem"))
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream resolve failed: " + err.Error()})
+		return
+	}
+	ctx.JSON(out)
+}
+
+func (s *Server) adminListFaxPairStates(ctx iris.Context) {
+	out, err := s.FX.ListFaxPairStates(ctx.URLParam("number"))
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "failed to read upstream pair states: " + err.Error()})
+		return
+	}
+	ctx.JSON(out)
+}
+
+func (s *Server) adminDeleteFaxPairState(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	if err := s.FX.DeleteFaxPairState(id); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream delete failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "FAX_PAIR_STATE_DELETE", fmt.Sprintf("pair_state:%d", id), nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
 // ---------- Faxes / jobs / audit ----------
 
 func (s *Server) adminActiveFaxes(ctx iris.Context) {

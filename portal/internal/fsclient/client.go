@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -196,6 +197,64 @@ type DialplanRule struct {
 type DialplanView struct {
 	Source string         `json:"source"`
 	Rules  []DialplanRule `json:"rules"`
+}
+
+// FaxPolicyRule mirrors gofaxserver's Postgres-backed fax policy rule.
+type FaxPolicyRule struct {
+	ID            uint       `json:"id"`
+	Scope         string     `json:"scope"` // dst | src | pair
+	SrcNumber     string     `json:"src_number"`
+	DstNumber     string     `json:"dst_number"`
+	Effect        string     `json:"effect"`     // t38_off | t38_on | ecm_off | ecm_on | v17_off | softmodem_only
+	AppliesTo     string     `json:"applies_to"` // both | softmodem | bridge
+	Origin        string     `json:"origin"`     // manual | auto
+	Enabled       bool       `json:"enabled"`
+	ExpiresAt     *time.Time `json:"expires_at"`
+	FailureCount  int        `json:"failure_count"`
+	SuccessCount  int        `json:"success_count"`
+	LastSeenAt    *time.Time `json:"last_seen_at"`
+	LastT38Status string     `json:"last_t38_status"`
+	Notes         string     `json:"notes"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+// FaxPolicyList wraps the rule list response.
+type FaxPolicyList struct {
+	Rules []FaxPolicyRule `json:"rules"`
+}
+
+// FaxPolicyResolution mirrors gofaxserver's resolved policy for a call.
+type FaxPolicyResolution struct {
+	EnableT38      bool   `json:"enable_t38"`
+	RequestT38     bool   `json:"request_t38"`
+	UseECM         *bool  `json:"use_ecm"`
+	DisableV17     *bool  `json:"disable_v17"`
+	T38Decided     bool   `json:"t38_decided"`
+	T38ForcedOff   bool   `json:"t38_forced_off"`
+	SoftmodemOnly  bool   `json:"softmodem_only"`
+	AppliedRuleIDs []uint `json:"applied_rule_ids"`
+}
+
+// FaxPolicyResolveResult is the dry-run resolve response.
+type FaxPolicyResolveResult struct {
+	Policy       FaxPolicyResolution `json:"policy"`
+	AppliedRules []FaxPolicyRule     `json:"applied_rules"`
+}
+
+// FaxPairState mirrors gofaxserver's persisted flip-flop pair state.
+type FaxPairState struct {
+	ID          uint      `json:"id"`
+	SrcNumber   string    `json:"src_number"`
+	DstNumber   string    `json:"dst_number"`
+	CallType    string    `json:"call_type"`
+	LastUsedT38 bool      `json:"last_used_t38"`
+	LastSeen    time.Time `json:"last_seen"`
+}
+
+// FaxPairStateList wraps the pair-state list response.
+type FaxPairStateList struct {
+	PairStates []FaxPairState `json:"pair_states"`
 }
 
 // FaxRunState mirrors the subset of gofaxserver's FaxRunState we need.
@@ -416,6 +475,65 @@ func (c *Client) DeleteDialplanRule(id uint) error {
 
 func (c *Client) ReorderDialplanRules(order []map[string]uint) error {
 	return c.doAdmin(http.MethodPost, "/admin/dialplan/rules/reorder", order, nil)
+}
+
+// --- fax policy rules ---
+
+func (c *Client) ListFaxPolicies(number, origin string) (*FaxPolicyList, error) {
+	qs := []string{}
+	if number != "" {
+		qs = append(qs, "number="+url.QueryEscape(number))
+	}
+	if origin != "" {
+		qs = append(qs, "origin="+url.QueryEscape(origin))
+	}
+	path := "/admin/fax-policies"
+	if len(qs) > 0 {
+		path += "?" + strings.Join(qs, "&")
+	}
+	out := &FaxPolicyList{}
+	err := c.doAdmin(http.MethodGet, path, nil, out)
+	return out, err
+}
+
+func (c *Client) CreateFaxPolicyRule(r FaxPolicyRule) (*FaxPolicyRule, error) {
+	out := &FaxPolicyRule{}
+	err := c.doAdmin(http.MethodPost, "/admin/fax-policies", r, out)
+	return out, err
+}
+
+func (c *Client) UpdateFaxPolicyRule(r FaxPolicyRule) error {
+	return c.doAdmin(http.MethodPut, fmt.Sprintf("/admin/fax-policies/%d", r.ID), r, nil)
+}
+
+func (c *Client) DeleteFaxPolicyRule(id uint) error {
+	return c.doAdmin(http.MethodDelete, fmt.Sprintf("/admin/fax-policies/%d", id), nil, nil)
+}
+
+func (c *Client) ExpireFaxPolicyRule(id uint) error {
+	return c.doAdmin(http.MethodPost, fmt.Sprintf("/admin/fax-policies/%d/expire", id), nil, nil)
+}
+
+func (c *Client) ResolveFaxPolicy(src, dst, callType string) (*FaxPolicyResolveResult, error) {
+	path := fmt.Sprintf("/admin/fax-policies/resolve?src=%s&dst=%s&type=%s",
+		url.QueryEscape(src), url.QueryEscape(dst), url.QueryEscape(callType))
+	out := &FaxPolicyResolveResult{}
+	err := c.doAdmin(http.MethodGet, path, nil, out)
+	return out, err
+}
+
+func (c *Client) ListFaxPairStates(number string) (*FaxPairStateList, error) {
+	path := "/admin/fax-policies/pair-states"
+	if number != "" {
+		path += "?number=" + url.QueryEscape(number)
+	}
+	out := &FaxPairStateList{}
+	err := c.doAdmin(http.MethodGet, path, nil, out)
+	return out, err
+}
+
+func (c *Client) DeleteFaxPairState(id uint) error {
+	return c.doAdmin(http.MethodDelete, fmt.Sprintf("/admin/fax-policies/pair-states/%d", id), nil, nil)
 }
 
 func (c *Client) ListEndpoints(typeFilter string, typeID uint) ([]Endpoint, error) {

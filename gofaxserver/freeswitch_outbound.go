@@ -481,15 +481,53 @@ func (t *eventClient) start() {
 		return
 	}
 
-	// Check if T.38 should be enabled
-	requestT38 := gofaxlib.Config.Faxing.RequestT38
-	enableT38 := gofaxlib.Config.Faxing.EnableT38
-
-	// Track for T.38 pair state update after call
+	// Resolve the fax policy for this call (Postgres-backed rules; replaces
+	// the old mod_db softmodem fallback and decides T.38/ECM/V.17).
 	srcNum := t.faxjob.CallerIdNumber
 	dstNum := t.faxjob.CalleeNumber
-	pairDecisionTime := time.Now()
-	fallbackHit := false
+
+	policy := DefaultFaxPolicy()
+	if t.server != nil {
+		policy = t.server.ResolveFaxPolicy(srcNum, dstNum, CallTypeSoftmodem)
+	}
+	enableT38 := policy.EnableT38
+	requestT38 := policy.RequestT38
+	fallbackHit := policy.T38ForcedOff
+
+	if len(policy.AppliedRuleIDs) > 0 {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Fax policy applied: rules=%v enable_t38=%t request_t38=%t softmodem_only=%t",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"uuid":           t.faxjob.UUID.String(),
+				"src_num":        srcNum,
+				"dst_num":        dstNum,
+				"rules":          policy.AppliedRuleIDs,
+				"enable_t38":     enableT38,
+				"request_t38":    requestT38,
+				"softmodem_only": policy.SoftmodemOnly,
+			},
+			policy.AppliedRuleIDs, enableT38, requestT38, policy.SoftmodemOnly,
+		))
+	}
+
+	// Retry-chain escalation: a previous attempt of this same job showed
+	// T.38 negotiation trouble, so force T.38 off for this attempt.
+	if t.faxjob.ForceT38Off && enableT38 {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Retry-chain escalation: forcing T.38 off after previous negotiation failure",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"uuid":    t.faxjob.UUID.String(),
+				"src_num": srcNum,
+				"dst_num": dstNum,
+			},
+		))
+		enableT38 = false
+		requestT38 = false
+	}
 
 	// Check if this is an upstream gateway call - T.38 is only supported for upstreams
 	isUpstreamCall := false
@@ -509,9 +547,8 @@ func (t *eventClient) start() {
 		}
 	}
 
-	// Only apply T.38 flip-flop for upstream gateway calls
+	// Hard constraint: non-upstream (tenant/local) gateways are G.711 only.
 	if !isUpstreamCall {
-		// Non-upstream calls: disable T.38 entirely
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
 			"T.38 disabled for non-upstream endpoint (tenant/local gateway)",
@@ -524,9 +561,9 @@ func (t *eventClient) start() {
 		))
 		enableT38 = false
 		requestT38 = false
-	} else if t.server != nil {
-		// Upstream calls: apply per-pair flip-flop T.38 policy
-		pairAllowT38 := t.server.ShouldAllowT38ForPair(srcNum, dstNum, pairDecisionTime)
+	} else if !policy.T38Decided && !t.faxjob.ForceT38Off && t.server != nil {
+		// No rule decided T.38: flip-flop probing for this pair.
+		pairAllowT38 := t.server.ShouldAllowT38ForPair(srcNum, dstNum, CallTypeSoftmodem, time.Now())
 		if !pairAllowT38 {
 			t.logManager.SendLog(t.logManager.BuildLog(
 				"EventClient",
@@ -536,7 +573,7 @@ func (t *eventClient) start() {
 					"uuid":       t.faxjob.UUID.String(),
 					"src_num":    srcNum,
 					"dst_num":    dstNum,
-					"pair_ttl_s": T38PairTTL.Seconds(),
+					"pair_ttl_s": PairStateTTL().Seconds(),
 				},
 				srcNum, dstNum,
 			))
@@ -551,49 +588,25 @@ func (t *eventClient) start() {
 					"uuid":       t.faxjob.UUID.String(),
 					"src_num":    srcNum,
 					"dst_num":    dstNum,
-					"pair_ttl_s": T38PairTTL.Seconds(),
+					"pair_ttl_s": PairStateTTL().Seconds(),
 				},
 				srcNum, dstNum,
 			))
 		}
 	}
 
-	// Second: Check legacy softmodem fallback as an override
-	fallback, err := gofaxlib.GetSoftmodemFallback(t.conn, t.faxjob.CalleeNumber)
-	if err != nil {
-		t.logManager.SendLog(t.logManager.BuildLog(
-			"EventClient",
-			"GetSoftmodemFallback error: %v",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"uuid":             t.faxjob.UUID.String(),
-				"callee_number":    t.faxjob.CalleeNumber,
-				"caller_id_number": t.faxjob.CallerIdNumber,
-				"error":            err.Error(),
-			},
-			err,
-		))
+	// Apply ECM / V.17 policy decisions (nil = keep the job's settings).
+	if policy.UseECM != nil {
+		t.faxjob.UseECM = *policy.UseECM
 	}
-	if fallback {
-		fallbackHit = true
-		t.logManager.SendLog(t.logManager.BuildLog(
-			"EventClient",
-			"Softmodem fallback override active for destination %s, disabling T.38",
-			logrus.WarnLevel,
-			map[string]interface{}{
-				"uuid":             t.faxjob.UUID.String(),
-				"callee_number":    t.faxjob.CalleeNumber,
-				"caller_id_number": t.faxjob.CallerIdNumber,
-			},
-			t.faxjob.CalleeNumber,
-		))
-		enableT38 = false
-		requestT38 = false
+	if policy.DisableV17 != nil && *policy.DisableV17 {
+		t.faxjob.DisableV17 = true
 	}
 
 	// Track T.38 decision on the faxjob for database persistence
 	t.faxjob.UsedT38 = enableT38
 	t.faxjob.SoftmodemFallback = fallbackHit
+	t.faxjob.AppliedPolicyIDs = policy.AppliedRuleIDs
 
 	// Collect dialstring variables
 	dsVariablesMap := map[string]string{
@@ -759,72 +772,39 @@ func (t *eventClient) start() {
 			result.AddEvent(ev)
 			if result.HangupCause != "" {
 
-				// If eventClient failed:
-				// Check if softmodem fallback should be enabled on the next call
-				if gofaxlib.Config.FreeSwitch.SoftmodemFallback && !result.Success {
-					var activateFallback bool
-
-					if result.NegotiateCount > 1 {
-						t.logManager.SendLog(t.logManager.BuildLog(
-							"EventClient",
-							"Faxing failed with %d negotiations, enabling softmodem fallback for calls to %s",
-							logrus.ErrorLevel,
-							map[string]interface{}{
-								"uuid":              t.faxjob.UUID.String(),
-								"negotiate_count":   result.NegotiateCount,
-								"callee_number":     t.faxjob.CalleeNumber,
-								"hangup_cause":      result.HangupCause,
-								"transferred_pages": result.TransferredPages,
-								"success":           result.Success,
-							},
-							result.NegotiateCount, t.faxjob.CalleeNumber,
-						))
-						activateFallback = true
-					} else {
+				// Feed the outcome into the fax policy engine (softmodem path
+				// has full telemetry, so the auto-escalation ladder applies).
+				if t.server != nil {
+					if result.Success {
+						t.server.LearnFaxPolicySuccess(dstNum)
+					} else if qualifiesForLearning(result) {
 						var badrows uint
 						for _, p := range result.PageResults {
 							badrows += p.BadRows
 						}
-						if badrows > 0 {
-							t.logManager.SendLog(t.logManager.BuildLog(
-								"EventClient",
-								"Faxing failed with %d bad rows in %d pages, enabling softmodem fallback for calls to %s",
-								logrus.ErrorLevel,
-								map[string]interface{}{
-									"uuid":          t.faxjob.UUID.String(),
-									"bad_rows":      badrows,
-									"pages":         result.TransferredPages,
-									"callee_number": t.faxjob.CalleeNumber,
-									"hangup_cause":  result.HangupCause,
-									"success":       result.Success,
-								},
-								badrows, result.TransferredPages, t.faxjob.CalleeNumber,
-							))
-							activateFallback = true
-						}
-					}
-
-					if activateFallback {
-						err = gofaxlib.SetSoftmodemFallback(t.conn, t.faxjob.CalleeNumber, true)
-						if err != nil {
-							t.logManager.SendLog(t.logManager.BuildLog(
-								"EventClient",
-								"SetSoftmodemFallback error: %v",
-								logrus.ErrorLevel,
-								map[string]interface{}{
-									"uuid":          t.faxjob.UUID.String(),
-									"callee_number": t.faxjob.CalleeNumber,
-									"error":         err.Error(),
-								},
-								err,
-							))
-						}
+						t.logManager.SendLog(t.logManager.BuildLog(
+							"EventClient",
+							"Faxing failed with qualifying signature (negotiations=%d bad_rows=%d t38_status=%s), learning policy for %s",
+							logrus.WarnLevel,
+							map[string]interface{}{
+								"uuid":              t.faxjob.UUID.String(),
+								"negotiate_count":   result.NegotiateCount,
+								"bad_rows":          badrows,
+								"t38_status":        result.T38Status,
+								"callee_number":     t.faxjob.CalleeNumber,
+								"hangup_cause":      result.HangupCause,
+								"transferred_pages": result.TransferredPages,
+							},
+							result.NegotiateCount, badrows, result.T38Status, t.faxjob.CalleeNumber,
+						))
+						t.server.LearnFaxPolicyFailure(dstNum, result)
 					}
 				}
 
-				// Update T.38 pair state for flip-flop (skip if fallback override was used or non-upstream)
+				// Update T.38 pair state for flip-flop (skip if a policy rule
+				// forced T.38 or the call was non-upstream)
 				if t.server != nil && !fallbackHit && isUpstreamCall {
-					t.server.UpdateT38PairState(srcNum, dstNum, enableT38, time.Now())
+					t.server.UpdateT38PairState(srcNum, dstNum, CallTypeSoftmodem, enableT38, time.Now())
 					t.logManager.SendLog(t.logManager.BuildLog(
 						"EventClient",
 						"Updated T.38 pair state for %s → %s (used T.38: %t)",

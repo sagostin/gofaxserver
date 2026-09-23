@@ -35,10 +35,13 @@ type config struct {
 		EventClientSocketPassword string `json:"event_client_socket_password"` // password for the event client socket
 		EventServerSocket         string `json:"event_server_socket"`          // used for receiving events from freeswitch
 		/*Gateway                   []string `json:"gateway"`                      // default gateways for sending faxes / upstream trunk*/
-		Ident             string `json:"ident"`
-		Header            string `json:"header"`
-		Verbose           bool   `json:"verbose"`
-		SoftmodemFallback bool   `json:"softmodem_fallback"`
+		Ident   string `json:"ident"`
+		Header  string `json:"header"`
+		Verbose bool   `json:"verbose"`
+		// SoftmodemFallback is DEPRECATED and no longer used: softmodem
+		// fallback / T.38 policy is managed in Postgres via fax policy rules
+		// (see Faxing.Policy). The field remains so old config files parse.
+		SoftmodemFallback bool `json:"softmodem_fallback"`
 		// GatewayConfigDir is the directory on a shared filesystem where
 		// FreeSWITCH gateway XML files are written (e.g. /etc/freeswitch/gateways).
 		// Empty disables API-driven gateway provisioning.
@@ -67,6 +70,9 @@ type config struct {
 		FailedResponseMap            map[string]bool `json:"failed_response_map"`
 		RetryDelay                   string          `json:"retry_delay"`
 		RetryAttempts                string          `json:"retry_attempts"`
+		// Policy configures the Postgres-backed fax policy engine (T.38 /
+		// ECM / V.17 rules and adaptive learning). See FaxPolicyConfig.
+		Policy FaxPolicyConfig `json:"policy"`
 	} `json:"faxing"`
 	Database struct { // this is a postgresql database
 		Host     string `json:"host"`
@@ -100,6 +106,92 @@ type config struct {
 	// transformation rules are used. When present (even with an empty rules
 	// list), the configured rules fully replace the defaults.
 	Dialplan *DialplanConfig `json:"dialplan,omitempty"`
+}
+
+// FaxPolicyConfig tunes the Postgres-backed fax policy engine which replaces
+// the old FreeSWITCH mod_db softmodem fallback. Pointer booleans default to
+// true when absent so the engine is on unless explicitly disabled.
+type FaxPolicyConfig struct {
+	// Enabled controls rule evaluation at call time (manual + auto rules).
+	Enabled *bool `json:"enabled"`
+	// LearnEnabled controls automatic rule creation from call outcomes.
+	LearnEnabled *bool `json:"learn_enabled"`
+	// T38FailureThreshold is the number of qualifying failures before an
+	// auto t38_off rule is created for the remote number (default 1).
+	T38FailureThreshold int `json:"t38_failure_threshold"`
+	// ECMFailureThreshold is the number of qualifying failures before an
+	// auto ecm_off rule is added (default 2).
+	ECMFailureThreshold int `json:"ecm_failure_threshold"`
+	// V17FailureThreshold is the number of qualifying failures before an
+	// auto v17_off rule is added (default 3).
+	V17FailureThreshold int `json:"v17_failure_threshold"`
+	// RecoverySuccesses is the number of consecutive successes after which
+	// auto-learned rules for a number are cleared (re-probing; default 3).
+	RecoverySuccesses int `json:"recovery_successes"`
+	// AutoRuleTTL is how long an auto-learned rule lives before expiring
+	// (Go duration string, default "720h" = 30 days).
+	AutoRuleTTL string `json:"auto_rule_ttl"`
+	// PairStateTTL is how long the per-pair flip-flop probing state is
+	// remembered (Go duration string, default "15m").
+	PairStateTTL string `json:"pair_state_ttl"`
+	// RetryChainEscalation disables T.38 for subsequent attempts of the same
+	// job when the previous attempt showed T.38 negotiation trouble.
+	RetryChainEscalation *bool `json:"retry_chain_escalation"`
+	// BridgeLearn enables creating bridge-scoped auto t38_off rules when a
+	// transcoded (bridged) call fails with a SIP negotiation error while
+	// T.38 was enabled.
+	BridgeLearn *bool `json:"bridge_learn"`
+}
+
+func boolOrDefault(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// PolicyEnabled reports whether rule evaluation is active (default true).
+func (c FaxPolicyConfig) PolicyEnabled() bool { return boolOrDefault(c.Enabled, true) }
+
+// LearningEnabled reports whether auto-learning is active (default true).
+func (c FaxPolicyConfig) LearningEnabled() bool { return boolOrDefault(c.LearnEnabled, true) }
+
+// RetryChainEnabled reports whether within-job retry escalation is active (default true).
+func (c FaxPolicyConfig) RetryChainEnabled() bool { return boolOrDefault(c.RetryChainEscalation, true) }
+
+// BridgeLearnEnabled reports whether bridge auto-learning is active (default true).
+func (c FaxPolicyConfig) BridgeLearnEnabled() bool { return boolOrDefault(c.BridgeLearn, true) }
+
+// T38Threshold returns the configured t38 failure threshold (default 1).
+func (c FaxPolicyConfig) T38Threshold() int {
+	if c.T38FailureThreshold > 0 {
+		return c.T38FailureThreshold
+	}
+	return 1
+}
+
+// ECMThreshold returns the configured ecm failure threshold (default 2).
+func (c FaxPolicyConfig) ECMThreshold() int {
+	if c.ECMFailureThreshold > 0 {
+		return c.ECMFailureThreshold
+	}
+	return 2
+}
+
+// V17Threshold returns the configured v17 failure threshold (default 3).
+func (c FaxPolicyConfig) V17Threshold() int {
+	if c.V17FailureThreshold > 0 {
+		return c.V17FailureThreshold
+	}
+	return 3
+}
+
+// RecoveryThreshold returns the successes needed to clear auto rules (default 3).
+func (c FaxPolicyConfig) RecoveryThreshold() int {
+	if c.RecoverySuccesses > 0 {
+		return c.RecoverySuccesses
+	}
+	return 3
 }
 
 // DialplanRule is a single regex-based number transformation.

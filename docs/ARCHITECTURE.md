@@ -30,7 +30,7 @@ A visual companion diagram is available in [`../gofaxserver.excalidraw`](../gofa
 | Component | File | Description |
 |-----------|------|-------------|
 | **Event Socket Server (inbound)** | `gofaxserver/freeswitch_inbound.go` | Listens on `event_server_socket` (default `:8022`). Receives channel events, performs dialplan transforms, decides T.38 strategy, handles `rxfax` / bridge execution. |
-| **Event Socket Server (outbound)** | `gofaxserver/freeswitch_outbound.go` | Connects to FreeSWITCH via `event_client_socket` (default `:8021`) to originate calls (`SendFax`) and read/write `mod_db`. |
+| **Event Socket Server (outbound)** | `gofaxserver/freeswitch_outbound.go` | Connects to FreeSWITCH via `event_client_socket` (default `:8021`) to originate calls (`SendFax`) and read per-number channel-var overrides from `mod_db` (realm `override-<number>`). |
 | **Router** | `gofaxserver/router.go` | Consumes `FaxJobRouting` channel, resolves tenants, applies priority-based endpoint selection, and enqueues to `Queue`. Bridge detection is in `detectAndRouteToBridge` / `checkForBridge`. |
 | **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformation rules to caller/callee numbers before tenant lookup. Source is `config` (config.json `dialplan.rules`, or built-in defaults) or `db` (`dialplan_rules` table, hot-reloaded via `/admin/reload` and CRUD writes); the active manager is swapped atomically. |
 | **Gateway Provisioner** | `gofaxserver/gateway_provision.go`, `web_gateways.go` | API-driven FreeSWITCH gateway management: DB-backed templates rendered to `freeswitch.gateway_config_dir`, activated via ESL (`reloadxml` + `sofia profile <gateway_profile> rescan`), combined with endpoint creation. Secrets encrypted at rest with `psk`. Tracks DB↔disk drift (unmanaged files, missing files, repair). |
@@ -39,7 +39,7 @@ A visual companion diagram is available in [`../gofaxserver.excalidraw`](../gofa
 | **Web Server** | `gofaxserver/web.go` | Iris HTTP server on `web.listen` (default `:8080`). Hosts admin, tenant-user, and authenticate parties. |
 | **FaxTracker** | `gofaxserver/faxtracker.go` | In-memory state for in-flight jobs; exposed via `GET /admin/faxes`. |
 | **LogManager** | `gofaxlib/log.go` | Stdout + Loki dispatcher; all components push structured logs through it. |
-| **Softmodem Fallback** | `gofaxlib/softmodemfallback.go` | Reads/writes FreeSWITCH `mod_db` realm `fallback` to disable T.38 for a number. |
+| **Fax Policy Engine** | `gofaxserver/faxpolicy.go`, `web_faxpolicy.go` | Postgres-backed T.38/ECM/V.17 policy rules + adaptive learning (replaces the old FreeSWITCH `mod_db` softmodem fallback) and persisted flip-flop pair state. |
 | **Notify** | `gofaxserver/notify.go` | Async fan-out of `email_report`, `email_full`, `email_full_failure`, `webhook`, `webhook_form` to a tenant / number's `notify` string. |
 
 ---
@@ -91,8 +91,9 @@ type Server struct {
 
     FaxTracker *FaxTracker
 
-    t38PairMu    sync.Mutex
-    t38PairState map[string]*T38PairState
+    faxPolicies atomic.Pointer[[]FaxPolicyRule] // active fax policy rules (hot-reload)
+    pairStateMu sync.Mutex
+    pairStates  map[string]*FaxPairState        // write-through cache of fax_pair_states
 }
 ```
 
@@ -103,45 +104,63 @@ Endpoint storage is split by scope:
 
 ---
 
-## T.38 Negotiation
+## T.38 / Fax Policy Engine
 
-### Pair State Tracking
+T.38, ECM and V.17 policy is resolved per call by the Postgres-backed fax
+policy engine (`gofaxserver/faxpolicy.go`). It replaces the old FreeSWITCH
+`mod_db` softmodem fallback and the in-memory flip-flop map.
 
-```go
-// gofaxserver/server.go:42-87
-const T38PairTTL = 15 * time.Minute
+### Policy rules (`fax_policy_rules`)
 
-type T38PairState struct {
-    LastUsedT38 bool      // what was actually used on the last call
-    LastSeen    time.Time // when that call finished
-}
-```
+Composable, single-purpose rules:
 
-### Negotiation Logic
+| Field | Values | Notes |
+|-------|--------|-------|
+| scope | `dst` / `src` / `pair` | Which number(s) the rule matches |
+| effect | `t38_off` / `t38_on` / `ecm_off` / `ecm_on` / `v17_off` / `softmodem_only` | One attribute per rule |
+| applies_to | `both` / `softmodem` / `bridge` | Softmodem (txfax/rxfax) vs bridged (transcoded) calls are controlled independently |
+| origin | `manual` / `auto` | Auto rules are learned from failures |
+| expires_at | timestamp / NULL | Auto rules expire for re-probing; manual rules may be temporary |
 
-```go
-// gofaxserver/server.go:50-64
-func (s *Server) ShouldAllowT38ForPair(srcNum, dstNum string, now time.Time) bool {
-    // No recent history: allow T.38
-    // Within TTL: flip-flop — return !st.LastUsedT38
-}
-```
+Resolution collects **all** matching enabled, unexpired rules into an applied
+set; per attribute the most specific scope wins (`pair` > `dst` > `src`),
+`manual` beats `auto`, and at equal specificity "off" beats "on" (fail-safe).
+Auto `dst` rules additionally match on the src side: they encode a learned
+capability of a remote number, so an inbound rxfax also refuses a known-bad
+far end's T.38 re-INVITE.
 
-The actual decision is made in `freeswitch_inbound.go`:
-- Bridge calls: T.38 is allowed if the pair state permits, otherwise disabled.
-- Non-bridge rxfax calls: T.38 is allowed only for **upstream** gateways; tenant/peer gateways always run G.711.
-- Softmodem fallback (per-number, stored in FreeSWITCH `mod_db` realm `fallback`) is checked for both `srcNum` and `dstNum`; if either side has the flag, T.38 is forced off for that call.
-- `UpdateT38PairState` is called at the end of the call to record what was actually used (skipped when softmodem fallback was active so we don't poison the next pair decision).
+### Flip-flop probing (`fax_pair_states`)
 
-### Softmodem Fallback
+The old in-memory `t38PairState` map is now persisted per src→dst pair **and
+call type** (`softmodem`/`bridge`). Flip-flop alternation only runs when no
+rule decided T.38 — it is purely the probing strategy, mainly for bridged
+(transcoded) calls where no fax result telemetry exists.
 
-```go
-// gofaxlib/softmodemfallback.go
-func GetSoftmodemFallback(c *eventsocket.Connection, number string) (bool, error)
-func SetSoftmodemFallback(c *eventsocket.Connection, number string, enabled bool) error
-```
+### Auto-learning (softmodem path only)
 
-The flag is stored as `fallback/<callerid> = <unix-timestamp>` in FreeSWITCH `mod_db`.
+Failures with a qualifying signature (`NegotiateCount > 1`, bad rows, or a
+T.38 refusal) escalate per remote number:
+1. `t38_failure_threshold` (default 1) → auto `t38_off` (applies to **both**
+   call types — a destination known not to support T.38 is never offered it,
+   including bridged re-INVITEs),
+2. `ecm_failure_threshold` (default 2) → auto `ecm_off`,
+3. `v17_failure_threshold` (default 3) → auto `v17_off`.
+
+Successes heal: after `recovery_successes` (default 3) consecutive successes
+the auto rules are cleared and T.38 is re-probed. Bridged calls get limited
+auto-learning: a SIP-level negotiation failure (488/606 etc.) while T.38 was
+enabled creates a bridge-scoped `t38_off` rule. Within a single job's retry
+chain, a T.38 failure signature forces T.38 off for subsequent attempts
+(`retry_chain_escalation`).
+
+Thresholds live in `faxing.policy` in config.json.
+
+The actual decision flow:
+- Outbound (`freeswitch_outbound.go`): resolve policy → retry-chain escalation →
+  hard G.711 constraint for non-upstream gateways → flip-flop probing if no
+  rule decided → apply ECM/V.17 overrides → learn from the result.
+- Inbound (`freeswitch_inbound.go`): same resolver, `softmodem` type for
+  rxfax and `bridge` type for transcoded calls.
 
 ---
 
@@ -169,7 +188,15 @@ Defined in `gofaxserver/web.go:19-66`:
   POST   /user                  - Create tenant user
   PUT    /user/{id}             - Update tenant user
   DELETE /user/{id}             - Delete tenant user
-  POST   /fallback              - Set softmodem fallback for a number
+  POST   /fallback              - DEPRECATED shim: creates a manual dst t38_off fax policy rule
+  GET    /fax-policies          - List fax policy rules (?number=&scope=&effect=&origin=&applies_to=)
+  POST   /fax-policies          - Create a manual fax policy rule
+  PUT    /fax-policies/{id}     - Update a rule (origin is immutable)
+  DELETE /fax-policies/{id}     - Delete a rule
+  POST   /fax-policies/{id}/expire - Expire a rule now (reset to probing)
+  GET    /fax-policies/resolve  - Dry-run policy resolution (?src=&dst=&type=softmodem|bridge)
+  GET    /fax-policies/pair-states  - List persisted flip-flop pair state (?number=)
+  DELETE /fax-policies/pair-states/{id} - Clear a pair state
 
 /tenant/* - No middleware; handler validates Basic Auth
   POST   /user/authenticate     - Authenticate a tenant user; returns api_key, user_id, tenant_id
@@ -238,6 +265,7 @@ A denormalized record of every fax attempt — one row per attempt, written from
 - `start_ts`, `end_ts`, `hangup_cause`, `transferred_pages`, `success`, `result_text`, `t38_status`, `v17_disabled` — outcome
 - `is_bridge`, `bridge_direction`, `bridge_gateway`, `bridge_t38` — bridge metadata
 - `used_t38`, `softmodem_fallback` — T.38 decision tracking
+- `applied_policies` — JSON array of fax policy rule IDs that applied to this call
 
 `Endpoints` and `SourceInfo` are stored as JSON strings.
 
@@ -260,6 +288,21 @@ Number transformation rules for `dialplan.source = "db"` mode: `position`
 config rules (or built-in defaults) on first run; hot-reloaded on every write
 and on `/admin/reload`.
 
+### `fax_policy_rules`
+
+Fax policy rules for the T.38/ECM/V.17 engine: `scope` (`dst`/`src`/`pair`),
+`src_number`, `dst_number`, `effect` (`t38_off`/`t38_on`/`ecm_off`/`ecm_on`/
+`v17_off`/`softmodem_only`), `applies_to` (`both`/`softmodem`/`bridge`),
+`origin` (`manual`/`auto`), `enabled`, `expires_at`, learning stats
+(`failure_count`, `success_count`, `last_seen_at`, `last_t38_status`), `notes`.
+Hot-reloaded on every write and on `/admin/reload`.
+
+### `fax_pair_states`
+
+Persisted flip-flop probing state per src→dst pair and call type:
+`src_number`, `dst_number`, `call_type` (`softmodem`/`bridge`),
+`last_used_t38`, `last_seen`. Unique on (src, dst, call_type).
+
 ---
 
 ## Configuration
@@ -272,12 +315,13 @@ and on `/admin/reload`.
 | | `event_client_socket_password` | ESL password (must match FreeSWITCH `event_socket.conf.xml`) |
 | | `event_server_socket` | Inbound ESL listen address (default `:8022`) |
 | | `ident`, `header` | TSI / header for rxfax |
-| | `softmodem_fallback` | Master switch for `mod_db` fallback reads/writes |
+| | `softmodem_fallback` | **Deprecated, unused** — fax policy is Postgres-backed (`faxing.policy`) |
 | `faxing` | `enable_t38`, `request_t38` | Default T.38 posture |
 | | `answer_after` (ms), `wait_time` (ms) | Pre-answer / post-answer timing |
-| | `disable_v17_after_retry`, `disable_ecm_after_retry` | Auto-degrade thresholds (`"0"` = off) |
+| | `disable_v17_after_retry`, `disable_ecm_after_retry` | Auto-degrade thresholds within a job's retry chain (`"0"` = off) |
 | | `failed_response` | Hangup causes that mark a fax as a non-retryable failure |
 | | `retry_delay`, `retry_attempts` | Queue retry tuning (delay accepts `s/m/h/d` suffix) |
+| | `policy` | Fax policy engine: `enabled`, `learn_enabled`, `t38_failure_threshold` (1), `ecm_failure_threshold` (2), `v17_failure_threshold` (3), `recovery_successes` (3), `auto_rule_ttl` (720h), `pair_state_ttl` (15m), `retry_chain_escalation`, `bridge_learn` |
 | `database` | host/port/user/password/database | PostgreSQL DSN source |
 | `web` | `listen`, `api_key` | Iris listen address and admin API key |
 | `loki` | `push_url`, `enabled`, `username`, `password`, `job` | Optional Loki log shipping (set `enabled: true` to push) |

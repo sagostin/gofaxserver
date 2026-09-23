@@ -561,9 +561,47 @@ DELETE /admin/user/{id}
 
 ---
 
-### Softmodem Fallback
+### Fax Policy Rules (T.38 / ECM / V.17)
 
-Manually set a number to use G.711 only (bypass T.38) by writing the `fallback` realm in FreeSWITCH `mod_db`.
+Postgres-backed policy rules replacing the old FreeSWITCH `mod_db` softmodem
+fallback. Rules are composable and hot-reloaded on every write.
+
+```
+GET    /admin/fax-policies?number=&scope=&effect=&origin=&applies_to=
+POST   /admin/fax-policies
+PUT    /admin/fax-policies/{id}
+DELETE /admin/fax-policies/{id}
+POST   /admin/fax-policies/{id}/expire
+GET    /admin/fax-policies/resolve?src=&dst=&type=softmodem|bridge
+GET    /admin/fax-policies/pair-states?number=
+DELETE /admin/fax-policies/pair-states/{id}
+```
+
+**Rule payload:**
+```json
+{
+  "scope": "dst",              
+  "dst_number": "5551234567",
+  "effect": "t38_off",         
+  "applies_to": "both",        
+  "enabled": true,
+  "expires_at": null,          
+  "notes": "carrier X refuses T.38 re-INVITE"
+}
+```
+
+- `scope`: `dst` (destination only), `src` (source only), or `pair` (specific src→dst, requires both numbers) — pair rules let one sender be affected without impacting other senders to the same destination.
+- `effect`: `t38_off`, `t38_on`, `ecm_off`, `ecm_on`, `v17_off`, `softmodem_only`.
+- `applies_to`: `both`, `softmodem` (non-bridged txfax/rxfax), or `bridge` (transcoded) — softmodem and bridged calls are controlled independently.
+- `expires_at`: optional RFC3339 timestamp for temporary rules.
+
+Resolution order: per attribute, most specific scope wins (pair > dst > src),
+`manual` beats `auto`, and at equal specificity "off" beats "on". Rules with
+`origin=auto` are learned from fax failures and heal after consecutive
+successes or expiry. The `resolve` endpoint is a dry run returning the
+effective policy and applied rule set for a src/dst/call-type.
+
+### Softmodem Fallback (deprecated)
 
 ```
 POST /admin/fallback
@@ -576,7 +614,9 @@ POST /admin/fallback
 }
 ```
 
-The flag is consulted on subsequent inbound calls (both bridge and rxfax paths) and disables T.38 for that side.
+Deprecated shim for the old mod_db fallback: now creates a manual dst-scoped
+`t38_off` fax policy rule (applies to both call types). Prefer
+`POST /admin/fax-policies`.
 
 ---
 

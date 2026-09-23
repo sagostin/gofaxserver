@@ -34,7 +34,18 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Put("/tenant/{id}", s.handleUpdateTenant)
 		admin.Delete("/tenant/{id}", s.handleDeleteTenant)
 
-		admin.Post("/fallback", s.handleFallbackNumber)
+		admin.Post("/fallback", s.handleFallbackNumber) // deprecated shim → creates a manual fax policy rule
+
+		// Fax policy rules (Postgres-backed T.38/ECM/V.17 policy engine;
+		// replaces the old mod_db softmodem fallback).
+		admin.Get("/fax-policies", s.handleListFaxPolicies)
+		admin.Post("/fax-policies", s.handleCreateFaxPolicyRule)
+		admin.Put("/fax-policies/{id}", s.handleUpdateFaxPolicyRule)
+		admin.Delete("/fax-policies/{id}", s.handleDeleteFaxPolicyRule)
+		admin.Post("/fax-policies/{id}/expire", s.handleExpireFaxPolicyRule)
+		admin.Get("/fax-policies/resolve", s.handleResolveFaxPolicy)
+		admin.Get("/fax-policies/pair-states", s.handleListFaxPairStates)
+		admin.Delete("/fax-policies/pair-states/{id}", s.handleDeleteFaxPairState)
 
 		// Tenant Numbers management.
 		admin.Post("/number", s.handleAddTenantNumber)
@@ -247,8 +258,10 @@ func (s *Server) getTenantUsers(ctx iris.Context) {
 // Admin Handlers for Tenant Management
 // -------------------------
 
-// handleFallbackNumber stores a softmodem fallback number.
-// Expects raw text in the POST body (e.g., "2505551234").
+// handleFallbackNumber is a DEPRECATED back-compat shim for the old
+// FreeSWITCH mod_db softmodem fallback. It now creates a manual dst-scoped
+// fax policy rule (t38_off, applies to both call types) in Postgres.
+// Expects a JSON body: {"number": "2505551234"}.
 func (s *Server) handleFallbackNumber(ctx iris.Context) {
 	fallbackNumber := struct {
 		Number string `json:"number"`
@@ -266,16 +279,30 @@ func (s *Server) handleFallbackNumber(ctx iris.Context) {
 		return
 	}
 
-	// Save to FreeSWITCH mod_db.
-	if err := gofaxlib.SetSoftmodemFallback(nil, number, true); err != nil {
+	rule := FaxPolicyRule{
+		Scope:     PolicyScopeDst,
+		DstNumber: number,
+		Effect:    PolicyEffectT38Off,
+		AppliesTo: "both",
+		Origin:    PolicyOriginManual,
+		Enabled:   true,
+		Notes:     "created via deprecated /admin/fallback shim",
+	}
+	if err := s.DB.Create(&rule).Error; err != nil {
 		ctx.StatusCode(http.StatusInternalServerError)
 		ctx.JSON(iris.Map{"error": "failed to set fallback number: " + err.Error()})
+		return
+	}
+	if err := s.reloadFaxPolicies(); err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "rule saved but reload failed: " + err.Error()})
 		return
 	}
 
 	ctx.JSON(iris.Map{
 		"success": true,
 		"number":  number,
+		"rule_id": rule.ID,
 	})
 }
 

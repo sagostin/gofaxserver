@@ -28,7 +28,19 @@
     "failed_response": [
       "UNALLOCATED_NUMBER",
       "CALL_REJECTED"
-    ]
+    ],
+    "policy": {
+      "enabled": true,
+      "learn_enabled": true,
+      "t38_failure_threshold": 1,
+      "ecm_failure_threshold": 2,
+      "v17_failure_threshold": 3,
+      "recovery_successes": 3,
+      "auto_rule_ttl": "720h",
+      "pair_state_ttl": "15m",
+      "retry_chain_escalation": true,
+      "bridge_learn": true
+    }
   },
   "dialplan": {
     "source": "config",

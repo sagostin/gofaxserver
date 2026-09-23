@@ -84,6 +84,10 @@ type FaxJobResult struct {
 	UsedT38           bool `json:"used_t38"`           // was T.38 actually used for this call
 	SoftmodemFallback bool `json:"softmodem_fallback"` // was softmodem fallback override active
 
+	// AppliedPolicies is a JSON array of fax policy rule IDs that applied to
+	// this call (empty when no rules matched).
+	AppliedPolicies string `json:"applied_policies"`
+
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -159,6 +163,14 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		}
 	}
 
+	// Marshal applied policy rule IDs.
+	var appliedPoliciesJSON string
+	if len(job.AppliedPolicyIDs) > 0 {
+		if data, err := json.Marshal(job.AppliedPolicyIDs); err == nil {
+			appliedPoliciesJSON = string(data)
+		}
+	}
+
 	record := FaxJobResult{
 		JobUUID:        job.UUID,
 		SrcTenantID:    job.SrcTenantID,
@@ -207,6 +219,7 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		// T.38 decision tracking
 		UsedT38:           job.UsedT38,
 		SoftmodemFallback: job.SoftmodemFallback,
+		AppliedPolicies:   appliedPoliciesJSON,
 
 		CreatedAt: time.Now(),
 	}

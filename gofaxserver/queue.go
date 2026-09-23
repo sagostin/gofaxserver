@@ -290,6 +290,7 @@ func (q *Queue) processFax(f *FaxJob) {
 						oneShot := enableBridge
 
 						sendOnce := func(attempt int) (bool, bool) {
+							escalateRetryChain(&ff, attempt)
 							ff.Result = &gofaxlib.FaxResult{}
 							ff.CallUUID = uuid.New()
 							q.server.FaxTracker.SetCall(f.UUID, ff.CallUUID)
@@ -381,6 +382,7 @@ func (q *Queue) processFax(f *FaxJob) {
 						})
 
 						sendOne := func(attempt int) (bool, bool) {
+							escalateRetryChain(&ff, attempt)
 							ff.Result = &gofaxlib.FaxResult{}
 							ff.CallUUID = uuid.New()
 							q.server.FaxTracker.SetCall(f.UUID, ff.CallUUID)

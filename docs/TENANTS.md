@@ -121,26 +121,37 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
   }'
 ```
 
-**Router/bridge behavior** (`gofaxserver/router.go:250-313` and `freeswitch_inbound.go:217-313`):
+**Router/bridge behavior** (`gofaxserver/router.go:250-313` and `freeswitch_inbound.go`):
 - `detectAndRouteToBridge` returns `(bridgeGateway, true)` when the call came from an upstream gateway AND the destination has a bridge-enabled tenant/number endpoint.
 - The inbound leg is bridged to the destination gateway with `t38_gateway self nocng` on either side, transparently transcoding between T.38 and G.711.
-- Falls back to G.711 softmodem if T.38 negotiation fails (per-pair flip-flop and per-number softmodem fallback flag).
+- Falls back to G.711 softmodem if T.38 negotiation fails (Postgres-backed fax policy rules + persisted per-pair flip-flop probing).
 
 ---
 
 ## T.38 Negotiation Strategy
 
-The system implements intelligent T.38 flip-flop:
+T.38/ECM/V.17 policy is resolved per call by the Postgres-backed fax policy
+engine (`gofaxserver/faxpolicy.go`):
 
-1. **Upstream gateways only** — T.38 enabled only for calls to/from carriers (`isUpstreamGateway` check in `freeswitch_inbound.go:317-340`).
-2. **Flip-flop retry** — First call to a number pair (no recent state within TTL) defaults to T.38 allowed; on a retry within the 15-minute TTL, T.38 is flipped to disabled. Implementation: `ShouldAllowT38ForPair` (`server.go:50-64`) returns `true` if no recent state, else `!LastUsedT38`.
-3. **Softmodem fallback** — Numbers with the fallback flag in FreeSWITCH `mod_db` (realm `fallback`) force T.38 off for that side of the call.
-4. **Local endpoints** — Calls to/from tenant gateways always use G.711.
+1. **Policy rules first** — manual and auto-learned rules from the
+   `fax_policy_rules` table are resolved (pair > dst > src, manual > auto,
+   off beats on). Rules can target softmodem and bridged (transcoded) calls
+   independently (`applies_to`), so e.g. T.38 can be disabled for softmodem
+   calls to a destination while bridged calls to the same destination still
+   use T.38.
+2. **Auto-learning** — softmodem-path failures (repeated negotiations, bad
+   rows, T.38 refusals) escalate automatically: `t38_off` → `ecm_off` →
+   `v17_off`; consecutive successes or expiry heal the rules (re-probing).
+   A learned `t38_off` applies to both call types so a destination known not
+   to support T.38 is never offered it (including far-end re-INVITEs).
+3. **Upstream gateways only** — T.38 enabled only for calls to/from carriers; tenant/peer gateways always run G.711.
+4. **Flip-flop probing** — when no rule decides T.38, the persisted per-pair
+   state (`fax_pair_states`, separate for softmodem/bridge) alternates T.38
+   on/off within the `pair_state_ttl` window (default 15m). Mainly relevant
+   for bridged calls, which have no fax result telemetry.
 
-```go
-// gofaxserver/server.go:42-45
-const T38PairTTL = 15 * time.Minute
-```
+Rules are managed via `GET/POST/PUT/DELETE /admin/fax-policies` (see
+[ARCHITECTURE.md](ARCHITECTURE.md)) and the portal's "Fax Policies" admin view.
 
 ---
 

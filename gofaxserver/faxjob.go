@@ -59,6 +59,10 @@ type FaxJob struct {
 	// T.38 decision tracking (for all call types)
 	UsedT38           bool `json:"used_t38"`           // was T.38 actually used for this call
 	SoftmodemFallback bool `json:"softmodem_fallback"` // was softmodem fallback override active
+
+	// Fax policy engine tracking
+	ForceT38Off      bool   `json:"force_t38_off,omitempty"`      // retry-chain escalation: force T.38 off for this attempt
+	AppliedPolicyIDs []uint `json:"applied_policy_ids,omitempty"` // fax policy rules applied to this call
 }
 
 type FaxSourceInfo struct {
