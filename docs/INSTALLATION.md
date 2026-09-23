@@ -112,8 +112,15 @@ make setup   # seeds .env, config.json, volumes/gateways and
 
 (`make setup` is idempotent sugar around the manual steps: `cp sample.env
 .env`, `cp config.json.sample config.json`, `mkdir -p volumes/gateways` +
-`chown 1000:1000`, and `cp -R examples/freeswitch volumes/freeswitch`. Run
-those by hand if you don't have `make`.)
+`chown 1000:1000`, `cp -R examples/freeswitch volumes/freeswitch`,
+`cp Caddyfile.sample Caddyfile`, and seeding `portal/.env` from
+`portal/sample.env` **with freshly generated secrets** (session/encryption
+keys, portal DB password, bootstrap admin password, and
+`PORTAL_ADMIN_API_KEY` synced with `web.api_key` in `config.json`). Without
+`make`: run the copies by hand and generate the portal secrets yourself —
+each `openssl rand -hex 32`, bootstrap password echoed by the portal on
+first login otherwise comes from `PORTAL_BOOTSTRAP_PASSWORD`; see
+[docs/PORTAL.md](PORTAL.md#configuration).)
 
 Edit `.env`:
 
@@ -187,6 +194,11 @@ cleanup](#fax-temp-storage--cleanup) for why this share exists.
 make fs-build   # needs SIGNALWIRE_TOKEN (from .env or the environment)
 make up         # docker compose -f docker-compose.full.yml up -d
 ```
+
+`make up` builds the gofaxserver and portal images automatically if they're
+missing; only FreeSWITCH needs the explicit pre-build because its image
+consumes `SIGNALWIRE_TOKEN` as a build secret. To rebuild app images after
+code changes: `make docker-build portal-docker-build` (then `make up`).
 
 By hand:
 

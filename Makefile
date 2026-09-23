@@ -1,24 +1,23 @@
-# gofaxserver — development workflow.
+# gofaxserver — build & deploy workflow.
 #
 # Quick start (all-containerized):
 #   make setup      # seed .env, config.json, volumes/ (never clobbers)
 #   $EDITOR .env config.json volumes/freeswitch/vars.xml
 #   make fs-build   # needs SIGNALWIRE_TOKEN in the environment (or .env)
-#   make up
+#   make up         # auto-builds the gofaxserver + portal images if missing
 #
 # Portal + reverse proxy:
 #   (portal/.env is seeded by make setup with generated secrets)
 #   $EDITOR portal/.env Caddyfile # HTTPS: set your DNS name in Caddyfile
 #   make up                       # starts everything: gofaxserver stack +
-#                                 # portal db (:5433) + portal (:8081) + Caddy
-#                                 # (make up) on :80 — HTTPS once a DNS name is set
+#                                 # portal db (:5433) + portal (:8081) +
+#                                 # Caddy on :80 (HTTPS once a DNS name is set)
 #
 # `make help` lists everything.
 
 SHELL := /bin/bash
 
 COMPOSE        := docker compose -f docker-compose.full.yml
-FS_IMAGE       := gofaxserver-freeswitch:latest
 FS_CONFIG      := volumes/freeswitch
 FS_EXAMPLES    := examples/freeswitch
 GOFLAGS        :=
@@ -30,13 +29,13 @@ ifneq (,$(wildcard .env))
 endif
 
 .PHONY: help setup env config dirs fs-config fs-build \
-        build docker-build portal-build test \
+        build docker-build portal-build portal-docker-build test \
         up down logs ps fs-cli fs-reload clean \
         portal-env portal-up portal-down caddy-setup caddy-up caddy-down caddy-logs
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # ---------------------------------------------------------------------------
 # First-time setup (all idempotent — existing files are never overwritten)
@@ -87,6 +86,13 @@ fs-config: ## Seed volumes/freeswitch from examples/freeswitch (never clobbers)
 
 # ---------------------------------------------------------------------------
 # Builds
+#
+# `make up` builds any missing images automatically (all app services have
+# build: sections), so the *-build targets below are only needed to force a
+# rebuild after code changes without restarting the stack — or to build an
+# image without starting anything. `build`/`portal-build` are the odd ones
+# out: they compile HOST binaries (need Go/npm locally) for development and
+# split-host installs; everything else builds inside Docker.
 # ---------------------------------------------------------------------------
 
 fs-build: portal-env ## Build the FreeSWITCH image (requires SIGNALWIRE_TOKEN)
@@ -104,16 +110,20 @@ build: ## Build the gofaxserver binary to bin/
 docker-build: ## Build the gofaxserver Docker image
 	docker build -t gofaxserver:latest -f Dockerfile .
 
-portal-build: ## Build the portal (frontend dist + Go binary to bin/)
+portal-build: ## Build the portal locally (frontend dist + Go binary to bin/; needs npm + Go on the host)
 	cd portal/frontend && npm ci && npm run build
 	cd portal && go build $(GOFLAGS) -o ../bin/gofaxportal ./cmd/portal
+
+portal-docker-build: portal-env ## Build the portal Docker image (npm + Go run inside Docker)
+	$(COMPOSE) build gofaxportal
 
 test: ## go test ./... for gofaxserver and the portal
 	go test ./...
 	cd portal && go test ./...
 
 # ---------------------------------------------------------------------------
-# Running the stack (docker-compose.full.yml: postgres + freeswitch + gofaxserver)
+# Running the stack (docker-compose.full.yml: postgres + freeswitch +
+# gofaxserver + portal db + portal + caddy)
 # ---------------------------------------------------------------------------
 
 up: setup ## Start the whole stack: postgres + freeswitch + gofaxserver + portal db + portal + caddy
@@ -148,6 +158,9 @@ portal-env: ## Create portal/.env with generated secrets if missing
 			if grep -q '"api_key": *"apikeyhere"' config.json 2>/dev/null; then \
 				perl -pi -e "s/\"api_key\": *\"apikeyhere\"/\"api_key\": \"$$apikey\"/" config.json; \
 				echo "generated web.api_key in config.json"; \
+			else \
+				echo "NOTE: no web.api_key found in config.json — set it to the"; \
+				echo "      PORTAL_ADMIN_API_KEY value written to portal/.env"; \
 			fi; \
 		fi; \
 		bootpw=$$(openssl rand -hex 12); \
@@ -158,7 +171,7 @@ portal-env: ## Create portal/.env with generated secrets if missing
 			s|^PORTAL_ADMIN_API_KEY=.*|PORTAL_ADMIN_API_KEY=$$apikey|" portal/.env; \
 		echo "created portal/.env with generated secrets"; \
 		echo "  first portal admin login: admin / $$bootpw  (reset after first login!)"; \
-		echo "  PORTAL_ADMIN_API_KEY synced with web.api_key in config.json"; \
+		echo "  PORTAL_ADMIN_API_KEY matches web.api_key in config.json"; \
 	else \
 		echo "portal/.env exists — leaving it alone"; \
 	fi

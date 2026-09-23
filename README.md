@@ -82,7 +82,7 @@ make setup    # seeds .env, config.json, volumes/ — never overwrites existing 
 $EDITOR .env config.json                          # DB creds must match; set SIGNALWIRE_TOKEN, api_key, psk
 $EDITOR volumes/freeswitch/vars.xml               # REQUIRED: sofia_ip = host LAN IP
 make fs-build # needs SIGNALWIRE_TOKEN (from .env or the environment)
-make up
+make up       # auto-builds the gofaxserver + portal images if missing
 ```
 
 No `make`? The equivalent manual steps are in [docs/INSTALLATION.md](docs/INSTALLATION.md).
@@ -370,10 +370,13 @@ Run with `-c /etc/gofaxserver/config.json` (default if not specified) and `-vers
 ### Build Docker image
 
 ```bash
-make docker-build    # wraps the project-root Dockerfile (replaces build.sh)
+make docker-build         # wraps the project-root Dockerfile (replaces build.sh)
+make portal-docker-build  # portal image (frontend + backend, all inside Docker)
 # or:
 docker build -t gofaxserver:latest .
 ```
+
+(`make up` also builds both images automatically when they're missing — the explicit targets are for forcing a rebuild after code changes.)
 
 The Docker image runs the server as the non-root `appuser` and exposes port 8080 (web) and 8022 (inbound ESL). FreeSWITCH is **not** included in the image — run it on the host or as a separate container and mount `/etc/gofaxserver/config.json` and a writable `temp_dir`.
 

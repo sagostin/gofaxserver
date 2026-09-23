@@ -58,6 +58,15 @@ services:
     command: postgres -c listen_addresses=${POSTGRES_LISTEN_ADDRESSES:-127.0.0.1}
     network_mode: host
     restart: always
+    # gofaxserver depends on this being HEALTHY, not just started: on first
+    # boot postgres takes a few seconds to init its data dir, and gofaxserver
+    # does not retry a failed startup DB connect (it would run with a dead
+    # handle until manually restarted).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-fax}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   freeswitch:
     build:
@@ -105,8 +114,10 @@ services:
     network_mode: host
     restart: always
     depends_on:
-      - postgres
-      - freeswitch
+      postgres:
+        condition: service_healthy
+      freeswitch:
+        condition: service_started
 
   # Reverse proxy fronting BOTH gofaxserver (:8080) and the fax portal
   # (:8081, from portal/docker-compose.yml). Plain HTTP on :80 by default;

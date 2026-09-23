@@ -48,9 +48,12 @@ Neither the admin API key nor service-account passwords ever reach the browser.
    `PORTAL_ADMIN_API_KEY` (= gofaxserver `web.api_key`), `PORTAL_DB_PASSWORD`,
    `PORTAL_BOOTSTRAP_PASSWORD`.
 3. **Start it** — `make portal-up` from the repo root (host networking,
-   :8081), or `docker compose up -d --build` from `portal/`, or build the
-   binary locally: `make portal-build` from the repo root (builds
-   the frontend dist, then the binary to `bin/gofaxportal`), or by hand
+   :8081), or `docker compose up -d --build` from `portal/`. To build the
+   portal image without starting anything: `make portal-docker-build` from
+   the repo root (npm + Go run inside Docker — no host toolchain needed).
+   To build the binary locally instead (needs npm + Go on the host):
+   `make portal-build` from the repo root (builds the frontend dist, then
+   the binary to `bin/gofaxportal`), or by hand
    `cd portal/frontend && npm install && npm run build` then
    `cd portal && go build -o gofaxportal ./cmd/portal`.
 4. **Reverse proxy** — in the combined deployment, Caddy runs with the main

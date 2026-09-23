@@ -19,6 +19,11 @@ services:
     command: postgres -c listen_addresses=${POSTGRES_LISTEN_ADDRESSES:-127.0.0.1}
     network_mode: host
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-fax}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   gofaxserver:
     image: gofaxserver:latest
@@ -41,3 +46,9 @@ services:
       # - /etc/freeswitch/gateways:/etc/freeswitch/gateways
     network_mode: host
     restart: always
+    # Wait for a HEALTHY database: on first boot postgres takes a few seconds
+    # to init its data dir, and gofaxserver does not retry a failed startup
+    # DB connect (it would run with a dead handle until manually restarted).
+    depends_on:
+      postgres:
+        condition: service_healthy
