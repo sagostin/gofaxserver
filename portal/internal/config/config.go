@@ -39,6 +39,12 @@ type Config struct {
 
 	GofaxServer GofaxServer `json:"gofaxserver"`
 
+	// InboundAPIKey is the optional pre-shared key gofaxserver must present
+	// (as X-API-Key) when delivering received faxes to
+	// POST /portal/api/inbound/{svc_username}. It must match gofaxserver's
+	// portal.api_key. Empty disables the check (loopback-only deployments).
+	InboundAPIKey string `json:"inbound_api_key"`
+
 	PollIntervalSeconds int            `json:"poll_interval_seconds"`
 	UploadMaxMB         int64          `json:"upload_max_mb"`
 	LoginRatePerMinute  int            `json:"login_rate_per_minute"`
@@ -130,6 +136,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := env("PORTAL_ADMIN_API_KEY"); v != "" {
 		cfg.GofaxServer.AdminAPIKey = v
+	}
+	if v := env("PORTAL_INBOUND_API_KEY"); v != "" {
+		cfg.InboundAPIKey = v
 	}
 	if v := env("PORTAL_BOOTSTRAP_USERNAME"); v != "" {
 		cfg.BootstrapAdmin.Username = v

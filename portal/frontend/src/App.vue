@@ -19,12 +19,14 @@ const links = computed(() => {
       { to: '/admin/fax-policies', label: 'Fax Policies' },
       { to: '/admin/active', label: 'Active Faxes' },
       { to: '/admin/jobs', label: 'All Jobs' },
+      { to: '/admin/inbound', label: 'Inbound Faxes' },
       { to: '/admin/audit', label: 'Audit' },
     ]
   }
   return [
     { to: '/app', label: 'Send Fax' },
     { to: '/app/faxes', label: 'My Faxes' },
+    { to: '/app/inbox', label: 'Inbox' },
   ]
 })
 </script>

@@ -76,7 +76,7 @@ async function editPriority(ep: Ep) {
         <div><label>Type ID</label><input v-model.number="form.type_id" :disabled="form.type === 'global'" /></div>
         <div>
           <label>Endpoint kind</label>
-          <select v-model="form.endpoint_type"><option>gateway</option><option>webhook</option><option>email</option></select>
+          <select v-model="form.endpoint_type"><option>gateway</option><option>webhook</option><option>email</option><option>portal</option></select>
         </div>
         <div><label>Value</label><input v-model="form.endpoint" placeholder="gw_name:IP | https://… | a@b.c" required /></div>
         <div><label>Priority</label><input v-model.number="form.priority" /></div>

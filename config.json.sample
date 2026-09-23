@@ -65,6 +65,10 @@
     "listen": "0.0.0.0:8080",
     "api_key": "apikeyhere"
   },
+  "portal": {
+    "url": "http://127.0.0.1:8081",
+    "api_key": ""
+  },
   "smtp": {
     "host": "smtp.example.com",
     "port": 587,

@@ -299,6 +299,20 @@ First login: sign in with the bootstrap admin and immediately reset its
 password (**Admin → Users → Reset PW**). Keep `PORTAL_COOKIE_SECURE=true`
 once HTTPS is live.
 
+**Inbound delivery to the portal:** to let org numbers receive faxes into
+the portal inbox, point gofaxserver at the portal and (optionally) set a
+pre-shared key — add to gofaxserver's `config.json`:
+
+```json
+"portal": { "url": "http://127.0.0.1:8081", "api_key": "shared-secret" }
+```
+
+`portal.api_key` must match the portal's `PORTAL_INBOUND_API_KEY` (both may
+be left empty on loopback-only installs). Numbers added in the portal with
+the **Inbox** toggle on (the default) then get received faxes delivered into
+the portal, stored AES-256-GCM encrypted at rest — see
+[PORTAL.md](PORTAL.md#receiving-faxes-inbound).
+
 ---
 
 ## Configuration
@@ -314,6 +328,7 @@ key-by-key reference with defaults is in the
 | `faxing.*` | `temp_dir` (must be shared with FreeSWITCH at the same path — see below), `temp_max_age` (janitor, default `24h`), retry policy, T.38 flags, `policy` (fax policy engine thresholds — optional, defaults apply) |
 | `database.*` | must match the PostgreSQL credentials from `.env` |
 | `web.*` | listen addr + admin `api_key` |
+| `portal.*` | optional; `url` + `api_key` for delivering received faxes to a gofaxportal inbox |
 | `dialplan` | `source: "config"` (rules in this file) or `"db"` (portal/API-editable); absent = built-in NANP defaults |
 | `smtp.*` | required for email notifications/receipts |
 | `loki.*` | optional log shipping |

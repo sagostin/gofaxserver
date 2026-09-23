@@ -54,6 +54,39 @@ func TestBoxWrongKeyFails(t *testing.T) {
 	}
 }
 
+func TestFaxBoxDomainSeparation(t *testing.T) {
+	const master = "a-very-secret-passphrase"
+	pwBox, _ := NewBox(master)
+	faxBox, err := NewFaxBox(master)
+	if err != nil {
+		t.Fatalf("NewFaxBox: %v", err)
+	}
+
+	// Round trip works for fax content.
+	pdf := []byte("%PDF-1.4 fake fax content")
+	sealed, err := faxBox.Seal(pdf)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	opened, err := faxBox.Open(sealed)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !bytes.Equal(opened, pdf) {
+		t.Fatal("fax box round trip mismatch")
+	}
+
+	// Blobs sealed with the fax box must not open under the svc-password
+	// box (and vice versa) despite sharing the master secret.
+	if _, err := pwBox.Open(sealed); err == nil {
+		t.Fatal("fax blob opened with password box: keys are not domain-separated")
+	}
+	pwSealed, _ := pwBox.Seal([]byte("svc-password"))
+	if _, err := faxBox.Open(pwSealed); err == nil {
+		t.Fatal("password blob opened with fax box: keys are not domain-separated")
+	}
+}
+
 func TestSealOpenString(t *testing.T) {
 	box, _ := NewBox("k")
 	sealed, err := SealString(box, "hello")

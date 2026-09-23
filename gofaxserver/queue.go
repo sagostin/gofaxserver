@@ -477,7 +477,26 @@ func (q *Queue) processFax(f *FaxJob) {
 					// success → stop escalating further priorities
 					break
 
-				case "webhook":
+				case "webhook", "portal":
+					// "portal" endpoints deliver to a gofaxportal instance using the
+					// exact same payload/retry semantics as webhooks; only the URL
+					// (derived from portal.url + the endpoint's service-account
+					// username) and an optional pre-shared X-API-Key header differ.
+					portalBase := strings.TrimRight(gofaxlib.Config.Portal.URL, "/")
+					if epType == "portal" && portalBase == "" {
+						logAttempt(logrus.ErrorLevel, "portal endpoint encountered but portal.url is not configured", map[string]interface{}{
+							"uuid": f.UUID.String(), "priority": prio, "count": len(group),
+						})
+						// not retriable (configuration issue) — escalate
+						continue
+					}
+					resolveURL := func(ep *Endpoint) string {
+						if epType == "portal" {
+							return portalBase + "/portal/api/inbound/" + ep.Endpoint
+						}
+						return ep.Endpoint
+					}
+
 					// Prepare payload once per priority group
 					var (
 						webhookPDFPath string
@@ -495,7 +514,7 @@ func (q *Queue) processFax(f *FaxJob) {
 						} else {
 							webhookPDFPath = pdf
 							if b, rErr := os.ReadFile(pdf); rErr != nil {
-								logAttempt(logrus.ErrorLevel, "failed to read fax file for webhook", map[string]interface{}{
+								logAttempt(logrus.ErrorLevel, "failed to read fax file for "+epType, map[string]interface{}{
 									"uuid": f.UUID.String(), "pdf_path": pdf, "error": rErr.Error(),
 								})
 							} else {
@@ -503,7 +522,7 @@ func (q *Queue) processFax(f *FaxJob) {
 								sum := sha256.Sum256(b)
 								fileSHA256 = hex.EncodeToString(sum[:])
 								webhookFileB64 = base64.StdEncoding.EncodeToString(b)
-								logAttempt(logrus.InfoLevel, "webhook payload prepared", map[string]interface{}{
+								logAttempt(logrus.InfoLevel, epType+" payload prepared", map[string]interface{}{
 									"uuid":         f.UUID.String(),
 									"pdf_path":     webhookPDFPath,
 									"file_bytes":   fileSize,
@@ -536,16 +555,16 @@ func (q *Queue) processFax(f *FaxJob) {
 						ff.Endpoints = []*Endpoint{ep}
 						ff.Result = &gofaxlib.FaxResult{}
 
-						epTy, epLbl, epVal := endpointBriefOr(ep, "webhook")
+						epTy, epLbl, epVal := endpointBriefOr(ep, epType)
 
 						sendWebhookOnce := func(attempt int) (bool, bool) {
 							start := time.Now()
 
 							if webhookPDFPath == "" || webhookFileB64 == "" {
-								logAttempt(logrus.ErrorLevel, "webhook payload not prepared", map[string]interface{}{
+								logAttempt(logrus.ErrorLevel, epType+" payload not prepared", map[string]interface{}{
 									"uuid": f.UUID.String(), "endpoint": endpointSummary(ep), "attempt": attempt,
 								})
-								stampAndSend(&ff, start, false, "webhook payload not prepared")
+								stampAndSend(&ff, start, false, epType+" payload not prepared")
 								return false, false
 							}
 
@@ -555,7 +574,7 @@ func (q *Queue) processFax(f *FaxJob) {
 								FileData: webhookFileB64,
 							})
 							if mErr != nil {
-								logAttempt(logrus.ErrorLevel, "failed to marshal webhook payload", map[string]interface{}{
+								logAttempt(logrus.ErrorLevel, "failed to marshal "+epType+" payload", map[string]interface{}{
 									"uuid": f.UUID.String(), "endpoint": endpointSummary(ep), "attempt": attempt, "error": mErr.Error(),
 								})
 								stampAndSend(&ff, start, false, "marshal error")
@@ -572,9 +591,9 @@ func (q *Queue) processFax(f *FaxJob) {
 							tryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 							defer cancel()
 
-							req, rErr := http.NewRequestWithContext(tryCtx, http.MethodPost, ep.Endpoint, bytes.NewReader(body))
+							req, rErr := http.NewRequestWithContext(tryCtx, http.MethodPost, resolveURL(ep), bytes.NewReader(body))
 							if rErr != nil {
-								logAttempt(logrus.ErrorLevel, "error creating webhook request", map[string]interface{}{
+								logAttempt(logrus.ErrorLevel, "error creating "+epType+" request", map[string]interface{}{
 									"uuid": f.UUID.String(), "endpoint": endpointSummary(ep), "attempt": attempt, "error": rErr.Error(),
 								})
 								stampAndSend(&ff, start, false, "request creation error")
@@ -586,6 +605,9 @@ func (q *Queue) processFax(f *FaxJob) {
 							req.Header.Set("X-Attempt", strconv.Itoa(attempt))
 							req.Header.Set("X-File-Bytes", strconv.FormatInt(fileSize, 10))
 							req.Header.Set("X-File-SHA256", fileSHA256)
+							if epType == "portal" && gofaxlib.Config.Portal.APIKey != "" {
+								req.Header.Set("X-API-Key", gofaxlib.Config.Portal.APIKey)
+							}
 
 							client := &http.Client{
 								Timeout: 10 * time.Second,
@@ -603,7 +625,7 @@ func (q *Queue) processFax(f *FaxJob) {
 							resp, sErr := client.Do(req)
 							elapsed := time.Since(start)
 							if sErr != nil {
-								logAttempt(logrus.ErrorLevel, "webhook send error", map[string]interface{}{
+								logAttempt(logrus.ErrorLevel, epType+" send error", map[string]interface{}{
 									"uuid":       f.UUID.String(),
 									"call_uuid":  ff.CallUUID.String(),
 									"endpoint":   endpointSummary(ep),
@@ -613,13 +635,13 @@ func (q *Queue) processFax(f *FaxJob) {
 									"file_kb":    fileSize / 1024,
 									"payload_kb": len(body) / 1024,
 								})
-								stampAndSend(&ff, start, false, "webhook request error")
+								stampAndSend(&ff, start, false, epType+" request error")
 								return false, true // likely retriable network error
 							}
 							defer resp.Body.Close()
 
 							if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-								logAttempt(logrus.InfoLevel, "webhook delivered", map[string]interface{}{
+								logAttempt(logrus.InfoLevel, epType+" delivered", map[string]interface{}{
 									"uuid":       f.UUID.String(),
 									"call_uuid":  ff.CallUUID.String(),
 									"endpoint":   endpointSummary(ep),
@@ -640,7 +662,7 @@ func (q *Queue) processFax(f *FaxJob) {
 
 							retri := isRetriableStatus(resp.StatusCode)
 							level := map[bool]logrus.Level{true: logrus.WarnLevel, false: logrus.ErrorLevel}[retri]
-							logAttempt(level, "webhook non-2xx response", map[string]interface{}{
+							logAttempt(level, epType+" non-2xx response", map[string]interface{}{
 								"uuid":       f.UUID.String(),
 								"call_uuid":  ff.CallUUID.String(),
 								"endpoint":   endpointSummary(ep),
@@ -662,7 +684,7 @@ func (q *Queue) processFax(f *FaxJob) {
 							// stop escalating this priority set on first success (within this priority)
 							break
 						}
-						logAttempt(logrus.ErrorLevel, "webhook endpoint exhausted without success", map[string]interface{}{
+						logAttempt(logrus.ErrorLevel, epType+" endpoint exhausted without success", map[string]interface{}{
 							"uuid":     f.UUID.String(),
 							"endpoint": endpointSummary(ep),
 							"attempts": maxAttempts,

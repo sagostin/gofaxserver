@@ -261,10 +261,11 @@ gunzip -c ./backups/db/gofaxportal_TIMESTAMP.sql.gz | \
 ```
 
 > **Critical:** the portal DB stores per-organization gofaxserver
-> service-account passwords sealed with AES-256-GCM using the portal's
-> `encryption_key` (`PORTAL_ENCRYPTION_KEY`). A restored database without the
-> matching key makes those credentials permanently undecryptable — always back
-> up the portal secrets (env/config) together with the database. Schema
+> service-account passwords **and received fax PDFs** sealed with AES-256-GCM
+> using keys derived from the portal's `encryption_key`
+> (`PORTAL_ENCRYPTION_KEY`). A restored database without the matching key
+> makes those credentials and stored faxes permanently undecryptable — always
+> back up the portal secrets (env/config) together with the database. Schema
 > auto-migrates on portal start, so restoring into an empty database is fine.
 
 ---

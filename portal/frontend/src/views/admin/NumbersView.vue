@@ -12,6 +12,7 @@ interface NumberRow {
   org_id: number
   org_name: string
   active: boolean
+  inbound_enabled: boolean
   assigned_count: number
 }
 interface User { id: number; username: string; role: string; active: boolean; org_id: number | null }
@@ -62,6 +63,14 @@ async function remove(n: NumberRow) {
   error.value = ''
   try {
     await api(`/admin/numbers/${n.id}`, { method: 'DELETE' })
+    await load()
+  } catch (e: any) { error.value = e.message }
+}
+
+async function toggleInbound(n: NumberRow) {
+  error.value = ''
+  try {
+    await api(`/admin/numbers/${n.id}`, { method: 'PUT', json: { inbound_enabled: !n.inbound_enabled } })
     await load()
   } catch (e: any) { error.value = e.message }
 }
@@ -120,7 +129,7 @@ function orgUsers(orgId: number) {
     <div class="panel">
       <table>
         <thead>
-          <tr><th>Number</th><th>Org</th><th>Name / Header</th><th>Upstream</th><th>Status</th><th>Assigned</th><th></th></tr>
+          <tr><th>Number</th><th>Org</th><th>Name / Header</th><th>Upstream</th><th>Status</th><th>Inbox</th><th>Assigned</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="n in numbers" :key="n.id">
@@ -129,6 +138,9 @@ function orgUsers(orgId: number) {
             <td>{{ n.name || '—' }} / {{ n.header || '—' }}</td>
             <td class="muted">#{{ n.gofax_number_id }}</td>
             <td><span class="badge" :class="n.active ? 'active' : 'inactive'">{{ n.active ? 'active' : 'inactive' }}</span></td>
+            <td>
+              <input type="checkbox" :checked="n.inbound_enabled" title="Deliver received faxes to the portal inbox" @change="toggleInbound(n)" />
+            </td>
             <td>{{ n.assigned_count }}</td>
             <td class="actions-cell">
               <button @click="openAssign(n)">Assign</button>

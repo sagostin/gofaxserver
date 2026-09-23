@@ -189,11 +189,13 @@ func (s *Server) adminDeleteOrg(ctx iris.Context) {
 	if purge {
 		numbers := []models.Number{}
 		s.DB.Where("org_id = ?", org.ID).Find(&numbers)
-		for _, n := range numbers {
-			_ = s.FX.DeleteNumber(org.GofaxTenantID, n.Number)
+		for i := range numbers {
+			s.deprovisionPortalEndpoint(&numbers[i])
+			_ = s.FX.DeleteNumber(org.GofaxTenantID, numbers[i].Number)
 		}
 		derr := s.FX.DeleteTenant(org.GofaxTenantID)
 		s.DB.Where("org_id = ?", org.ID).Delete(&models.Number{})
+		s.DB.Where("org_id = ?", org.ID).Delete(&models.InboundFax{})
 		s.DB.Exec("DELETE FROM user_numbers WHERE user_id IN (SELECT id FROM portal_users WHERE org_id = ?)", org.ID)
 		users := []models.PortalUser{}
 		s.DB.Where("org_id = ?", org.ID).Find(&users)
@@ -328,10 +330,48 @@ func (s *Server) adminListNumbers(ctx iris.Context) {
 }
 
 type createNumberReq struct {
-	OrgID  uint   `json:"org_id"`
-	Number string `json:"number"`
-	Name   string `json:"name"`
-	Header string `json:"header"`
+	OrgID          uint   `json:"org_id"`
+	Number         string `json:"number"`
+	Name           string `json:"name"`
+	Header         string `json:"header"`
+	InboundEnabled *bool  `json:"inbound_enabled"` // default true
+}
+
+// provisionPortalEndpoint creates the backend "portal" endpoint that
+// delivers inbound faxes for num into the org's portal inbox, and records
+// its upstream id on num (caller persists).
+func (s *Server) provisionPortalEndpoint(num *models.Number, org *models.Org) error {
+	ep, err := s.FX.AddEndpoint(fsclient.Endpoint{
+		Type:         "number",
+		TypeID:       num.GofaxNumberID,
+		EndpointType: "portal",
+		Endpoint:     org.SvcUsername,
+		Priority:     0,
+	})
+	if err != nil {
+		return err
+	}
+	num.PortalEndpointID = ep.ID
+	return nil
+}
+
+// deprovisionPortalEndpoint removes the backend "portal" endpoint for num
+// (best-effort, with a scope scan fallback if the recorded id drifted).
+func (s *Server) deprovisionPortalEndpoint(num *models.Number) {
+	if num.PortalEndpointID != 0 {
+		if err := s.FX.DeleteEndpoint(num.PortalEndpointID); err == nil {
+			num.PortalEndpointID = 0
+			return
+		}
+	}
+	if eps, err := s.FX.ListEndpoints("number", num.GofaxNumberID); err == nil {
+		for _, ep := range eps {
+			if ep.EndpointType == "portal" {
+				_ = s.FX.DeleteEndpoint(ep.ID)
+			}
+		}
+	}
+	num.PortalEndpointID = 0
 }
 
 func (s *Server) adminCreateNumber(ctx iris.Context) {
@@ -366,14 +406,29 @@ func (s *Server) adminCreateNumber(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "upstream add failed: " + err.Error()})
 		return
 	}
-	row := &models.Number{Number: number, Name: req.Name, Header: req.Header, GofaxNumberID: created.ID, OrgID: org.ID, Active: true}
+	inboundEnabled := req.InboundEnabled == nil || *req.InboundEnabled
+	row := &models.Number{Number: number, Name: req.Name, Header: req.Header, GofaxNumberID: created.ID, OrgID: org.ID, Active: true, InboundEnabled: inboundEnabled}
 	if err := s.DB.Create(row).Error; err != nil {
 		_ = s.FX.DeleteNumber(org.GofaxTenantID, number)
 		ctx.StatusCode(500)
 		ctx.JSON(map[string]string{"error": "failed to save number mirror"})
 		return
 	}
-	s.audit(ctx, "NUMBER_CREATE", number, map[string]any{"org_id": org.ID, "gofax_number_id": created.ID})
+	if row.InboundEnabled {
+		if perr := s.provisionPortalEndpoint(row, &org); perr != nil {
+			_ = s.FX.DeleteNumber(org.GofaxTenantID, number)
+			s.DB.Delete(row)
+			ctx.StatusCode(502)
+			ctx.JSON(map[string]string{"error": "inbound endpoint provisioning failed: " + perr.Error()})
+			return
+		}
+		if err := s.DB.Save(row).Error; err != nil {
+			ctx.StatusCode(500)
+			ctx.JSON(map[string]string{"error": "failed to record inbound endpoint"})
+			return
+		}
+	}
+	s.audit(ctx, "NUMBER_CREATE", number, map[string]any{"org_id": org.ID, "gofax_number_id": created.ID, "inbound_enabled": row.InboundEnabled})
 	ctx.StatusCode(201)
 	ctx.JSON(row)
 }
@@ -391,9 +446,10 @@ func (s *Server) loadNumber(id uint) (*models.Number, *models.Org, error) {
 }
 
 type updateNumberReq struct {
-	Name   *string `json:"name"`
-	Header *string `json:"header"`
-	Active *bool   `json:"active"`
+	Name           *string `json:"name"`
+	Header         *string `json:"header"`
+	Active         *bool   `json:"active"`
+	InboundEnabled *bool   `json:"inbound_enabled"`
 }
 
 func (s *Server) adminUpdateNumber(ctx iris.Context) {
@@ -419,6 +475,18 @@ func (s *Server) adminUpdateNumber(ctx iris.Context) {
 	if req.Active != nil {
 		num.Active = *req.Active
 	}
+	if req.InboundEnabled != nil && *req.InboundEnabled != num.InboundEnabled {
+		if *req.InboundEnabled {
+			if perr := s.provisionPortalEndpoint(num, org); perr != nil {
+				ctx.StatusCode(502)
+				ctx.JSON(map[string]string{"error": "inbound endpoint provisioning failed: " + perr.Error()})
+				return
+			}
+		} else {
+			s.deprovisionPortalEndpoint(num)
+		}
+		num.InboundEnabled = *req.InboundEnabled
+	}
 	notify := s.computeNotify(num.ID)
 	if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 		ctx.StatusCode(502)
@@ -442,6 +510,7 @@ func (s *Server) adminDeleteNumber(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": err.Error()})
 		return
 	}
+	s.deprovisionPortalEndpoint(num)
 	if derr := s.FX.DeleteNumber(org.GofaxTenantID, num.Number); derr != nil {
 		ctx.StatusCode(502)
 		ctx.JSON(map[string]string{"error": "upstream delete failed: " + derr.Error()})
@@ -725,14 +794,14 @@ func (s *Server) adminDeleteUser(ctx iris.Context) {
 // ---------- Endpoints ----------
 
 var validEndpointTypes = map[string]bool{"tenant": true, "number": true, "global": true}
-var validEndpointKinds = map[string]bool{"gateway": true, "webhook": true, "email": true}
+var validEndpointKinds = map[string]bool{"gateway": true, "webhook": true, "email": true, "portal": true}
 
 func (s *Server) validateEndpoint(ep *fsclient.Endpoint) string {
 	if !validEndpointTypes[ep.Type] {
 		return "type must be tenant, number or global"
 	}
 	if !validEndpointKinds[ep.EndpointType] {
-		return "endpoint_type must be gateway, webhook or email"
+		return "endpoint_type must be gateway, webhook, email or portal"
 	}
 	if strings.TrimSpace(ep.Endpoint) == "" {
 		return "endpoint value required"

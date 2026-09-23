@@ -72,6 +72,13 @@ func OpenString(b *Box, data []byte) (string, error) {
 	return string(pt), nil
 }
 
+// NewFaxBox derives the domain-separated box used to seal received fax
+// files at rest: fax blobs are encrypted under a different key than
+// service-account passwords even though both derive from encryption_key.
+func NewFaxBox(secret string) (*Box, error) {
+	return NewBox("gofaxportal-fax-storage-v1:" + secret)
+}
+
 // RandomToken returns n random bytes hex-encoded.
 func RandomToken(n int) string {
 	buf := make([]byte, n)

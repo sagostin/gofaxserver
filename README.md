@@ -43,7 +43,7 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [gofaxserver.excalidraw](gofaxserver.excalidraw) for a visual diagram.
 
-> **Fax Portal:** a separate multi-tenant web UI (`portal/`, own binary + DB) that lets end users send faxes and track jobs through this API — see [docs/PORTAL.md](docs/PORTAL.md).
+> **Fax Portal:** a separate multi-tenant web UI (`portal/`, own binary + DB) that lets end users send faxes, track jobs, and receive inbound faxes into an encrypted-at-rest inbox — see [docs/PORTAL.md](docs/PORTAL.md).
 
 ### Core Components
 
@@ -141,6 +141,10 @@ Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in th
   "web": {
     "listen": ":8080",
     "api_key": "your_api_key"
+  },
+  "portal": {
+    "url": "http://127.0.0.1:8081",
+    "api_key": ""
   },
   "loki": {
     "push_url": "http://localhost:3100/loki/api/v1/push",
@@ -312,8 +316,8 @@ Response:
   "id": 1,
   "type": "tenant",           // "tenant", "number", or "global"
   "type_id": 1,               // Tenant ID (tenant), TenantNumber.ID (number), or 0 (global)
-  "endpoint_type": "gateway", // "gateway", "webhook", "email"
-  "endpoint": "carrier_gw:203.0.113.5",  // gateway: `xml_name:publicIP`; webhook: URL; email: addr[;addr2]
+  "endpoint_type": "gateway", // "gateway", "webhook", "email", "portal"
+  "endpoint": "carrier_gw:203.0.113.5",  // gateway: `xml_name:publicIP`; webhook: URL; email: addr[;addr2]; portal: org's svc_username
   "priority": 0,              // Lower = higher priority; 666 = no inbound delivery; 999 = upstream fallback
   "bridge": false             // Enable T.38/G.711 transcoding
 }

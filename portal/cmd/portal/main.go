@@ -59,6 +59,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("encryption key: %v", err)
 	}
+	faxBox, err := crypto.NewFaxBox(cfg.EncryptionKey)
+	if err != nil {
+		log.Fatalf("fax encryption key: %v", err)
+	}
 
 	fx := fsclient.New(cfg.GofaxServer.BaseURL, cfg.GofaxServer.AdminAPIKey)
 
@@ -70,7 +74,7 @@ func main() {
 	stop := make(chan struct{})
 	authSvc.StartJanitor(stop)
 
-	srv := api.New(cfg, gdb, authSvc, box, fx)
+	srv := api.New(cfg, gdb, authSvc, box, faxBox, fx)
 	app := srv.BuildApp()
 
 	pollStop := make(chan struct{})

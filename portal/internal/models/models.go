@@ -56,15 +56,20 @@ type PortalUser struct {
 
 // Number mirrors one tenant_numbers row on gofaxserver for an org.
 type Number struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	Number        string    `gorm:"uniqueIndex;not null" json:"number"`
-	Name          string    `json:"name"`
-	Header        string    `json:"header"`
-	GofaxNumberID uint      `gorm:"index;not null" json:"gofax_number_id"`
-	OrgID         uint      `gorm:"index;not null" json:"org_id"`
-	Active        bool      `gorm:"not null;default:true" json:"active"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	Number        string `gorm:"uniqueIndex;not null" json:"number"`
+	Name          string `json:"name"`
+	Header        string `json:"header"`
+	GofaxNumberID uint   `gorm:"index;not null" json:"gofax_number_id"`
+	OrgID         uint   `gorm:"index;not null" json:"org_id"`
+	Active        bool   `gorm:"not null;default:true" json:"active"`
+	// InboundEnabled controls whether received faxes for this number are
+	// delivered into the portal inbox. When true the portal maintains a
+	// "portal"-type endpoint on gofaxserver for this number.
+	InboundEnabled   bool      `gorm:"not null;default:true" json:"inbound_enabled"`
+	PortalEndpointID uint      `json:"portal_endpoint_id"` // gofaxserver endpoint id auto-provisioned for inbound delivery (0 = none)
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // UserNumber is the per-user outbound allowlist.
@@ -93,6 +98,28 @@ type FaxJob struct {
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
+// InboundFax is a fax received on one of an org's numbers, delivered by
+// gofaxserver to the portal's inbound endpoint. The PDF is encrypted at
+// rest (AES-256-GCM, domain-separated key derived from encryption_key);
+// FileSHA256/FileBytes describe the plaintext for integrity + display.
+type InboundFax struct {
+	ID           uint   `gorm:"primaryKey" json:"id"`
+	JobUUID      string `gorm:"uniqueIndex:idx_inbound_org_uuid;not null" json:"job_uuid"`
+	OrgID        uint   `gorm:"uniqueIndex:idx_inbound_org_uuid;index;not null" json:"org_id"`
+	NumberID     *uint  `gorm:"index" json:"number_id"` // nil = callee not mirrored in portal (admin-only visibility)
+	CallerNumber string `json:"caller_number"`
+	CallerName   string `json:"caller_name"`
+	CalleeNumber string `gorm:"index" json:"callee_number"`
+	Pages        int    `json:"pages"`
+	// FileEnc is the sealed PDF; never serialized.
+	FileEnc    []byte    `gorm:"not null" json:"-"`
+	FileSHA256 string    `json:"-"`
+	FileBytes  int64     `json:"file_bytes"`
+	ReceivedAt time.Time `gorm:"index" json:"received_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type Session struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	TokenHash string    `gorm:"uniqueIndex;not null" json:"-"`
@@ -114,5 +141,5 @@ type AuditLog struct {
 }
 
 func AllModels() []any {
-	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &Session{}, &AuditLog{}}
+	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &InboundFax{}, &Session{}, &AuditLog{}}
 }

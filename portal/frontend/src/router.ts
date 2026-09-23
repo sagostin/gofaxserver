@@ -8,6 +8,7 @@ const router = createRouter({
     // user realm
     { path: '/app', component: () => import('./views/user/SendFaxView.vue'), meta: { role: 'user' } },
     { path: '/app/faxes', component: () => import('./views/user/JobsView.vue'), meta: { role: 'user' } },
+    { path: '/app/inbox', component: () => import('./views/user/InboxView.vue'), meta: { role: 'user' } },
     // admin realm
     { path: '/admin', component: () => import('./views/admin/OrgsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/numbers', component: () => import('./views/admin/NumbersView.vue'), meta: { role: 'admin' } },
@@ -19,6 +20,7 @@ const router = createRouter({
     { path: '/admin/fax-policies', component: () => import('./views/admin/FaxPoliciesView.vue'), meta: { role: 'admin' } },
     { path: '/admin/active', component: () => import('./views/admin/ActiveFaxesView.vue'), meta: { role: 'admin' } },
     { path: '/admin/jobs', component: () => import('./views/admin/JobsView.vue'), meta: { role: 'admin' } },
+    { path: '/admin/inbound', component: () => import('./views/admin/InboundView.vue'), meta: { role: 'admin' } },
     { path: '/admin/audit', component: () => import('./views/admin/AuditView.vue'), meta: { role: 'admin' } },
     { path: '/', redirect: '/login' },
   ],

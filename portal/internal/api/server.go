@@ -39,17 +39,19 @@ type Server struct {
 	DB         *gorm.DB
 	Auth       *auth.Service
 	Box        *crypto.Box
+	FaxBox     *crypto.Box // domain-separated box sealing received fax PDFs at rest
 	FX         *fsclient.Client
 	LoginLimit *auth.RateLimiter
 	SendLimit  *auth.RateLimiter
 }
 
-func New(cfg *config.Config, db *gorm.DB, authSvc *auth.Service, box *crypto.Box, fx *fsclient.Client) *Server {
+func New(cfg *config.Config, db *gorm.DB, authSvc *auth.Service, box, faxBox *crypto.Box, fx *fsclient.Client) *Server {
 	return &Server{
 		Cfg:        cfg,
 		DB:         db,
 		Auth:       authSvc,
 		Box:        box,
+		FaxBox:     faxBox,
 		FX:         fx,
 		LoginLimit: auth.NewRateLimiter(time.Minute),
 		SendLimit:  auth.NewRateLimiter(time.Hour),
@@ -71,6 +73,11 @@ func (s *Server) BuildApp() *iris.Application {
 		ctx.JSON(map[string]string{"status": "ok"})
 	})
 
+	// Inbound fax delivery from gofaxserver. Deliberately outside the
+	// session/CSRF middleware: the caller is gofaxserver itself, authorized
+	// by the per-org service-account path + optional pre-shared X-API-Key.
+	apiParty.Post("/inbound/{svc_username}", s.handleInboundFax)
+
 	// --- authenticated ---
 	authed := apiParty.Party("", s.authenticate, s.requireAuth)
 	authed.Post("/auth/logout", s.handleLogout)
@@ -82,6 +89,9 @@ func (s *Server) BuildApp() *iris.Application {
 	userParty.Get("/faxes", s.handleListJobs)
 	userParty.Get("/faxes/{id:uint}", s.handleGetJob)
 	userParty.Post("/faxes", s.handleSendFax)
+	userParty.Get("/inbox", s.handleListInbox)
+	userParty.Get("/inbox/{id:uint}", s.handleGetInbound)
+	userParty.Get("/inbox/{id:uint}/file", s.handleGetInboundFile)
 
 	// --- admin realm ---
 	admin := apiParty.Party("/admin", s.authenticate, s.requireAuth, s.requireAdminRealm)
@@ -147,6 +157,9 @@ func (s *Server) BuildApp() *iris.Application {
 	admin.Get("/faxes/active", s.adminActiveFaxes)
 	admin.Get("/jobs", s.adminListAllJobs)
 	admin.Get("/jobs/{id:uint}/live", s.adminJobLive)
+	admin.Get("/inbox", s.adminListInbound)
+	admin.Get("/inbox/{id:uint}/file", s.adminGetInboundFile)
+	admin.Delete("/inbox/{id:uint}", s.adminDeleteInbound)
 	admin.Get("/audit", s.adminAuditLog)
 
 	// Unknown /portal/api paths must return JSON 404s, never the SPA shell.

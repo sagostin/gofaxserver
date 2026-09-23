@@ -94,6 +94,17 @@ type config struct {
 		Listen string `json:"listen"`
 		APIKey string `json:"api_key"`
 	} `json:"web"`
+	// Portal configures inbound fax delivery to a gofaxportal instance.
+	// Numbers with an endpoint of type "portal" have their received faxes
+	// POSTed (same payload as webhook delivery) to
+	// "<url>/portal/api/inbound/<endpoint>" where <endpoint> is the portal
+	// organization's service-account username. Empty URL disables portal
+	// delivery. APIKey is an optional pre-shared key sent as X-API-Key; it
+	// must match the portal's inbound_api_key when set.
+	Portal struct {
+		URL    string `json:"url"`
+		APIKey string `json:"api_key"`
+	} `json:"portal"`
 	SMTP struct {
 		Host        string `json:"host,omitempty"`
 		Port        int    `json:"port,omitempty"`

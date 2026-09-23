@@ -1,15 +1,17 @@
 # Fax Portal (gofaxportal)
 
-A standalone multi-tenant **outbound fax portal** for gofaxserver. It is a
+A standalone multi-tenant **send & receive fax portal** for gofaxserver. It is a
 separate Go module, separate binary, separate PostgreSQL database, and never
 imports gofaxserver packages — it talks to gofaxserver exclusively over its
-HTTP API. gofaxserver requires no configuration changes beyond what it already
-exposes.
+HTTP API (outbound + admin) and receives inbound faxes from gofaxserver over a
+single delivery endpoint (`POST /portal/api/inbound/<svc_username>`, see
+[Receiving faxes](#receiving-faxes-inbound)).
 
 ```
 Browser ──(session cookie)──► Portal :8081 ──┬─(admin:<API_KEY>)──► gofaxserver /admin/*
    ▲                                         └─(svc_<org>:<pw>)──► gofaxserver /fax/send, /fax/status
  login page
+gofaxserver ──(POST /portal/api/inbound/<svc>, X-API-Key)──► Portal :8081
 ```
 
 Neither the admin API key nor service-account passwords ever reach the browser.
@@ -60,6 +62,54 @@ Neither the admin API key nor service-account passwords ever reach the browser.
 - **Poller** — reconciles job state every few seconds from `/fax/status`
   (per-org svc credentials) plus `/admin/faxes` (tracker snapshot) to derive
   terminal `success` / `failed` states.
+- **Inbound (receiving)** — numbers with the **Inbox** toggle on (default)
+  get a `portal`-type endpoint auto-provisioned on gofaxserver; faxes
+  received on them are delivered into the portal, stored **encrypted at
+  rest**, and shown to the users assigned to that number. See
+  "Receiving faxes" below.
+
+## Receiving faxes (inbound)
+
+The portal is no longer outbound-only: each org's numbers can receive faxes
+straight into the portal inbox.
+
+**How delivery works.** When an admin adds a number with Inbox enabled, the
+portal creates a gofaxserver endpoint `type=number`,
+`endpoint_type=portal`, `endpoint=<org's svc_username>` (toggling Inbox off,
+or deleting the number, removes it again). When a fax arrives for that
+number, gofaxserver converts it to PDF and POSTs it to
+`<portal.url>/portal/api/inbound/<svc_username>` — the same JSON payload and
+retry/backoff semantics as `webhook` endpoints (`FaxJobWithFile`: flattened
+job fields + base64 PDF, `X-File-SHA256`/`X-File-Bytes` headers). The portal
+URL and an optional pre-shared key live in gofaxserver's config:
+
+```json
+"portal": { "url": "http://127.0.0.1:8081", "api_key": "shared-secret" }
+```
+
+`portal.api_key` must match the portal's `inbound_api_key` /
+`PORTAL_INBOUND_API_KEY`; the portal rejects deliveries with a wrong or
+missing key (401). Both empty is acceptable when the services are
+loopback-only. Unknown service accounts (e.g. backend tenants not managed by
+the portal) get a non-retriable 404.
+
+**Encryption at rest.** Received PDFs are sealed with AES-256-GCM before
+they touch the database (`inbound_faxes.file_enc` bytea). The key is
+domain-separated from the service-account password box — both derive from
+`encryption_key`, but blobs sealed for one purpose cannot be opened with the
+other box. The plaintext SHA-256 + size are stored alongside and re-verified
+on every decryption. Losing/rotating `encryption_key` makes stored faxes
+undecryptable, so back it up with the DB. Plaintext exists only in memory
+while serving a download.
+
+**Visibility.** A fax is linked to the org (via the service account) and to
+the mirrored number (via the callee). Users see inbox items for numbers on
+their assignment list — the same per-user list that gates outbound sending —
+and can view/download the decrypted PDF. Faxes whose callee isn't mirrored
+in the portal are stored but visible to admins only (shown as "unmatched").
+Delivery is idempotent on `(org, job_uuid)`, so gofaxserver retries never
+duplicate an inbox entry. Retention is manual: admins can delete inbound
+faxes; purging an org deletes its stored faxes too.
 
 ## How receipts actually work (verified against gofaxserver source)
 
@@ -165,6 +215,7 @@ Copy `config.json.sample` to `config.json` or configure purely via env vars:
 | `PORTAL_ENCRYPTION_KEY` | required; long random string (seals svc passwords) |
 | `PORTAL_GOFAX_BASE_URL` | default `http://127.0.0.1:8080` |
 | `PORTAL_ADMIN_API_KEY` | required; matches gofaxserver `web.api_key` |
+| `PORTAL_INBOUND_API_KEY` | optional pre-shared key for inbound fax delivery; must match gofaxserver `portal.api_key` |
 | `PORTAL_BOOTSTRAP_USERNAME/PASSWORD/EMAIL` | creates the first admin when DB empty |
 
 On first start with an empty user table and a bootstrap password set, an
@@ -265,7 +316,9 @@ After deployment, walk this once against your live gofaxserver:
 5. Log in as the user, send a small test PDF
 6. Watch My Faxes flip `queued → sending → success/failed` (poller ticks every ~5 s)
 7. Confirm the `email_report` receipt lands in the user's inbox
-8. Admin → Orgs → **Reconcile** should report a clean diff
+8. Send a fax *to* the org's number — it should appear in the user's Inbox
+   (and Admin → Inbound Faxes) and open as a PDF
+9. Admin → Orgs → **Reconcile** should report a clean diff
 
 ## API surface (session cookie + CSRF)
 
@@ -291,7 +344,12 @@ Auth: `POST /portal/api/auth/login`, `POST /portal/api/auth/logout`, `GET /porta
 
 Fax users: `GET /portal/api/me/numbers`, `POST /portal/api/faxes` (multipart:
 `file`,`caller_number`,`callee_number`), `GET /portal/api/faxes[?status=]`,
-`GET /portal/api/faxes/{id}`.
+`GET /portal/api/faxes/{id}`, plus the inbox: `GET /portal/api/inbox`,
+`GET /portal/api/inbox/{id}`, `GET /portal/api/inbox/{id}/file` (decrypted
+PDF, scoped to assigned numbers).
+
+Inbound delivery (gofaxserver → portal, no session):
+`POST /portal/api/inbound/{svc_username}` with optional `X-API-Key`.
 
 Admin (`role=admin`): CRUD under `/portal/api/admin/{orgs,numbers,users,endpoints}`,
 gateway provisioning under `/portal/api/admin/{gateways,gateway-templates}`
@@ -299,7 +357,9 @@ gateway provisioning under `/portal/api/admin/{gateways,gateway-templates}`
 dialplan rules under `/portal/api/admin/dialplan`,
 `PUT /portal/api/admin/numbers/{id}/assignments`, `GET /portal/api/admin/orgs/{id}/reconcile`,
 `GET /portal/api/admin/faxes/active`, `GET /portal/api/admin/jobs[?org_id=&status=]`,
-`GET /portal/api/admin/jobs/{id}/live`, `GET /portal/api/admin/audit`.
+`GET /portal/api/admin/jobs/{id}/live`, `GET /portal/api/admin/inbox[?org_id=]`,
+`GET /portal/api/admin/inbox/{id}/file`, `DELETE /portal/api/admin/inbox/{id}`,
+`GET /portal/api/admin/audit`.
 
 Mutating requests require the `X-CSRF-Token` header returned by login/me.
 
@@ -321,6 +381,10 @@ Mutating requests require the `X-CSRF-Token` header returned by login/me.
   (`psk`), masked as `********` in API responses, and template params are
   XML-escaped at render time so values cannot inject markup into FreeSWITCH
   config.
+- Received fax PDFs are stored AES-256-GCM encrypted (domain-separated key
+  derived from `encryption_key`) with plaintext SHA-256 integrity checks on
+  every decryption; downloads are scoped to users assigned to the receiving
+  number.
 
 ## Reconciliation
 
