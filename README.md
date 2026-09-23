@@ -6,7 +6,8 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 
 - **Multi-tenant Architecture** - Isolated tenant management with per-tenant numbers, endpoints, and users
 - **SIP Connectivity** - Connect to PBXes, SBCs, and SIP providers with or without registration
-- **T.38 + G.711 Support** - Full T.38 protocol with intelligent flip-flop fallback to G.711 audio
+- **T.38 + G.711 Support** - Full T.38 protocol with policy-driven fallback to G.711 audio
+- **Fax Policy Engine** - Postgres-backed T.38/ECM/V.17 rules with adaptive auto-learning, per-call-type scoping (softmodem vs bridged), and persisted flip-flop probing — replaces the old FreeSWITCH `mod_db` fallback
 - **Fax Bridging** - Transcode faxes between T.38 and audio endpoints
 - **Priority-based Routing** - Failover using multiple gateways with configurable priorities
 - **API-driven Gateway Provisioning** - Create/update/delete FreeSWITCH gateway XML from the REST API or portal, with DB-backed editable templates and automatic ESL reload
@@ -30,7 +31,8 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 │                            PostgreSQL                                │
 │       (tenants, tenant_numbers, endpoints, tenant_users,            │
 │        fax_job_results, gateway_templates, gateway_configs,         │
-│        dialplan_rules — GORM auto-migrated on startup)              │
+│        dialplan_rules, fax_policy_rules, fax_pair_states —          │
+│        GORM auto-migrated on startup)                               │
 └──────────────────────────────────────────────────────────────────────┘
        │              │                                  │
        ▼              ▼                                  ▼
@@ -55,16 +57,18 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [gofaxs
 | **Queue** | `gofaxserver/queue.go` | Manages outbound fax jobs with priority-based endpoint selection and retry |
 | **Web Server** | `gofaxserver/web.go` | Iris-based REST API on `:8080` (or `web.listen`) |
 | **FaxTracker** | `gofaxserver/faxtracker.go` | Real-time tracking of in-flight fax jobs |
+| **Fax Policy Engine** | `gofaxserver/faxpolicy.go`, `web_faxpolicy.go` | Postgres-backed T.38/ECM/V.17 policy rules, adaptive failure learning, and persisted flip-flop pair state |
 | **LogManager** | `gofaxlib/log.go` | Dispatches structured logs to stdout and Loki |
 
 ### T.38 Negotiation Strategy
 
-gofaxserver implements an intelligent T.38 flip-flop mechanism:
+T.38 decisions are driven by the Postgres-backed **fax policy engine** (`faxing.policy` in config):
 
 1. **Upstream Gateways Only** - T.38 is only enabled for calls to/from upstream (carrier) gateways
-2. **Flip-Flop Retry** - On first call to a number pair, T.38 is allowed; on a retry within TTL (15 min), it is flipped
-3. **Softmodem Fallback** - Numbers with repeated T.38 failures are automatically switched to G.711 (stored in FreeSWITCH `mod_db`)
-4. **Local Endpoints** - Calls to/from tenant gateways always use G.711 (no T.38)
+2. **Policy Rules** - Composable `fax_policy_rules` (T.38/ECM/V.17 on/off, softmodem-only) scoped by destination, source, or src/dst pair, and by call type (`softmodem` vs `bridge`) — see the [Fax Policy](#fax-policy) section
+3. **Adaptive Learning** - Repeated T.38 negotiation failures automatically escalate `t38_off` → `ecm_off` → `v17_off` rules; consecutive successes (or TTL expiry) heal them
+4. **Flip-Flop Probing** - Where no rule decides, a per-pair, per-call-type state (persisted in `fax_pair_states`) flips T.38 on retry within its TTL — mainly for telemetry-blind bridged calls
+5. **Local Endpoints** - Calls to/from tenant gateways always use G.711 (no T.38)
 
 ## Installation
 
@@ -85,7 +89,7 @@ To run FreeSWITCH as a Debian host service instead (with gofaxserver/PostgreSQL 
 
 ## Configuration
 
-Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in the all-container compose). The server **auto-migrates the database schema** (tenants, tenant_numbers, endpoints, tenant_users, fax_job_results, gateway_templates, gateway_configs, dialplan_rules) on startup — no manual migration step is required. A complete example (matching `gofaxlib/config.go`):
+Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in the all-container compose). The server **auto-migrates the database schema** (tenants, tenant_numbers, endpoints, tenant_users, fax_job_results, gateway_templates, gateway_configs, dialplan_rules, fax_policy_rules, fax_pair_states) on startup — no manual migration step is required. A complete example (matching `gofaxlib/config.go`):
 
 ```json
 {
@@ -96,7 +100,6 @@ Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in th
     "ident": "gofaxserver",
     "header": "Fax Server",
     "verbose": false,
-    "softmodem_fallback": true,
     "gateway_config_dir": "/etc/freeswitch/gateways",
     "gateway_config_chown": "freeswitch:freeswitch",
     "gateway_profile": "fax",
@@ -114,7 +117,19 @@ Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in th
     "disable_ecm_after_retry": "0",
     "failed_response": ["UNALLOCATED_NUMBER", "CALL_REJECTED"],
     "retry_delay": "60s",
-    "retry_attempts": "3"
+    "retry_attempts": "3",
+    "policy": {
+      "enabled": true,
+      "learn_enabled": true,
+      "t38_failure_threshold": 1,
+      "ecm_failure_threshold": 2,
+      "v17_failure_threshold": 3,
+      "recovery_successes": 3,
+      "auto_rule_ttl": "720h",
+      "pair_state_ttl": "15m",
+      "retry_chain_escalation": true,
+      "bridge_learn": true
+    }
   },
   "database": {
     "host": "localhost",
@@ -156,13 +171,14 @@ Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in th
 
 Notes:
 - `event_server_socket` (port **8022**) is the inbound ESL listener for FreeSWITCH to push events to gofaxserver. The Sofia `fax` profile points its dialplan at `socket:127.0.0.1:8022 async full` (see `examples/freeswitch/autoload_configs/sofia.conf.xml`).
-- `event_client_socket` (port **8021**) is the outbound ESL connection gofaxserver uses to originate calls and write to `mod_db`.
+- `event_client_socket` (port **8021**) is the outbound ESL connection gofaxserver uses to originate calls and read per-number channel-var overrides from `mod_db` (realm `override-<number>`).
 - `answer_after` and `wait_time` are in **milliseconds** (`uint64`).
 - `temp_dir` holds store-and-forward fax content (uploaded TIFFs, received faxes) — **FreeSWITCH must see the same directory at the same path**, so in container setups it is a shared mount (the compose files handle this). A built-in janitor deletes orphaned files older than `temp_max_age` (default `24h`, `"0s"` disables); completed jobs delete their files immediately.
 - `retry_delay` accepts `s/m/h/d` suffixes (e.g. `60s`, `5m`).
 - `psk` is the symmetric key used to encrypt/decrypt tenant user passwords and gateway credentials — generate a strong random value in production.
 - `gateway_config_dir` enables API-driven provisioning: rendered gateway XML is written there and FreeSWITCH is reloaded over ESL. Leave empty to disable. `gateway_config_chown` optionally chowns files, `gateway_profile` selects the Sofia profile to rescan (default `fax`), `gateway_monitor_seconds` is the registration poll interval (default 60, negative disables). See [docs/GATEWAYS.md](docs/GATEWAYS.md).
 - `dialplan.source` is `"config"` (rules from this file, shown above) or `"db"` (rules from the `dialplan_rules` table, editable via `/admin/dialplan*` and hot-reloaded by `/admin/reload`). Omit the whole `dialplan` section to use the built-in defaults.
+- `faxing.policy` configures the [fax policy engine](#fax-policy) (T.38/ECM/V.17 rules + adaptive learning). The whole section is optional — sensible defaults apply when absent. The old `freeswitch.softmodem_fallback` key is deprecated and ignored.
 - PostgreSQL SSL mode and timezone can be overridden via `POSTGRES_SSLMODE` and `POSTGRES_TIMEZONE` environment variables (defaults: `disable`, `America/Vancouver`).
 
 ## API Reference
@@ -199,7 +215,13 @@ See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for the full reference. Quick
 | POST | `/admin/user` | Create tenant user |
 | PUT | `/admin/user/{id}` | Update tenant user (password re-encrypted if supplied) |
 | DELETE | `/admin/user/{id}` | Delete tenant user |
-| POST | `/admin/fallback` | Set softmodem fallback for a number |
+| POST | `/admin/fallback` | **Deprecated** — creates a manual dst `t38_off` fax policy rule |
+| GET/POST | `/admin/fax-policies` | List / create fax policy rules |
+| PUT/DELETE | `/admin/fax-policies/{id}` | Update / delete a fax policy rule |
+| POST | `/admin/fax-policies/{id}/expire` | Expire a rule (reset to probing) |
+| GET | `/admin/fax-policies/resolve?src=&dst=&type=` | Dry-run policy resolution for a src/dst/call-type |
+| GET | `/admin/fax-policies/pair-states` | List flip-flop pair states |
+| DELETE | `/admin/fax-policies/pair-states/{id}` | Clear a pair state |
 | GET | `/admin/gateways` | List provisioned gateways + unmanaged XML files found on disk |
 | POST | `/admin/gateway` | Provision a gateway (renders template, writes XML, ESL reload, optional endpoint) |
 | PUT | `/admin/gateway/{name}` | Update a provisioned gateway |
@@ -301,13 +323,13 @@ Global endpoints (`type=global`, `type_id=0`) are the upstream carrier gateways.
 
 Endpoints created through gateway provisioning (`POST /admin/gateway`) are *managed*: they are linked to a `gateway_configs` row and `PUT/DELETE /admin/endpoint/{id}` returns **409 Conflict** for them — modify or remove them via the `/admin/gateway*` routes instead. For `gateway` endpoints, the value is `name:publicIP` where the ACL match is exact on the IP part (see [docs/GATEWAYS.md](docs/GATEWAYS.md)).
 
-## Softmodem Fallback
+## Fax Policy
 
-When T.38 negotiation fails repeatedly with a remote station, gofaxserver can be told to disable T.38 for a specific number. The flag is stored in FreeSWITCH's `mod_db` under the `fallback` realm.
+When T.38 negotiation fails repeatedly with a remote station, gofaxserver can disable T.38 (and, on further failures, ECM/V.17) for that destination, source, or src/dst pair. Policy is stored in Postgres (`fax_policy_rules`) — **no FreeSWITCH `mod_db` involved** — and hot-reloaded on every write. The engine also auto-learns rules from failure signatures and heals them after consecutive successes or TTL expiry (`faxing.policy` thresholds).
 
-Enable the feature with `freeswitch.softmodem_fallback: true` in configuration. The flag is also automatically applied per call (flip-flop + per-side match) — see [docs/TENANTS.md](docs/TENANTS.md).
+Rules are composable and single-purpose: `t38_off`/`t38_on`, `ecm_off`/`ecm_on`, `v17_off`, `softmodem_only`. Each rule is scoped by `dst`, `src`, or `pair`, and by call type via `applies_to` (`both`/`softmodem`/`bridge`) — so you can disable T.38 for softmodem calls to a number while leaving bridged (transcoded) calls untouched. Resolution per attribute: pair > dst > src scope, manual beats auto-learned, and "off" beats "on" (fail-safe).
 
-To manually set fallback for a number:
+The old `POST /admin/fallback` endpoint still works as a deprecated shim — it creates a manual dst-scoped `t38_off` rule:
 
 ```bash
 curl -X POST http://localhost:8080/admin/fallback \
@@ -315,6 +337,17 @@ curl -X POST http://localhost:8080/admin/fallback \
   -H "Content-Type: application/json" \
   -d '{"number": "5551234567"}'
 ```
+
+Prefer the full rule API (also exposed in the portal under **Admin → Fax Policies**):
+
+```bash
+curl -X POST http://localhost:8080/admin/fax-policies \
+  -H "Authorization: Basic $(echo -n 'admin:<API_KEY>' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{"scope": "dst", "dst_number": "5551234567", "effect": "t38_off", "applies_to": "both"}'
+```
+
+Full reference: [docs/API_REFERENCE.md](docs/API_REFERENCE.md).
 
 ## Building from Source
 

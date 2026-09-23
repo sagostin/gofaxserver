@@ -122,6 +122,14 @@ gofaxserver runs with `dialplan.source = "db"` (the tab shows a banner when
 config-file mode is active and the rules are inactive). Full parameter
 reference: [GATEWAYS.md](GATEWAYS.md).
 
+**Admin → Fax Policies** manages gofaxserver's T.38/ECM/V.17 policy rules
+(`fax_policy_rules`): create/edit/delete manual rules scoped by dst, src, or
+src/dst pair and by call type (`softmodem` vs `bridge`), inspect auto-learned
+rules with their failure/success counters, expire a rule to reset it to
+probing, dry-run policy resolution for any src/dst/call-type, and browse or
+clear the persisted flip-flop pair states. See
+[API_REFERENCE.md](API_REFERENCE.md#fax-policy-rules-t38--ecm--v17).
+
 When provisioning is **not** enabled (no `gateway_config_dir`, or no shared
 filesystem with FreeSWITCH), the gateway XML must still be created manually
 on the FreeSWITCH host and loaded with `fs_cli -x "sofia profile fax rescan"`
