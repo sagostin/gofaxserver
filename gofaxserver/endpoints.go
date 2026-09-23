@@ -18,11 +18,63 @@
 package gofaxserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"github.com/sirupsen/logrus"
+	"net"
 	"strings"
+	"time"
+
+	"github.com/sirupsen/logrus"
 )
+
+// aclResolver resolves hostname-valued gateway ACL entries to IPs.
+// Package-level var so tests can stub DNS.
+var aclResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
+} = net.DefaultResolver
+
+// aclResolveTimeout bounds a single DNS lookup during ACL resolution.
+const aclResolveTimeout = 5 * time.Second
+
+// splitGatewayACLHost returns the host portion of a "name:host" gateway ACL
+// entry. Gateway names never contain ':' (see gatewayNameRe), so splitting
+// on the first colon is unambiguous.
+func splitGatewayACLHost(entry string) (host string, ok bool) {
+	idx := strings.Index(entry, ":")
+	if idx < 0 || idx+1 >= len(entry) {
+		return "", false
+	}
+	return entry[idx+1:], true
+}
+
+// resolveGatewayACLs resolves hostname-valued gateway ACL entries to their
+// IP addresses. Literal-IP and legacy IP-only entries are skipped (they match
+// directly in fsGatewayACL). Returns the resolved map plus the entries whose
+// lookup failed. Performs DNS lookups — call without holding s.mu.
+func resolveGatewayACLs(entries []string) (resolved map[string][]string, failures map[string]error) {
+	resolved = make(map[string][]string)
+	failures = make(map[string]error)
+	for _, entry := range entries {
+		host, ok := splitGatewayACLHost(entry)
+		if !ok || net.ParseIP(host) != nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), aclResolveTimeout)
+		addrs, err := aclResolver.LookupIPAddr(ctx, host)
+		cancel()
+		if err != nil {
+			failures[entry] = err
+			continue
+		}
+		ips := make([]string, 0, len(addrs))
+		for _, a := range addrs {
+			ips = append(ips, a.IP.String())
+		}
+		resolved[entry] = ips
+	}
+	return resolved, failures
+}
 
 // this will control the endpoints, endpoints are the gateways/sip trunks,
 // or webhooks that will be used to deliver faxes and such
@@ -57,7 +109,6 @@ func (s *Server) loadEndpoints() error {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Reset the endpoint maps.
 	s.TenantEndpoints = make(map[uint][]*Endpoint)
@@ -76,8 +127,6 @@ func (s *Server) loadEndpoints() error {
 		case "gateway":
 			// add any endpoints with type of gateway to the ACL list for allowed FS calls
 			s.GatewayEndpointsACL = append(s.GatewayEndpointsACL, ep.Endpoint)
-
-			// todo parse / add resolved IP
 		}
 
 		switch epCopy.Type {
@@ -112,6 +161,24 @@ func (s *Server) loadEndpoints() error {
 			// Optionally handle other endpoint types (e.g. "global") if needed.
 		}
 	}
+	aclEntries := append([]string(nil), s.GatewayEndpointsACL...)
+	s.mu.Unlock()
+
+	// Resolve hostname-valued ACL entries outside the lock — DNS lookups may
+	// block and must not stall inbound call handling. Entries that fail to
+	// resolve here fail closed (no IPs) until the gateway monitor re-resolves.
+	resolved, failures := resolveGatewayACLs(aclEntries)
+	for entry, err := range failures {
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Endpoint.Load",
+			fmt.Sprintf("gateway ACL entry %q failed DNS resolution: %v (inbound calls will fail ACL until resolved)", entry, err),
+			logrus.WarnLevel,
+			map[string]interface{}{"endpoint": entry},
+		))
+	}
+	s.mu.Lock()
+	s.GatewayACLResolved = resolved
+	s.mu.Unlock()
 	return nil
 }
 
@@ -292,6 +359,8 @@ func (s *Server) removeEndpoint(endpointID uint) error {
 }
 
 func (s *Server) fsGatewayACL(ip string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, k := range s.GatewayEndpointsACL {
 		// Gateway endpoints are stored as "name:publicIP". Compare the IP
 		// portion exactly — substring matching would let e.g. source IP
@@ -306,6 +375,16 @@ func (s *Server) fsGatewayACL(ip string) (string, error) {
 		// (e.g. an entry that is just an IP address).
 		if k == ip {
 			return k, nil
+		}
+	}
+
+	// Hostname-valued entries match against their last successful DNS
+	// resolution (see resolveGatewayACLs / gateway monitor refresh).
+	for _, k := range s.GatewayEndpointsACL {
+		for _, resolvedIP := range s.GatewayACLResolved[k] {
+			if resolvedIP == ip {
+				return k, nil
+			}
 		}
 	}
 

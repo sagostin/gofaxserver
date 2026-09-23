@@ -52,9 +52,14 @@ type Server struct {
 	// Endpoints assigned to a specific number (keyed by the phone number string).
 	NumberEndpoints     map[string][]*Endpoint `json:"number_endpoints,omitempty"`
 	Endpoints           map[string]*Endpoint
-	GatewayEndpointsACL []string    `json:"gateway_endpoint_acl,omitempty"` // allowed source IPs for SIP trunks
-	UpstreamFsGateways  []string    `json:"upstream_fs_gateways"`           // upstream gateway names defined in the global endpoints config/DB
-	FaxTracker          *FaxTracker `json:"fax_tracker,omitempty"`
+	GatewayEndpointsACL []string `json:"gateway_endpoint_acl,omitempty"` // allowed source IPs/hosts for SIP trunks
+	// GatewayACLResolved maps hostname-valued GatewayEndpointsACL entries to
+	// their last successfully resolved IPs. Populated by loadEndpoints and
+	// refreshed by the gateway monitor so far-end IP changes are picked up
+	// automatically. Guarded by mu.
+	GatewayACLResolved map[string][]string `json:"gateway_acl_resolved,omitempty"`
+	UpstreamFsGateways []string            `json:"upstream_fs_gateways"` // upstream gateway names defined in the global endpoints config/DB
+	FaxTracker         *FaxTracker         `json:"fax_tracker,omitempty"`
 	// faxPolicies holds the active fax policy rules; swapped atomically on
 	// reload. Access via ResolveFaxPolicy().
 	faxPolicies atomic.Pointer[[]FaxPolicyRule]

@@ -55,7 +55,8 @@ type config struct {
 		// GatewayProfile is the sofia profile that hosts the gateways.
 		GatewayProfile string `json:"gateway_profile"`
 		// GatewayMonitorSeconds is the poll interval for sofia registration
-		// state tracking of provisioned gateways (0 disables).
+		// state tracking of provisioned gateways and for re-resolving
+		// hostname-valued gateway ACL entries (0 = default 60s, negative disables).
 		GatewayMonitorSeconds int `json:"gateway_monitor_seconds"`
 	} `json:"freeswitch"`
 	Faxing struct {

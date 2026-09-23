@@ -18,8 +18,12 @@
 package gofaxserver
 
 import (
+	"context"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -299,6 +303,153 @@ func TestFsGatewayACLExactMatch(t *testing.T) {
 	s.GatewayEndpointsACL = append(s.GatewayEndpointsACL, "10.0.0.7")
 	if _, err := s.fsGatewayACL("10.0.0.7"); err != nil {
 		t.Errorf("legacy IP-only entry should match exactly: %v", err)
+	}
+}
+
+// fakeACLResolver stubs DNS for ACL resolution tests.
+type fakeACLResolver struct {
+	ips map[string][]string
+	err map[string]error
+}
+
+func (f *fakeACLResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	if err, ok := f.err[host]; ok {
+		return nil, err
+	}
+	ips, ok := f.ips[host]
+	if !ok {
+		return nil, errors.New("no such host")
+	}
+	out := make([]net.IPAddr, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, net.IPAddr{IP: net.ParseIP(ip)})
+	}
+	return out, nil
+}
+
+// withFakeACLResolver swaps the package resolver for the test duration.
+func withFakeACLResolver(t *testing.T, f *fakeACLResolver) {
+	t.Helper()
+	old := aclResolver
+	aclResolver = f
+	t.Cleanup(func() { aclResolver = old })
+}
+
+func TestResolveGatewayACLs(t *testing.T) {
+	fake := &fakeACLResolver{
+		ips: map[string][]string{"pbx.example.com": {"203.0.113.5", "203.0.113.6"}},
+		err: map[string]error{"down.example.com": errors.New("SERVFAIL")},
+	}
+	withFakeACLResolver(t, fake)
+
+	resolved, failures := resolveGatewayACLs([]string{
+		"pbx_acme:pbx.example.com",
+		"sbc_ip:198.51.100.20", // literal IP: no DNS
+		"10.0.0.7",             // legacy IP-only: no DNS
+		"gw_broken:down.example.com",
+	})
+
+	got := resolved["pbx_acme:pbx.example.com"]
+	if len(got) != 2 || !slices.Contains(got, "203.0.113.5") || !slices.Contains(got, "203.0.113.6") {
+		t.Errorf("hostname should resolve to both A records, got %v", got)
+	}
+	if _, ok := resolved["sbc_ip:198.51.100.20"]; ok {
+		t.Error("literal IP entries must not be resolved")
+	}
+	if _, ok := resolved["10.0.0.7"]; ok {
+		t.Error("legacy IP-only entries must not be resolved")
+	}
+	if _, ok := failures["gw_broken:down.example.com"]; !ok {
+		t.Error("failed lookup should be reported in failures")
+	}
+	if _, ok := resolved["gw_broken:down.example.com"]; ok {
+		t.Error("failed lookup must not produce a resolved entry")
+	}
+}
+
+func TestFsGatewayACLHostnameMatch(t *testing.T) {
+	s := &Server{
+		GatewayEndpointsACL: []string{"pbx_acme:pbx.example.com", "sbc_gw:198.51.100.20"},
+		GatewayACLResolved:  map[string][]string{"pbx_acme:pbx.example.com": {"203.0.113.5", "203.0.113.6"}},
+	}
+
+	// Any resolved A record matches, and returns the hostname entry.
+	for _, ip := range []string{"203.0.113.5", "203.0.113.6"} {
+		if got, err := s.fsGatewayACL(ip); err != nil || got != "pbx_acme:pbx.example.com" {
+			t.Errorf("resolved IP %s should match hostname entry: %q %v", ip, got, err)
+		}
+	}
+	// Unresolved hostname entries fail closed.
+	if _, err := s.fsGatewayACL("198.51.100.99"); err == nil {
+		t.Error("IP outside the resolved set must not match")
+	}
+	// Exact-IP entries still take the fast path.
+	if got, err := s.fsGatewayACL("198.51.100.20"); err != nil || got != "sbc_gw:198.51.100.20" {
+		t.Errorf("literal IP entry should still match: %q %v", got, err)
+	}
+}
+
+func TestRefreshGatewayACLResolution(t *testing.T) {
+	fake := &fakeACLResolver{
+		ips: map[string][]string{"pbx.example.com": {"203.0.113.5"}},
+	}
+	withFakeACLResolver(t, fake)
+
+	s := &Server{
+		LogManager:          &gofaxlib.LogManager{},
+		GatewayEndpointsACL: []string{"pbx_acme:pbx.example.com"},
+	}
+
+	// First refresh populates the cache.
+	s.refreshGatewayACLResolution()
+	if got, err := s.fsGatewayACL("203.0.113.5"); err != nil || got != "pbx_acme:pbx.example.com" {
+		t.Fatalf("after refresh, resolved IP should match: %q %v", got, err)
+	}
+
+	// Far end moves: next refresh picks up the new IP automatically.
+	fake.ips["pbx.example.com"] = []string{"203.0.113.9"}
+	s.refreshGatewayACLResolution()
+	if _, err := s.fsGatewayACL("203.0.113.9"); err != nil {
+		t.Errorf("new far-end IP should match after refresh: %v", err)
+	}
+	if _, err := s.fsGatewayACL("203.0.113.5"); err == nil {
+		t.Error("old far-end IP should no longer match after refresh")
+	}
+
+	// DNS outage: last-good IPs are kept.
+	fake.err = map[string]error{"pbx.example.com": errors.New("SERVFAIL")}
+	s.refreshGatewayACLResolution()
+	if _, err := s.fsGatewayACL("203.0.113.9"); err != nil {
+		t.Errorf("DNS failure must keep last-good IPs: %v", err)
+	}
+}
+
+func TestRefreshGatewayACLResolutionPrunesRemovedEntries(t *testing.T) {
+	fake := &fakeACLResolver{
+		ips: map[string][]string{"pbx.example.com": {"203.0.113.5"}},
+	}
+	withFakeACLResolver(t, fake)
+
+	s := &Server{
+		LogManager:          &gofaxlib.LogManager{},
+		GatewayEndpointsACL: []string{"pbx_acme:pbx.example.com"},
+	}
+	s.refreshGatewayACLResolution()
+
+	// Endpoint removed: cache entry must be pruned on the next refresh.
+	s.GatewayEndpointsACL = []string{}
+	s.refreshGatewayACLResolution()
+	if _, err := s.fsGatewayACL("203.0.113.5"); err == nil {
+		t.Error("removed endpoint must not match after refresh")
+	}
+}
+
+func TestEqualIPs(t *testing.T) {
+	if !equalIPs([]string{"1.1.1.1", "2.2.2.2"}, []string{"2.2.2.2", "1.1.1.1"}) {
+		t.Error("order-insensitive comparison expected")
+	}
+	if equalIPs([]string{"1.1.1.1"}, []string{"1.1.1.1", "2.2.2.2"}) {
+		t.Error("different sets must not compare equal")
 	}
 }
 

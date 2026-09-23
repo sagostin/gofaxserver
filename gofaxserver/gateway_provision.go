@@ -698,6 +698,11 @@ func (s *Server) UpdateGateway(name string, spec GatewayProvisionSpec) (*Gateway
 	if err := s.DB.Save(&gw).Error; err != nil {
 		return nil, fmt.Errorf("persist gateway config: %w", err)
 	}
+	// Reload endpoints so a changed realm/endpoint_ip refreshes the in-memory
+	// GatewayEndpointsACL (and its DNS resolution) without a restart.
+	if err := s.loadEndpoints(); err != nil {
+		return nil, fmt.Errorf("gateway updated but endpoint reload failed: %w", err)
+	}
 
 	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"Gateway.Provision",

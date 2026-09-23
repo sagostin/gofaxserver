@@ -370,7 +370,7 @@ key-by-key reference with defaults is in the
 
 | Section | Notes |
 |---|---|
-| `freeswitch.*` | ESL endpoints/password (`event_client_socket_password` must match `autoload_configs/event_socket.conf.xml`), `gateway_config_dir` (provisioning), `gateway_profile` (default `fax`), `gateway_monitor_seconds` (default 60) |
+| `freeswitch.*` | ESL endpoints/password (`event_client_socket_password` must match `autoload_configs/event_socket.conf.xml`), `gateway_config_dir` (provisioning), `gateway_profile` (default `fax`), `gateway_monitor_seconds` (default 60; also the DNS re-resolution cadence for hostname gateway ACL entries) |
 | `faxing.*` | `temp_dir` (must be shared with FreeSWITCH at the same path — see below), `temp_max_age` (janitor, default `24h`), retry policy, T.38 flags, `policy` (fax policy engine thresholds — optional, defaults apply) |
 | `database.*` | must match the PostgreSQL credentials from `.env` |
 | `web.*` | listen addr + admin `api_key` |

@@ -127,7 +127,8 @@ curl -X POST http://<FAX_SERVER>:8080/admin/gateway \
 This renders the template, atomically writes `<gateway_config_dir>/pbx_acme.xml`,
 runs `reloadxml` + `sofia profile fax rescan` over the event socket, and
 creates the linked endpoint (`endpoint=pbx_acme:198.51.100.20` — the realm is
-used as the ACL IP unless `endpoint_ip` is given). On any failure the file and
+used as the ACL address unless `endpoint_ip` is given; a hostname realm works
+too, see ACL Matching below). On any failure the file and
 endpoint are rolled back.
 
 Registered (SIP-auth) gateways are supported by the same templates:
@@ -139,7 +140,7 @@ Registered (SIP-auth) gateways are supported by the same templates:
 Other operations:
 
 - `GET /admin/gateways` — list provisioned gateways with live `sofia status gateway` state, plus an `unmanaged` array of XML files on disk with no DB record (see below)
-- `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision). The linked endpoint's scope, priority and bridge flag are preserved — only its `name:ip` value tracks realm/`endpoint_ip` changes
+- `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision). The linked endpoint's scope, priority and bridge flag are preserved — only its `name:ip-or-hostname` value tracks realm/`endpoint_ip` changes, and the in-memory ACL (incl. DNS resolution) is reloaded immediately
 - `DELETE /admin/gateway/{name}` — `sofia killgw`, remove XML, rescan, delete linked endpoint
 - `POST /admin/gateway/{name}/repair` — re-render a managed gateway from its stored template+params (restores a file deleted or edited out-of-band)
 - `GET|POST /admin/gateway/templates`, `PUT|DELETE /admin/gateway/templates/{id}` — manage templates
@@ -168,11 +169,14 @@ to the gateway API, so a gateway can't silently lose its endpoint row.
 | `gateway_config_dir` | *(empty = disabled)* | Directory gateway XML is written to; must be included by the sofia profile |
 | `gateway_config_chown` | *(empty)* | `user:group` (names or uid:gid) to chown rendered files to; failures log a warning |
 | `gateway_profile` | `fax` | Sofia profile hosting the gateways (used for rescan/killgw/status) |
-| `gateway_monitor_seconds` | `60` | Poll interval for registration state of `register=true` gateways; `-1` disables |
+| `gateway_monitor_seconds` | `60` | Poll interval for registration state of `register=true` gateways **and** for re-resolving hostname-valued gateway ACL entries; `-1` disables both |
 
 The monitor polls `sofia status gateway` for registered gateways, records
 `last_state` on the gateway row, and logs state transitions (drops at WARN,
-recoveries at INFO). State is visible in `GET /admin/gateways` and the portal.
+recoveries at INFO). Each tick also re-resolves hostname ACL entries so
+far-end IP changes are picked up automatically (last-good IPs kept on DNS
+failure — see ACL Matching below). State is visible in `GET /admin/gateways`
+and the portal.
 
 Templates are stored in the database (seeded on first start from
 `gofaxserver/templates/gateways/{sbc,pbx}.xml`, which mirror the
@@ -231,7 +235,7 @@ The gateway name in the XML file (`name="pbx_<CUSTOMERNAME>"`) must match:
 2. The prefix used in the `/admin/endpoint` API call
 
 For example, if gateway file is `pbx_acme.xml` with `name="pbx_acme"`:
-- API endpoint value: `pbx_acme:<PBX_IP>`
+- API endpoint value: `pbx_acme:<PBX_IP>` (or `pbx_acme:<PBX_HOSTNAME>` — see ACL Matching below)
 - This is what gofaxserver's `fsGatewayACL` uses to match the inbound source IP for ACL pass.
 
 ## Realm Configuration
@@ -259,7 +263,14 @@ gofaxserver matches inbound source IPs against the `endpoint` value of registere
 
 For entries in the documented `xml_name:publicIP` format, the IP portion after the first `:` is compared **exactly** against the inbound source IP (legacy IP-only entries match on exact equality). Substring matching was removed — an entry for `192.168.1.10` no longer accidentally passes a call from `92.168.1.1`.
 
-`GatewayEndpointsACL` is built from every endpoint with `endpoint_type=gateway` regardless of scope. This is why gateway endpoints must include the public IP in `xml_name:publicIP` format.
+**Hostnames are supported.** An entry in `xml_name:hostname` form (e.g. produced automatically when the gateway's `realm` is a hostname and no `endpoint_ip` is given) is resolved via DNS, and inbound calls from **any** of its resolved A/AAAA records pass the ACL:
+
+- Resolution happens when endpoints are (re)loaded and is **refreshed on every gateway monitor tick** (`freeswitch.gateway_monitor_seconds`, default 60s; a negative value disables both the registration monitor and the DNS refresh).
+- When the far end's IP changes, the new IPs are picked up automatically on the next tick — no restart or re-provisioning needed. The change is logged at info level: `gateway ACL entry "..." resolved IPs changed: [...] -> [...]`.
+- If a DNS lookup fails, the **last-good IPs are kept** (warning logged); a transient DNS outage never drops a gateway from the ACL. An entry that has never resolved fails closed (401).
+- Updating a gateway via `PUT /admin/gateway/<name>` reloads endpoints and re-resolves immediately.
+
+`GatewayEndpointsACL` is built from every endpoint with `endpoint_type=gateway` regardless of scope. This is why gateway endpoints must include the peer address in `xml_name:publicIP-or-hostname` format.
 
 If the ACL fails, the inbound call is rejected with `respond 401` (`freeswitch_inbound.go`).
 
@@ -348,16 +359,17 @@ See [TENANTS.md](TENANTS.md) for the full priority/scope semantics.
 1. Verify gateway name matches in XML and the `/admin/endpoint` value
 2. Run `sofia profile fax rescan`
 3. Check `sofia status gateway pbx_<NAME>`
-4. Confirm `fsGatewayACL` would pass for the source IP — the `endpoint` value must include the gateway's public IP
+4. Confirm `fsGatewayACL` would pass for the source IP — the `endpoint` value must include the gateway's public IP or a hostname resolving to it
 
 ### ACL Failure (401 from gofaxserver)
 
 If the inbound leg is failing with `respond 401`:
 
 1. Check the gateway endpoint entry is registered (`/admin/reload` if recently added)
-2. Verify the `endpoint` value is `xml_name:publicIP` with the exact public IP of the PBX/SBC after the colon (matching is exact, not substring)
-3. View the FreeSWITCH log to see the actual `sip_network_ip` variable for the call
-4. Confirm `GatewayEndpointsACL` is populated (it is rebuilt on every `/admin/reload` and on endpoint create/update/delete)
+2. Verify the `endpoint` value is `xml_name:publicIP` with the exact public IP of the PBX/SBC after the colon (matching is exact, not substring) — or `xml_name:hostname`, in which case the source IP must be one of the hostname's currently resolved A/AAAA records
+3. For hostname entries: confirm the hostname resolves from the gofaxserver host (`dig +short <hostname>`) and check the logs for `Gateway.Monitor` DNS warnings — an entry that has never resolved fails closed, while a resolved-then-failing entry keeps its last-good IPs
+4. View the FreeSWITCH log to see the actual `sip_network_ip` variable for the call
+5. Confirm `GatewayEndpointsACL` is populated (it is rebuilt on every `/admin/reload` and on endpoint create/update/delete)
 
 ### One-Way Audio
 

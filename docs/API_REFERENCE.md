@@ -428,7 +428,7 @@ POST /admin/gateway
 | `type_id` | uint | Tenant/number ID (0 for `global`) |
 | `priority` | uint | Endpoint priority (`666` = outbound-only) |
 | `bridge` | bool | Bridge/transcoding mode instead of txfax/rxfax |
-| `endpoint_ip` | string | ACL IP for the endpoint value; defaults to `realm` |
+| `endpoint_ip` | string | ACL address (IP or hostname) for the endpoint value; defaults to `realm`. Hostname entries are resolved via DNS and re-resolved on every gateway monitor tick |
 
 On failure at any step, prior steps roll back (file removed, gateway torn
 down, endpoint deleted).
@@ -441,7 +441,8 @@ PUT /admin/gateway/{name}
 
 Same payload as provision, except `type`/`type_id`/`priority`/`bridge` may be
 omitted — the linked endpoint's scope, priority and bridge flag are preserved
-regardless; only its `name:ip` value tracks realm/`endpoint_ip` changes.
+regardless; only its `name:ip-or-hostname` value tracks realm/`endpoint_ip`
+changes (the in-memory ACL and its DNS resolution are reloaded immediately).
 Gateways cannot be renamed — delete and re-provision instead. Adopted gateways
 (no linked endpoint) never gain one through update.
 

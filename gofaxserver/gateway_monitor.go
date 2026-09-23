@@ -19,6 +19,8 @@ package gofaxserver
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -81,6 +83,10 @@ func (s *Server) startGatewayMonitor() {
 }
 
 func (s *Server) monitorTick() {
+	// DNS refresh runs first and independently of the GatewayConfig rows:
+	// hostname ACL entries also come from manually managed endpoints.
+	s.refreshGatewayACLResolution()
+
 	var gws []GatewayConfig
 	if err := s.DB.Find(&gws).Error; err != nil {
 		s.LogManager.SendLog(s.LogManager.BuildLog(
@@ -114,4 +120,62 @@ func (s *Server) monitorTick() {
 			map[string]interface{}{"gateway": gw.Name, "old_state": gw.LastState, "new_state": state},
 		))
 	}
+}
+
+// equalIPs compares two IP lists order-insensitively (DNS resolvers may
+// reorder A/AAAA records between lookups).
+func equalIPs(a, b []string) bool {
+	as := slices.Clone(a)
+	bs := slices.Clone(b)
+	sort.Strings(as)
+	sort.Strings(bs)
+	return slices.Equal(as, bs)
+}
+
+// refreshGatewayACLResolution re-resolves hostname-valued gateway ACL entries
+// so inbound ACL matching tracks far-end IP changes without manual
+// intervention. Last-good IPs are kept for entries whose lookup fails, so a
+// transient DNS error never drops a gateway from the ACL.
+func (s *Server) refreshGatewayACLResolution() {
+	s.mu.RLock()
+	entries := slices.Clone(s.GatewayEndpointsACL)
+	previous := make(map[string][]string, len(s.GatewayACLResolved))
+	for k, v := range s.GatewayACLResolved {
+		previous[k] = slices.Clone(v)
+	}
+	s.mu.RUnlock()
+
+	if len(entries) == 0 {
+		return
+	}
+
+	resolved, failures := resolveGatewayACLs(entries)
+
+	for entry, err := range failures {
+		if old, ok := previous[entry]; ok {
+			resolved[entry] = old // keep last-good IPs
+		}
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Gateway.Monitor",
+			fmt.Sprintf("gateway ACL entry %q DNS resolution failed: %v (keeping previous IPs %v)", entry, err, previous[entry]),
+			logrus.WarnLevel,
+			map[string]interface{}{"endpoint": entry},
+		))
+	}
+
+	// A changed IP set means the far end moved — worth surfacing.
+	for entry, ips := range resolved {
+		if old, ok := previous[entry]; !ok || !equalIPs(old, ips) {
+			s.LogManager.SendLog(s.LogManager.BuildLog(
+				"Gateway.Monitor",
+				fmt.Sprintf("gateway ACL entry %q resolved IPs changed: %v -> %v", entry, previous[entry], ips),
+				logrus.InfoLevel,
+				map[string]interface{}{"endpoint": entry, "old_ips": previous[entry], "new_ips": ips},
+			))
+		}
+	}
+
+	s.mu.Lock()
+	s.GatewayACLResolved = resolved
+	s.mu.Unlock()
 }
