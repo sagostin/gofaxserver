@@ -18,7 +18,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/gofaxserver /tmp
+ReadWritePaths=/var/lib/gofaxserver /tmp /etc/freeswitch/gateways
 
 [Install]
 WantedBy=multi-user.target

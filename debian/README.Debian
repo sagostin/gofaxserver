@@ -11,7 +11,7 @@ This package installs the gofaxserver binary built from
 Post-install steps
 ------------------
 
-1. Create the database and user (see README.md "Database Setup").
+1. Create the database and user (see docs/INSTALLATION.md "Configuration").
 
 2. Create a dedicated system user (the package does this automatically):
 

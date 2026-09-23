@@ -54,7 +54,8 @@ type config struct {
 		GatewayMonitorSeconds int `json:"gateway_monitor_seconds"`
 	} `json:"freeswitch"`
 	Faxing struct {
-		TempDir                      string          `json:"temp_dir"` // eg. /opt/gofaxip/tmp
+		TempDir                      string          `json:"temp_dir"`     // shared with FreeSWITCH (store-and-forward files)
+		TempMaxAge                   string          `json:"temp_max_age"` // janitor: delete orphaned temp files older than this (s/m/h/d; empty = 24h; "0s" = disabled)
 		EnableT38                    bool            `json:"enable_t38"`
 		RequestT38                   bool            `json:"request_t38"`
 		RecipientFromDiversionHeader bool            `json:"recipient_from_diversion_header"`

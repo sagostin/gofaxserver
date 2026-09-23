@@ -3,11 +3,16 @@ Description=FreeSWITCH VoIP Softswitch
 After=network.target local-fs.target
 
 [Service]
-User=uucp
-Group=uucp
+# Stock SignalWire/Debian packages run FreeSWITCH as root; that is the
+# simplest working setup with gofaxserver's API-driven gateway provisioning
+# (root reads the 0640 files gofaxserver writes into /etc/freeswitch/gateways).
+# To harden, set User/Group below to freeswitch and follow the permissions
+# recipe in docs/GATEWAYS.md (setgid group dir + gofaxserver in that group).
+#User=freeswitch
+#Group=freeswitch
 RuntimeDirectory=freeswitch
 PermissionsStartOnly=true
-ExecStartPre=/bin/chown -R uucp: /var/lib/freeswitch /var/log/freeswitch
+#ExecStartPre=/bin/chown -R freeswitch: /var/lib/freeswitch /var/log/freeswitch
 ExecStart=/usr/bin/freeswitch -nonat -nc -nf
 TimeoutSec=45s
 Restart=always

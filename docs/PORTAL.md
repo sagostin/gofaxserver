@@ -325,6 +325,7 @@ exceptional, and re-run reconcile after them.
 
 ## Related Documentation
 
+- [INSTALLATION.md](INSTALLATION.md) — Full installation guide (gofaxserver + FreeSWITCH + portal)
 - [SETUP.md](SETUP.md) — Step-by-step setup procedure
 - [GATEWAYS.md](GATEWAYS.md) — FreeSWITCH gateway configuration + API-driven provisioning
 - [TENANTS.md](TENANTS.md) — Tenant, endpoint, and notify configuration

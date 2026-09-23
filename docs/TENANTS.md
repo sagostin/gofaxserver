@@ -298,6 +298,7 @@ func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error
 
 ## Related Documentation
 
+- [INSTALLATION.md](INSTALLATION.md) — Full installation guide
 - [SETUP.md](SETUP.md) — Step-by-step setup procedure
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
 - [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation

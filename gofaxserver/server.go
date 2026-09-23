@@ -276,6 +276,10 @@ func (s *Server) Start() {
 	// register=true are provisioned; disabled when gateway_monitor_seconds < 0)
 	go s.startGatewayMonitor()
 
+	// start the temp-file janitor (removes orphaned fax files from temp_dir;
+	// see tempclean.go)
+	go s.startTempJanitor()
+
 	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"Server",
 		fmt.Sprintf("started queue and router"),

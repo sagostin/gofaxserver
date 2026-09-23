@@ -290,6 +290,7 @@ PostgreSQL SSL mode and timezone are environment-variable overrides (`POSTGRES_S
 
 ## Related Documentation
 
+- [INSTALLATION.md](INSTALLATION.md) — Full installation guide
 - [SETUP.md](SETUP.md) — Step-by-step tenant setup procedure
 - [TENANTS.md](TENANTS.md) — Tenant, endpoint, and notify configuration
 - [API_REFERENCE.md](API_REFERENCE.md) — Full HTTP API documentation

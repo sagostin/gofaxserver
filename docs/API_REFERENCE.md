@@ -701,6 +701,7 @@ Use the returned `api_key` for further authentication (or keep using the origina
 
 ## Related Documentation
 
+- [INSTALLATION.md](INSTALLATION.md) — Full installation guide
 - [SETUP.md](SETUP.md) — Step-by-step setup procedure
 - [TENANTS.md](TENANTS.md) — Tenant and endpoint configuration
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture

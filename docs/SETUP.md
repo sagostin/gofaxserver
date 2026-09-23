@@ -1,6 +1,10 @@
-# Customer Setup Guide
+# Customer Setup Guide (Tenant Onboarding)
 
 This document describes the procedure for adding a new customer/tenant to gofaxserver.
+
+> **Prerequisite:** a running gofaxserver + FreeSWITCH stack. If you haven't
+> installed the system yet, start with [INSTALLATION.md](INSTALLATION.md) and
+> come back here for day-2 customer onboarding.
 
 ## Overview
 
@@ -436,6 +440,7 @@ The TUI provides a step-by-step wizard for creating tenants, endpoints, and numb
 
 ## Related Documentation
 
+- [INSTALLATION.md](INSTALLATION.md) — Full installation guide (prerequisite)
 - [TENANTS.md](TENANTS.md) — Detailed tenant modes and configuration
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture
 - [API_REFERENCE.md](API_REFERENCE.md) — Full API documentation

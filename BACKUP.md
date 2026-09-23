@@ -20,6 +20,12 @@ The database dump covers all gofaxserver tables, including `gateway_templates`,
 FreeSWITCH archive (`/etc/freeswitch`). If the portal is deployed, back up its
 `gofaxportal` database the same way (it holds orgs, users, and job history).
 
+> **Do not back up `faxing.temp_dir`** (default `/var/lib/gofaxserver/tmp`).
+> It holds transient store-and-forward fax content — sensitive and
+> self-cleaning (per-job deletion + a periodic janitor). Excluding it keeps
+> backups smaller and avoids retaining fax content beyond its intended
+> lifetime.
+
 ---
 
 ## 1. Configuration

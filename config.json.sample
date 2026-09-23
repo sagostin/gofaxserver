@@ -16,7 +16,8 @@
     "gateway_monitor_seconds": 60
   },
   "faxing": {
-    "temp_dir": "/opt/gofaxip/tmp",
+    "temp_dir": "/var/lib/gofaxserver/tmp",
+    "temp_max_age": "24h",
     "enable_t38": true,
     "request_t38": true,
     "recipient_from_diversion_header": false,

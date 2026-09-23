@@ -25,4 +25,4 @@ rm -rf examples/legacy
 
 The current FreeSWITCH configuration templates that **are** still in use live
 in `examples/freeswitch/` and are documented in
-[`../docs/GATEWAYS.md`](../docs/GATEWAYS.md).
+[`../docs/GATEWAYS.md`](../../docs/GATEWAYS.md).

@@ -68,49 +68,24 @@ gofaxserver implements an intelligent T.38 flip-flop mechanism:
 
 ## Installation
 
-### Prerequisites
+**Full guide: [docs/INSTALLATION.md](docs/INSTALLATION.md)** — requirements, port matrix, deployment paths (all-container or FreeSWITCH on the host), portal + TLS, post-install verification, hardening, and troubleshooting.
 
-- Debian 12 (bookworm) recommended
-- Go 1.22+ (only required when building from source)
-- PostgreSQL 12+
-- FreeSWITCH with `mod_spandsp`, `mod_sofia`, `mod_event_socket`
-- ImageMagick 7+ and Ghostscript (for PDF → TIFF conversion of outgoing faxes)
-
-### FreeSWITCH Packages
+Quick start (all containers on a Docker host — FreeSWITCH included):
 
 ```bash
-TOKEN=YOURSIGNALWIRETOKEN
-
-apt-get update && apt-get install -y gnupg2 wget lsb-release
-wget --http-user=signalwire --http-password=$TOKEN -O /usr/share/keyrings/signalwire-freeswitch-repo.gpg \
-    https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg
-
-echo "machine freeswitch.signalwire.com login signalwire password $TOKEN" > /etc/apt/auth.conf
-echo "deb [signed-by=/usr/share/keyrings/signalwire-freeswitch-repo.gpg] https://freeswitch.signalwire.com/repo/deb/debian-release/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/freeswitch.list
-
-apt-get update
-apt-get install freeswitch freeswitch-mod-commands freeswitch-mod-dptools \
-    freeswitch-mod-event-socket freeswitch-mod-sofia freeswitch-mod-spandsp \
-    freeswitch-mod-tone-stream freeswitch-mod-db freeswitch-mod-syslog freeswitch-mod-logfile
+git clone <repo-url> gofaxserver && cd gofaxserver
+cp sample.env .env && cp config.json.sample config.json   # edit both (DB creds must match;
+                                                          # set SIGNALWIRE_TOKEN, api_key, psk)
+$EDITOR examples/freeswitch/vars.xml                       # REQUIRED: sofia_ip = host LAN IP
+mkdir -p volumes/gateways && sudo chown 1000:1000 volumes/gateways
+docker compose -f docker-compose.full.yml up -d --build
 ```
 
-The included `examples/freeswitch/` directory contains a complete set of autoload configs (Sofia `fax` profile, SpanDSP, etc.) and gateway templates — copy them into `/etc/freeswitch/` and adjust the realm/IP for your environment.
-
-### Database Setup
-
-```sql
-CREATE DATABASE gofaxserver;
-CREATE USER gofaxserver WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE gofaxserver TO gofaxserver;
--- Required for GORM auto-migration on first startup:
-GRANT ALL ON SCHEMA public TO gofaxserver;
-```
-
-The server auto-migrates the schema (tenants, tenant_numbers, endpoints, tenant_users, fax_job_results, gateway_templates, gateway_configs, dialplan_rules) on startup — no manual migration step is required.
+To run FreeSWITCH as a Debian host service instead (with gofaxserver/PostgreSQL in Docker via `docker-compose.yml`, or bare-metal from the `debian/` package), see [Path B](docs/INSTALLATION.md#path-b--freeswitch-as-a-debian-host-service). The fax portal deploys on top of either path — see [docs/PORTAL.md](docs/PORTAL.md).
 
 ## Configuration
 
-Configuration is stored in `/etc/gofaxserver/config.json`. A complete example (matching `gofaxlib/config.go`):
+Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in the all-container compose). The server **auto-migrates the database schema** (tenants, tenant_numbers, endpoints, tenant_users, fax_job_results, gateway_templates, gateway_configs, dialplan_rules) on startup — no manual migration step is required. A complete example (matching `gofaxlib/config.go`):
 
 ```json
 {
@@ -128,7 +103,8 @@ Configuration is stored in `/etc/gofaxserver/config.json`. A complete example (m
     "gateway_monitor_seconds": 60
   },
   "faxing": {
-    "temp_dir": "/tmp",
+    "temp_dir": "/var/lib/gofaxserver/tmp",
+    "temp_max_age": "24h",
     "enable_t38": true,
     "request_t38": true,
     "recipient_from_diversion_header": false,
@@ -182,6 +158,7 @@ Notes:
 - `event_server_socket` (port **8022**) is the inbound ESL listener for FreeSWITCH to push events to gofaxserver. The Sofia `fax` profile points its dialplan at `socket:127.0.0.1:8022 async full` (see `examples/freeswitch/autoload_configs/sofia.conf.xml`).
 - `event_client_socket` (port **8021**) is the outbound ESL connection gofaxserver uses to originate calls and write to `mod_db`.
 - `answer_after` and `wait_time` are in **milliseconds** (`uint64`).
+- `temp_dir` holds store-and-forward fax content (uploaded TIFFs, received faxes) — **FreeSWITCH must see the same directory at the same path**, so in container setups it is a shared mount (the compose files handle this). A built-in janitor deletes orphaned files older than `temp_max_age` (default `24h`, `"0s"` disables); completed jobs delete their files immediately.
 - `retry_delay` accepts `s/m/h/d` suffixes (e.g. `60s`, `5m`).
 - `psk` is the symmetric key used to encrypt/decrypt tenant user passwords and gateway credentials — generate a strong random value in production.
 - `gateway_config_dir` enables API-driven provisioning: rendered gateway XML is written there and FreeSWITCH is reloaded over ESL. Leave empty to disable. `gateway_config_chown` optionally chowns files, `gateway_profile` selects the Sofia profile to rescan (default `fax`), `gateway_monitor_seconds` is the registration poll interval (default 60, negative disables). See [docs/GATEWAYS.md](docs/GATEWAYS.md).

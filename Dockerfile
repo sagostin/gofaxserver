@@ -43,6 +43,12 @@ RUN wget https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.0-31.t
 WORKDIR /app
 COPY --from=builder /app/main .
 
+# Shared fax temp dir (faxing.temp_dir). FreeSWITCH must see the same files
+# at the same path (store-and-forward), so this is a mount point in the
+# compose files. Pre-create it owned by appuser so a fresh named volume
+# inherits the right ownership.
+RUN mkdir -p /var/lib/gofaxserver/tmp && chown -R appuser:appuser /var/lib/gofaxserver
+
 # Switch to non-root user
 USER appuser
 
