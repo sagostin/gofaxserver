@@ -1,3 +1,20 @@
+// This file is part of gofaxserver - https://github.com/sagostin/gofaxserver
+// Copyright (C) 2025-2026 Shaun Agostinho
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; version 2
+// of the License.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
 package gofaxserver
 
 // Fax policy engine: Postgres-backed replacement for the old FreeSWITCH
@@ -47,6 +64,7 @@ const (
 	PolicyEffectECMOn         = "ecm_on"
 	PolicyEffectV17Off        = "v17_off"
 	PolicyEffectSoftmodemOnly = "softmodem_only" // never request/accept T.38
+	PolicyEffectVarOverride   = "var_override"   // inject/override a dialstring channel variable
 )
 
 // Rule origins.
@@ -61,11 +79,17 @@ type FaxPolicyRule struct {
 	Scope     string     `gorm:"index" json:"scope"` // dst | src | pair
 	SrcNumber string     `gorm:"index" json:"src_number"`
 	DstNumber string     `gorm:"index" json:"dst_number"`
-	Effect    string     `json:"effect"`              // t38_off | t38_on | ecm_off | ecm_on | v17_off | softmodem_only
+	Effect    string     `json:"effect"`              // t38_off | t38_on | ecm_off | ecm_on | v17_off | softmodem_only | var_override
 	AppliesTo string     `json:"applies_to"`          // both | softmodem | bridge
 	Origin    string     `gorm:"index" json:"origin"` // manual | auto
 	Enabled   bool       `json:"enabled"`
 	ExpiresAt *time.Time `json:"expires_at"` // nil = never expires
+
+	// Var override payload (only for effect=var_override; empty otherwise).
+	// Overrides a channel variable in the outbound dialstring, replacing the
+	// old mod_db "override-<number>" realm.
+	VarName  string `json:"var_name"`
+	VarValue string `json:"var_value"`
 
 	// Learning statistics (maintained for auto rules; informational for manual).
 	FailureCount  int        `json:"failure_count"`
@@ -104,6 +128,10 @@ type FaxPolicy struct {
 	// callers use it to skip pair-state updates and flag the job.
 	T38ForcedOff  bool `json:"t38_forced_off"`
 	SoftmodemOnly bool `json:"softmodem_only"`
+
+	// VarOverrides holds channel-variable overrides from var_override rules,
+	// keyed by variable name; per name the most specific rule wins.
+	VarOverrides map[string]string `json:"var_overrides"`
 
 	AppliedRuleIDs []uint `json:"applied_rule_ids"`
 }
@@ -239,6 +267,15 @@ func (s *Server) ResolveFaxPolicy(srcNum, dstNum, callType string) FaxPolicy {
 	t38Decided := false
 	for _, r := range matches {
 		switch r.Effect {
+		case PolicyEffectVarOverride:
+			// Per variable name, the first (most specific) rule wins;
+			// different names from different scopes merge.
+			if policy.VarOverrides == nil {
+				policy.VarOverrides = map[string]string{}
+			}
+			if _, exists := policy.VarOverrides[r.VarName]; !exists {
+				policy.VarOverrides[r.VarName] = r.VarValue
+			}
 		case PolicyEffectSoftmodemOnly:
 			if !t38Decided {
 				t38Decided = true

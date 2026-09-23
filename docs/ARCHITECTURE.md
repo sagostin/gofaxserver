@@ -30,7 +30,7 @@ A visual companion diagram is available in [`../gofaxserver.excalidraw`](../gofa
 | Component | File | Description |
 |-----------|------|-------------|
 | **Event Socket Server (inbound)** | `gofaxserver/freeswitch_inbound.go` | Listens on `event_server_socket` (default `:8022`). Receives channel events, performs dialplan transforms, decides T.38 strategy, handles `rxfax` / bridge execution. |
-| **Event Socket Server (outbound)** | `gofaxserver/freeswitch_outbound.go` | Connects to FreeSWITCH via `event_client_socket` (default `:8021`) to originate calls (`SendFax`) and read per-number channel-var overrides from `mod_db` (realm `override-<number>`). |
+| **Event Socket Server (outbound)** | `gofaxserver/freeswitch_outbound.go` | Connects to FreeSWITCH via `event_client_socket` (default `:8021`) to originate calls (`SendFax`). |
 | **Router** | `gofaxserver/router.go` | Consumes `FaxJobRouting` channel, resolves tenants, applies priority-based endpoint selection, and enqueues to `Queue`. Bridge detection is in `detectAndRouteToBridge` / `checkForBridge`. |
 | **Dialplan Manager** | `gofaxserver/dialplan.go`, `server.go:loadDialplan` | Applies regex transformation rules to caller/callee numbers before tenant lookup. Source is `config` (config.json `dialplan.rules`, or built-in defaults) or `db` (`dialplan_rules` table, hot-reloaded via `/admin/reload` and CRUD writes); the active manager is swapped atomically. |
 | **Gateway Provisioner** | `gofaxserver/gateway_provision.go`, `web_gateways.go` | API-driven FreeSWITCH gateway management: DB-backed templates rendered to `freeswitch.gateway_config_dir`, activated via ESL (`reloadxml` + `sofia profile <gateway_profile> rescan`), combined with endpoint creation. Secrets encrypted at rest with `psk`. Tracks DB↔disk drift (unmanaged files, missing files, repair). |
@@ -39,7 +39,7 @@ A visual companion diagram is available in [`../gofaxserver.excalidraw`](../gofa
 | **Web Server** | `gofaxserver/web.go` | Iris HTTP server on `web.listen` (default `:8080`). Hosts admin, tenant-user, and authenticate parties. |
 | **FaxTracker** | `gofaxserver/faxtracker.go` | In-memory state for in-flight jobs; exposed via `GET /admin/faxes`. |
 | **LogManager** | `gofaxlib/log.go` | Stdout + Loki dispatcher; all components push structured logs through it. |
-| **Fax Policy Engine** | `gofaxserver/faxpolicy.go`, `web_faxpolicy.go` | Postgres-backed T.38/ECM/V.17 policy rules + adaptive learning (replaces the old FreeSWITCH `mod_db` softmodem fallback) and persisted flip-flop pair state. |
+| **Fax Policy Engine** | `gofaxserver/faxpolicy.go`, `web_faxpolicy.go` | Postgres-backed T.38/ECM/V.17 policy rules + adaptive learning (replaces the old FreeSWITCH `mod_db` softmodem fallback), persisted flip-flop pair state, and `var_override` dialstring channel-variable overrides (replaces the mod_db `override-<number>` realm). |
 | **Notify** | `gofaxserver/notify.go` | Async fan-out of `email_report`, `email_full`, `email_full_failure`, `webhook`, `webhook_form` to a tenant / number's `notify` string. |
 
 ---

@@ -12,6 +12,8 @@ interface Rule {
   origin: string
   enabled: boolean
   expires_at: string | null
+  var_name: string
+  var_value: string
   failure_count: number
   success_count: number
   last_seen_at: string | null
@@ -47,7 +49,7 @@ const resolveType = ref('softmodem')
 const resolveResult = ref<any>(null)
 
 const scopes = ['dst', 'src', 'pair']
-const effects = ['t38_off', 't38_on', 'ecm_off', 'ecm_on', 'v17_off', 'softmodem_only']
+const effects = ['t38_off', 't38_on', 'ecm_off', 'ecm_on', 'v17_off', 'softmodem_only', 'var_override']
 const appliesTo = ['both', 'softmodem', 'bridge']
 
 const filtered = computed(() => rules.value)
@@ -78,6 +80,7 @@ function startNew() {
   editing.value = {
     id: 0, scope: 'dst', src_number: '', dst_number: '', effect: 't38_off',
     applies_to: 'both', origin: 'manual', enabled: true, expires_at: null,
+    var_name: '', var_value: '',
     failure_count: 0, success_count: 0, last_seen_at: null, last_t38_status: '',
     notes: '', created_at: '', updated_at: '',
   }
@@ -208,7 +211,7 @@ function scopeLabel(r: Rule) {
             <td><input type="checkbox" :checked="r.enabled" @change="toggle(r)" /></td>
             <td>{{ r.scope }}</td>
             <td><code>{{ scopeLabel(r) }}</code></td>
-            <td><code>{{ r.effect }}</code></td>
+            <td><code>{{ r.effect }}</code><span v-if="r.effect === 'var_override'" class="muted"> {{ r.var_name }}={{ r.var_value }}</span></td>
             <td>{{ r.applies_to }}</td>
             <td>{{ r.origin }}</td>
             <td>{{ r.failure_count }}/{{ r.success_count }}</td>
@@ -242,6 +245,8 @@ function scopeLabel(r: Rule) {
             <option v-for="e in effects" :key="e" :value="e">{{ e }}</option>
           </select>
         </div>
+        <div v-if="editing.effect === 'var_override'"><label>Var name</label><input v-model="editing.var_name" placeholder="fax_verbose" /></div>
+        <div v-if="editing.effect === 'var_override'"><label>Var value</label><input v-model="editing.var_value" placeholder="true" /></div>
         <div>
           <label>Applies to</label>
           <select v-model="editing.applies_to">
@@ -257,6 +262,7 @@ function scopeLabel(r: Rule) {
       <p class="muted">
         <code>t38_off</code> = never request/offer T.38 for matching calls (softmodem fallback);
         <code>softmodem_only</code> = hard refusal of T.38 including far-end re-INVITEs;
+        <code>var_override</code> = override an outbound dialstring channel variable (e.g. <code>fax_verbose=true</code>);
         <code>applies_to</code> selects softmodem (txfax/rxfax) vs bridged (transcoded) calls.
       </p>
     </div>
@@ -282,6 +288,9 @@ function scopeLabel(r: Rule) {
           decided_by_rule=<b>{{ resolveResult.policy.t38_decided }}</b>,
           ecm=<b>{{ resolveResult.policy.use_ecm === null ? 'inherit' : resolveResult.policy.use_ecm }}</b>,
           disable_v17=<b>{{ resolveResult.policy.disable_v17 === null ? 'inherit' : resolveResult.policy.disable_v17 }}</b>
+          <template v-if="resolveResult.policy.var_overrides && Object.keys(resolveResult.policy.var_overrides).length">
+            , var overrides=<b><code v-for="(v, k) in resolveResult.policy.var_overrides" :key="k" style="margin-right:6px">{{ k }}={{ v }}</code></b>
+          </template>
         </p>
         <p v-if="resolveResult.applied_rules?.length" class="muted">
           Applied rules:

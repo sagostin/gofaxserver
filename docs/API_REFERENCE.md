@@ -591,12 +591,16 @@ DELETE /admin/fax-policies/pair-states/{id}
 ```
 
 - `scope`: `dst` (destination only), `src` (source only), or `pair` (specific src→dst, requires both numbers) — pair rules let one sender be affected without impacting other senders to the same destination.
-- `effect`: `t38_off`, `t38_on`, `ecm_off`, `ecm_on`, `v17_off`, `softmodem_only`.
+- `effect`: `t38_off`, `t38_on`, `ecm_off`, `ecm_on`, `v17_off`, `softmodem_only`, `var_override`.
 - `applies_to`: `both`, `softmodem` (non-bridged txfax/rxfax), or `bridge` (transcoded) — softmodem and bridged calls are controlled independently.
 - `expires_at`: optional RFC3339 timestamp for temporary rules.
+- `var_name` / `var_value`: required when `effect=var_override` — overrides a channel variable in the outbound dialstring (replacing the old mod_db `override-<number>` realm). `var_name` must match `[A-Za-z0-9_]+`; `origination_uuid` cannot be overridden. Cleared/ignored on all other effects.
 
 Resolution order: per attribute, most specific scope wins (pair > dst > src),
-`manual` beats `auto`, and at equal specificity "off" beats "on". Rules with
+`manual` beats `auto`, and at equal specificity "off" beats "on". For
+`var_override`, the most specific rule wins *per variable name* and different
+names from different scopes merge; the resolved set is returned as
+`policy.var_overrides` and applied to the outbound dialstring. Rules with
 `origin=auto` are learned from fax failures and heal after consecutive
 successes or expiry. The `resolve` endpoint is a dry run returning the
 effective policy and applied rule set for a src/dst/call-type.

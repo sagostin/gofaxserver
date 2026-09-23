@@ -171,7 +171,7 @@ Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in th
 
 Notes:
 - `event_server_socket` (port **8022**) is the inbound ESL listener for FreeSWITCH to push events to gofaxserver. The Sofia `fax` profile points its dialplan at `socket:127.0.0.1:8022 async full` (see `examples/freeswitch/autoload_configs/sofia.conf.xml`).
-- `event_client_socket` (port **8021**) is the outbound ESL connection gofaxserver uses to originate calls and read per-number channel-var overrides from `mod_db` (realm `override-<number>`).
+- `event_client_socket` (port **8021**) is the outbound ESL connection gofaxserver uses to originate calls.
 - `answer_after` and `wait_time` are in **milliseconds** (`uint64`).
 - `temp_dir` holds store-and-forward fax content (uploaded TIFFs, received faxes) — **FreeSWITCH must see the same directory at the same path**, so in container setups it is a shared mount (the compose files handle this). A built-in janitor deletes orphaned files older than `temp_max_age` (default `24h`, `"0s"` disables); completed jobs delete their files immediately.
 - `retry_delay` accepts `s/m/h/d` suffixes (e.g. `60s`, `5m`).
@@ -327,7 +327,7 @@ Endpoints created through gateway provisioning (`POST /admin/gateway`) are *mana
 
 When T.38 negotiation fails repeatedly with a remote station, gofaxserver can disable T.38 (and, on further failures, ECM/V.17) for that destination, source, or src/dst pair. Policy is stored in Postgres (`fax_policy_rules`) — **no FreeSWITCH `mod_db` involved** — and hot-reloaded on every write. The engine also auto-learns rules from failure signatures and heals them after consecutive successes or TTL expiry (`faxing.policy` thresholds).
 
-Rules are composable and single-purpose: `t38_off`/`t38_on`, `ecm_off`/`ecm_on`, `v17_off`, `softmodem_only`. Each rule is scoped by `dst`, `src`, or `pair`, and by call type via `applies_to` (`both`/`softmodem`/`bridge`) — so you can disable T.38 for softmodem calls to a number while leaving bridged (transcoded) calls untouched. Resolution per attribute: pair > dst > src scope, manual beats auto-learned, and "off" beats "on" (fail-safe).
+Rules are composable and single-purpose: `t38_off`/`t38_on`, `ecm_off`/`ecm_on`, `v17_off`, `softmodem_only`, and `var_override` (inject/override an outbound dialstring channel variable via `var_name`/`var_value` — e.g. `fax_verbose=true` for one problematic destination; this replaces the old mod_db `override-<number>` realm). Each rule is scoped by `dst`, `src`, or `pair`, and by call type via `applies_to` (`both`/`softmodem`/`bridge`) — so you can disable T.38 for softmodem calls to a number while leaving bridged (transcoded) calls untouched. Resolution per attribute: pair > dst > src scope, manual beats auto-learned, and "off" beats "on" (fail-safe); for `var_override`, the most specific rule wins per variable name and different names merge.
 
 The old `POST /admin/fallback` endpoint still works as a deprecated shim — it creates a manual dst-scoped `t38_off` rule:
 

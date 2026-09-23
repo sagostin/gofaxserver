@@ -1,5 +1,7 @@
-// This file is part of the GOfax.IP project - https://github.com/gonicus/gofaxip
+// This file is part of gofaxserver - https://github.com/sagostin/gofaxserver
+// Originally part of the GOfax.IP project - https://github.com/gonicus/gofaxip
 // Copyright (C) 2014 GONICUS GmbH, Germany - http://www.gonicus.de
+// Modifications Copyright (C) 2025-2026 Shaun Agostinho
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
@@ -623,57 +625,21 @@ func (t *eventClient) start() {
 		"fax_verbose":                  strconv.FormatBool(gofaxlib.Config.FreeSwitch.Verbose),
 	}
 
-	// Look up variable overrides for given number
-	overrideRealm := fmt.Sprintf("override-%s", t.faxjob.CalleeNumber)
-	overrides, err := gofaxlib.FreeSwitchDBList(t.conn, overrideRealm)
-	if err != nil {
-		if strings.TrimSpace(err.Error()) != "no reply" {
-			t.logManager.SendLog(t.logManager.BuildLog(
-				"EventClient",
-				"FreeSwitchDBList error: %v",
-				logrus.ErrorLevel,
-				map[string]interface{}{
-					"uuid":          t.faxjob.UUID.String(),
-					"overrideRealm": overrideRealm,
-					"error":         err.Error(),
-				},
-				err,
-			))
-		}
-	} else {
-		for _, varName := range overrides {
-			varValue, err := gofaxlib.FreeSwitchDBSelect(t.conn, overrideRealm, varName)
-			if err != nil {
-				if strings.TrimSpace(err.Error()) != "no reply" {
-					t.logManager.SendLog(t.logManager.BuildLog(
-						"EventClient",
-						"FreeSwitchDBSelect error for %s: %v",
-						logrus.ErrorLevel,
-						map[string]interface{}{
-							"uuid":          t.faxjob.UUID.String(),
-							"overrideRealm": overrideRealm,
-							"var_name":      varName,
-							"error":         err.Error(),
-						},
-						varName, err,
-					))
-				}
-			} else {
-				t.logManager.SendLog(t.logManager.BuildLog(
-					"EventClient",
-					"Overriding dialstring variable %s=%s",
-					logrus.InfoLevel,
-					map[string]interface{}{
-						"uuid":          t.faxjob.UUID.String(),
-						"overrideRealm": overrideRealm,
-						"var_name":      varName,
-						"var_value":     varValue,
-					},
-					varName, varValue,
-				))
-				dsVariablesMap[varName] = varValue
-			}
-		}
+	// Apply channel-variable overrides from fax policy rules (replaces the
+	// old mod_db "override-<number>" realm).
+	for varName, varValue := range policy.VarOverrides {
+		t.logManager.SendLog(t.logManager.BuildLog(
+			"EventClient",
+			"Overriding dialstring variable %s=%s (fax policy)",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"uuid":      t.faxjob.UUID.String(),
+				"var_name":  varName,
+				"var_value": varValue,
+			},
+			varName, varValue,
+		))
+		dsVariablesMap[varName] = varValue
 	}
 
 	// Assemble dialstring

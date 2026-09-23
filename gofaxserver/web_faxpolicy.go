@@ -1,8 +1,26 @@
+// This file is part of gofaxserver - https://github.com/sagostin/gofaxserver
+// Copyright (C) 2025-2026 Shaun Agostinho
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; version 2
+// of the License.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
 package gofaxserver
 
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +31,14 @@ import (
 // Admin handlers for Postgres-backed fax policy rules (T.38 / ECM / V.17).
 // These replace the old FreeSWITCH mod_db softmodem fallback. Mutations take
 // effect immediately via reloadFaxPolicies.
+
+var varNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// deniedVarOverrides are channel variables that must never be overridden via
+// var_override rules (would break fax job tracking/result correlation).
+var deniedVarOverrides = map[string]bool{
+	"origination_uuid": true,
+}
 
 func validateFaxPolicyRule(r *FaxPolicyRule) error {
 	switch r.Scope {
@@ -37,8 +63,21 @@ func validateFaxPolicyRule(r *FaxPolicyRule) error {
 	switch r.Effect {
 	case PolicyEffectT38Off, PolicyEffectT38On, PolicyEffectECMOff,
 		PolicyEffectECMOn, PolicyEffectV17Off, PolicyEffectSoftmodemOnly:
+		r.VarName = ""
+		r.VarValue = ""
+	case PolicyEffectVarOverride:
+		r.VarName = strings.TrimSpace(r.VarName)
+		if !varNamePattern.MatchString(r.VarName) {
+			return fmt.Errorf("var_name is required for effect=var_override and must match [A-Za-z0-9_]+")
+		}
+		if deniedVarOverrides[strings.ToLower(r.VarName)] {
+			return fmt.Errorf("var_name %q may not be overridden (would break fax job tracking)", r.VarName)
+		}
+		if strings.TrimSpace(r.VarValue) == "" {
+			return fmt.Errorf("var_value is required for effect=var_override")
+		}
 	default:
-		return fmt.Errorf("invalid effect %q (t38_off|t38_on|ecm_off|ecm_on|v17_off|softmodem_only)", r.Effect)
+		return fmt.Errorf("invalid effect %q (t38_off|t38_on|ecm_off|ecm_on|v17_off|softmodem_only|var_override)", r.Effect)
 	}
 
 	switch r.AppliesTo {

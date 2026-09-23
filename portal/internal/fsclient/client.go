@@ -1,3 +1,20 @@
+// This file is part of gofaxserver - https://github.com/sagostin/gofaxserver
+// Copyright (C) 2025-2026 Shaun Agostinho
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; version 2
+// of the License.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
 package fsclient
 
 import (
@@ -205,11 +222,13 @@ type FaxPolicyRule struct {
 	Scope         string     `json:"scope"` // dst | src | pair
 	SrcNumber     string     `json:"src_number"`
 	DstNumber     string     `json:"dst_number"`
-	Effect        string     `json:"effect"`     // t38_off | t38_on | ecm_off | ecm_on | v17_off | softmodem_only
+	Effect        string     `json:"effect"`     // t38_off | t38_on | ecm_off | ecm_on | v17_off | softmodem_only | var_override
 	AppliesTo     string     `json:"applies_to"` // both | softmodem | bridge
 	Origin        string     `json:"origin"`     // manual | auto
 	Enabled       bool       `json:"enabled"`
 	ExpiresAt     *time.Time `json:"expires_at"`
+	VarName       string     `json:"var_name"`  // effect=var_override only
+	VarValue      string     `json:"var_value"` // effect=var_override only
 	FailureCount  int        `json:"failure_count"`
 	SuccessCount  int        `json:"success_count"`
 	LastSeenAt    *time.Time `json:"last_seen_at"`

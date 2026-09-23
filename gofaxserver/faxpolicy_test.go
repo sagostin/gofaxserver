@@ -1,3 +1,20 @@
+// This file is part of gofaxserver - https://github.com/sagostin/gofaxserver
+// Copyright (C) 2025-2026 Shaun Agostinho
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; version 2
+// of the License.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
 package gofaxserver
 
 import (
@@ -273,5 +290,104 @@ func TestIsT38NegotiationHangup(t *testing.T) {
 		if isT38NegotiationHangup(hc) {
 			t.Fatalf("%s must not be treated as negotiation failure", hc)
 		}
+	}
+}
+
+func TestResolveFaxPolicyVarOverrideDst(t *testing.T) {
+	withFaxDefaults(t)
+	s := serverWithRules(FaxPolicyRule{
+		ID: 1, Scope: PolicyScopeDst, DstNumber: "222",
+		Effect: PolicyEffectVarOverride, AppliesTo: "both",
+		Origin: PolicyOriginManual, Enabled: true,
+		VarName: "ignore_early_media", VarValue: "false",
+	})
+
+	p := s.ResolveFaxPolicy("111", "222", CallTypeSoftmodem)
+	if p.VarOverrides["ignore_early_media"] != "false" {
+		t.Fatalf("expected var override, got %+v", p.VarOverrides)
+	}
+	if len(p.AppliedRuleIDs) != 1 || p.AppliedRuleIDs[0] != 1 {
+		t.Fatalf("expected rule 1 applied, got %v", p.AppliedRuleIDs)
+	}
+}
+
+func TestResolveFaxPolicyVarOverridePairBeatsDstAndMerges(t *testing.T) {
+	withFaxDefaults(t)
+	s := serverWithRules(
+		FaxPolicyRule{ID: 1, Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectVarOverride, AppliesTo: "both", Origin: PolicyOriginManual, Enabled: true, VarName: "fax_verbose", VarValue: "false"},
+		FaxPolicyRule{ID: 2, Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectVarOverride, AppliesTo: "both", Origin: PolicyOriginManual, Enabled: true, VarName: "sip_h_X-Custom", VarValue: "dst"},
+		FaxPolicyRule{ID: 3, Scope: PolicyScopePair, SrcNumber: "111", DstNumber: "222", Effect: PolicyEffectVarOverride, AppliesTo: "both", Origin: PolicyOriginManual, Enabled: true, VarName: "sip_h_X-Custom", VarValue: "pair"},
+	)
+
+	p := s.ResolveFaxPolicy("111", "222", CallTypeSoftmodem)
+	if p.VarOverrides["fax_verbose"] != "false" {
+		t.Fatalf("dst var should merge in, got %+v", p.VarOverrides)
+	}
+	if p.VarOverrides["sip_h_X-Custom"] != "pair" {
+		t.Fatalf("pair rule should win per var name, got %+v", p.VarOverrides)
+	}
+
+	// A different sender gets the dst value for the same var.
+	p2 := s.ResolveFaxPolicy("999", "222", CallTypeSoftmodem)
+	if p2.VarOverrides["sip_h_X-Custom"] != "dst" {
+		t.Fatalf("other senders should get the dst rule, got %+v", p2.VarOverrides)
+	}
+}
+
+func TestResolveFaxPolicyVarOverrideAppliesTo(t *testing.T) {
+	withFaxDefaults(t)
+	s := serverWithRules(FaxPolicyRule{
+		ID: 1, Scope: PolicyScopeDst, DstNumber: "222",
+		Effect: PolicyEffectVarOverride, AppliesTo: CallTypeSoftmodem,
+		Origin: PolicyOriginManual, Enabled: true,
+		VarName: "fax_verbose", VarValue: "true",
+	})
+
+	p := s.ResolveFaxPolicy("111", "222", CallTypeSoftmodem)
+	if p.VarOverrides["fax_verbose"] != "true" {
+		t.Fatalf("softmodem call should get the override, got %+v", p.VarOverrides)
+	}
+	p2 := s.ResolveFaxPolicy("111", "222", CallTypeBridge)
+	if len(p2.VarOverrides) != 0 {
+		t.Fatalf("bridge call must not get the softmodem-scoped override, got %+v", p2.VarOverrides)
+	}
+}
+
+func TestValidateFaxPolicyRuleVarOverride(t *testing.T) {
+	// Valid var_override rule.
+	r := FaxPolicyRule{Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectVarOverride, VarName: "fax_verbose", VarValue: "true"}
+	if err := validateFaxPolicyRule(&r); err != nil {
+		t.Fatalf("valid var_override rejected: %v", err)
+	}
+
+	// Missing / invalid var name.
+	r = FaxPolicyRule{Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectVarOverride, VarValue: "true"}
+	if err := validateFaxPolicyRule(&r); err == nil {
+		t.Fatal("missing var_name should be rejected")
+	}
+	r = FaxPolicyRule{Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectVarOverride, VarName: "bad name!", VarValue: "true"}
+	if err := validateFaxPolicyRule(&r); err == nil {
+		t.Fatal("invalid var_name charset should be rejected")
+	}
+
+	// Empty value.
+	r = FaxPolicyRule{Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectVarOverride, VarName: "fax_verbose"}
+	if err := validateFaxPolicyRule(&r); err == nil {
+		t.Fatal("empty var_value should be rejected")
+	}
+
+	// Denylisted variable.
+	r = FaxPolicyRule{Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectVarOverride, VarName: "origination_uuid", VarValue: "x"}
+	if err := validateFaxPolicyRule(&r); err == nil {
+		t.Fatal("origination_uuid override should be rejected")
+	}
+
+	// Var fields are cleared on other effects.
+	r = FaxPolicyRule{Scope: PolicyScopeDst, DstNumber: "222", Effect: PolicyEffectT38Off, VarName: "fax_verbose", VarValue: "true"}
+	if err := validateFaxPolicyRule(&r); err != nil {
+		t.Fatalf("t38_off rejected: %v", err)
+	}
+	if r.VarName != "" || r.VarValue != "" {
+		t.Fatalf("var fields must be cleared for t38_off, got %q=%q", r.VarName, r.VarValue)
 	}
 }

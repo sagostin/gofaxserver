@@ -1,5 +1,7 @@
-// This file is part of the GOfax.IP project - https://github.com/gonicus/gofaxip
+// This file is part of gofaxserver - https://github.com/sagostin/gofaxserver
+// Originally part of the GOfax.IP project - https://github.com/gonicus/gofaxip
 // Copyright (C) 2014 GONICUS GmbH, Germany - http://www.gonicus.de
+// Modifications Copyright (C) 2025-2026 Shaun Agostinho
 //
 // This program is free software; you can redistribute it and/or
 // modify it under the terms of the GNU General Public License
