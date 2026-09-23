@@ -6,6 +6,7 @@ services:
     image: gofaxportal:latest
     container_name: gofaxportal
     environment:
+      # Set false if the portal is served over plain HTTP (no TLS proxy).
       - PORTAL_COOKIE_SECURE=${PORTAL_COOKIE_SECURE:-true}
       - PORTAL_DB_HOST=${PORTAL_DB_HOST:-127.0.0.1}
       - PORTAL_DB_PORT=${PORTAL_DB_PORT:-5432}
@@ -26,20 +27,6 @@ services:
     network_mode: host
     restart: always
 
-  # Optional TLS reverse proxy. Start with:
-  #   cp Caddyfile.sample Caddyfile && $EDITOR Caddyfile
-  #   docker compose --profile tls up -d
-  caddy:
-    image: caddy:2-alpine
-    container_name: gofaxportal-caddy
-    profiles: ["tls"]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    network_mode: host
-    restart: always
-
-volumes:
-  caddy_data:
-  caddy_config:
+# The Caddy reverse proxy lives in the root docker-compose.full.yml (Caddyfile
+# at the repo root) — it fronts both this portal and gofaxserver; TLS is
+# configured in the Caddyfile. See docs/INSTALLATION.md "Reverse proxy & TLS".

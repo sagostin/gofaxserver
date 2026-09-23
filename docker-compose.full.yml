@@ -1,6 +1,5 @@
-version: '3.8'
-
-# All-containerized deployment: PostgreSQL + FreeSWITCH + gofaxserver.
+# All-containerized deployment: PostgreSQL + FreeSWITCH + gofaxserver + Caddy
+# (reverse proxy; plain HTTP by default, TLS configured in the Caddyfile).
 # FreeSWITCH runs in a container here; for FreeSWITCH as a Debian host
 # service use docker-compose.yml instead. See docs/INSTALLATION.md.
 #
@@ -25,7 +24,9 @@ services:
     image: postgres:15-alpine
     container_name: postgres
     env_file:
-      - .env
+      # optional so `up -d caddy` works on host-service (Path B) installs
+      - path: .env
+        required: false
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -69,7 +70,8 @@ services:
     image: gofaxserver:latest
     container_name: gofaxserver
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./config.json:/etc/gofaxserver/config.json:ro
       # Must be the SAME path FreeSWITCH reads gateway XML from, and must
@@ -84,6 +86,21 @@ services:
       - postgres
       - freeswitch
 
+  # Reverse proxy fronting BOTH gofaxserver (:8080) and the fax portal
+  # (:8081, from portal/docker-compose.yml). Plain HTTP on :80 by default;
+  # TLS is configured entirely in the Caddyfile — set a DNS name there and
+  # Caddy obtains/renews certificates automatically (see Caddyfile.sample).
+  # Requires ./Caddyfile (seeded by `make setup` / `make caddy-setup`).
+  caddy:
+    image: caddy:2-alpine
+    container_name: gofax-caddy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    network_mode: host
+    restart: always
+
 secrets:
   signalwire_token:
     environment: SIGNALWIRE_TOKEN
@@ -92,3 +109,5 @@ volumes:
   fs_data:
   fs_logs:
   faxtmp:
+  caddy_data:
+  caddy_config:

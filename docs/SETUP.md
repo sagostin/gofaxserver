@@ -2,6 +2,16 @@
 
 This document describes the procedure for adding a new customer/tenant to gofaxserver.
 
+> **Which onboarding guide?** This one is for **direct-integration tenants** —
+> customers whose on-site systems (MFPs, scripts, fax servers, PBX-adjacent
+> apps) call gofaxserver's REST API directly (`/fax/send`, `/fax/status`)
+> using their own per-tenant username/password (Basic auth), provisioned by an
+> admin via the `/admin/*` API as described below. **Portal-managed orgs** —
+> where end users send/receive through the web UI — are provisioned from the
+> portal itself instead (see [PORTAL.md](PORTAL.md)). The two models coexist
+> on one server and share the same tenant database; a portal org is just a
+> tenant whose service-account user (`svc_*`) is owned by the portal.
+>
 > **Prerequisite:** a running gofaxserver + FreeSWITCH stack. If you haven't
 > installed the system yet, start with [INSTALLATION.md](INSTALLATION.md) and
 > come back here for day-2 customer onboarding.

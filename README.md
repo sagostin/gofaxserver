@@ -43,7 +43,7 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [gofaxserver.excalidraw](gofaxserver.excalidraw) for a visual diagram.
 
-> **Fax Portal:** a separate multi-tenant web UI (`portal/`, own binary + DB) that lets end users send faxes, track jobs with instant pushed status updates, and receive inbound faxes into an encrypted-at-rest inbox — see [docs/PORTAL.md](docs/PORTAL.md).
+> **Fax Portal:** a separate multi-tenant web UI (`portal/`, own binary + DB) that lets end users send faxes, track jobs with instant pushed status updates, and receive inbound faxes into an encrypted-at-rest inbox — see [docs/PORTAL.md](docs/PORTAL.md). A Caddy reverse proxy (part of the main compose stack) fronts the portal **and** the gofaxserver API on one address — plain HTTP by default, automatic HTTPS when you set a DNS name in the `Caddyfile`; existing direct API clients keep working unchanged, through the proxy or direct `:8080`.
 
 ### Core Components
 

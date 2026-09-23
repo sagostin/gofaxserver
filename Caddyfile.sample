@@ -1,0 +1,81 @@
+# gofaxserver — optional Caddy reverse proxy.
+#
+# One address fronts BOTH services, split by path:
+#   /portal/*                              → fax portal   (127.0.0.1:8081)
+#   everything else (/fax/*, /admin/*, …)  → gofaxserver  (127.0.0.1:8080)
+#
+# TLS is optional:
+#   - Default (below): plain HTTP on :80 — no DNS or certificates needed.
+#     Existing gofaxserver API clients keep working byte-for-byte through
+#     the proxy (or can keep hitting :8080 directly — either works).
+#   - HTTPS (commented block): set a DNS name and Caddy obtains/renews
+#     certificates automatically; ports 80/443 must be reachable.
+#
+# Setup:
+#   1. cp Caddyfile.sample Caddyfile  (or: make caddy-setup)
+#   2. make caddy-up
+#
+# NOTE: with plain HTTP, set PORTAL_COOKIE_SECURE=false in portal/.env or
+# portal logins will not stick (Secure cookies are never sent over http).
+
+:80 {
+	encode gzip
+
+	# Portal UI + portal API (path-prefixed).
+	@portal path /portal /portal/*
+	handle @portal {
+		reverse_proxy 127.0.0.1:8081 {
+			health_uri /portal/api/health
+			health_interval 15s
+			health_timeout 5s
+		}
+	}
+
+	# Everything else: gofaxserver API, proxied through unchanged.
+	# /fax/send, /fax/status, /tenant/user/authenticate, /admin/*, /health
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}
+
+# ---------------------------------------------------------------------------
+# HTTPS mode: replace the :80 block above with this one and set your DNS
+# name (must resolve to this host; 80/443 reachable for Let's Encrypt).
+# Caddy then redirects http -> https and renews certs automatically.
+# Set PORTAL_COOKIE_SECURE=true again once this is live.
+#
+# fax.example.com {
+# 	encode gzip
+#
+# 	@portal path /portal /portal/*
+# 	handle @portal {
+# 		reverse_proxy 127.0.0.1:8081 {
+# 			health_uri /portal/api/health
+# 			health_interval 15s
+# 			health_timeout 5s
+# 		}
+# 	}
+#
+# 	handle {
+# 		reverse_proxy 127.0.0.1:8080
+# 	}
+#
+# 	header {
+# 		Strict-Transport-Security "max-age=31536000"
+# 		X-Content-Type-Options "nosniff"
+# 		X-Frame-Options "DENY"
+# 		Referrer-Policy "strict-origin-when-cross-origin"
+# 		-Server
+# 	}
+# }
+# ---------------------------------------------------------------------------
+# Optional hardening: restrict the gofaxserver admin API by source IP while
+# leaving tenant-user fax endpoints public (add inside your site block):
+#
+# 	@adminApi path /admin/*
+# 	handle @adminApi {
+# 		@notInternal not remote_ip 10.0.0.0/8 192.168.0.0/16
+# 		respond @notInternal 403
+# 		reverse_proxy 127.0.0.1:8080
+# 	}
+# ---------------------------------------------------------------------------

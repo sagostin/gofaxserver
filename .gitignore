@@ -23,6 +23,7 @@ packaging/*.deb
 .env
 config.json
 portal/config.json
+Caddyfile
 
 # --- Local runtime data (docker compose mounts) ---
 postgres/data/

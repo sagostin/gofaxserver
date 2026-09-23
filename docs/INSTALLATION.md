@@ -19,7 +19,7 @@ day-2 work — adding customers, gateways, numbers — see
                  │   ▲                                                                  │
                  │   └── HTTP ── fax portal :8081 (optional) ◄── browsers               │
                  └───────────────────────────────▲──────────────────────────────────────┘
-                                                 └── Caddy :80/:443 (optional TLS)
+                                                 └── Caddy :80 (HTTPS when a DNS name is set)
 ```
 
 - **FreeSWITCH** terminates/originates SIP and T.38/G.711 media. Its config
@@ -81,7 +81,7 @@ Fax is low-throughput; the database and FreeSWITCH logs dominate disk use.
 | 8080 | tcp | gofaxserver REST API | localhost / trusted clients (or via Caddy) |
 | 8081 | tcp | Fax portal | localhost (front with Caddy) |
 | 5432 | tcp | PostgreSQL | **localhost only** |
-| 80/443 | tcp | Caddy TLS termination (optional) | public |
+| 80 (443) | tcp | Caddy reverse proxy (HTTP default; 443 when a DNS name is set) | public |
 
 Firewall 5060 and the RTP range to known peer IPs where possible; everything
 else should stay on localhost or behind Caddy.
@@ -286,7 +286,7 @@ source (`go build -o gofaxserver ./gofaxserver/cmd/gofaxserver`), then follow
 
 ---
 
-## 4. Portal + TLS (optional, recommended)
+## 4. Portal + reverse proxy (optional, recommended)
 
 The portal gives end users a web UI and automates tenant/gateway management.
 Full details: [PORTAL.md](PORTAL.md). Short version (works on both paths):
@@ -298,22 +298,49 @@ psql -U postgres -c "CREATE DATABASE gofaxportal;" \
      -c "GRANT ALL PRIVILEGES ON DATABASE gofaxportal TO gofaxportal;" \
      -c "GRANT ALL ON SCHEMA public TO gofaxportal;" gofaxportal
 
-cd portal
-cp sample.env .env && $EDITOR .env
+# From the repo root:
+make portal-env && $EDITOR portal/.env
 #   PORTAL_SESSION_SECRET / PORTAL_ENCRYPTION_KEY: openssl rand -hex 32
 #   PORTAL_ADMIN_API_KEY = gofaxserver web.api_key
 #   PORTAL_DB_*          = the database above
 #   PORTAL_BOOTSTRAP_PASSWORD = first admin login (rotate after first use)
-docker compose up -d --build                            # portal on :8081
-
-# TLS (recommended): one hostname fronts portal + gofaxserver API
-cp Caddyfile.sample Caddyfile && $EDITOR Caddyfile      # set your DNS name
-docker compose --profile tls up -d                      # Caddy on :80/:443
+make portal-up                                      # portal on :8081
 ```
 
 First login: sign in with the bootstrap admin and immediately reset its
-password (**Admin → Users → Reset PW**). Keep `PORTAL_COOKIE_SECURE=true`
-once HTTPS is live.
+password (**Admin → Users → Reset PW**).
+
+### Reverse proxy & TLS (Caddy, recommended)
+
+Caddy is part of the main stack (`docker-compose.full.yml`) and fronts both
+services on one address, split by path. `make setup` seeds a `Caddyfile` at
+the repo root; Caddy starts with `make up` (`make caddy-up`/`caddy-down`/
+`caddy-logs` manage it individually):
+
+- **Default: plain HTTP on :80** — no DNS or certificates needed; everything
+  is proxied as-is. Set `PORTAL_COOKIE_SECURE=false` in `portal/.env` while
+  serving plain HTTP, or portal logins won't stick (Secure cookies are never
+  sent over http).
+- **HTTPS: set your DNS name** — switch to the commented hostname block in
+  the `Caddyfile` (DNS must resolve to the host; 80/443 reachable) and Caddy
+  obtains/renews certificates automatically. Set `PORTAL_COOKIE_SECURE=true`
+  again once live.
+
+Caddy splits by path: `/portal/*` → portal (:8081), everything else
+(`/fax/*`, `/admin/*`, `/tenant/*`, `/health`) → gofaxserver (:8080),
+proxied through byte-for-byte. Port exposure with this setup:
+
+- **80** (or **80/443** with a hostname set) — public
+- **8080/8081** — localhost, or firewalled to trusted client IPs
+- **Direct-integration tenants** (on-site systems calling `/fax/*` with
+  tenant-user Basic auth) should use `https://<host>` from untrusted
+  networks — the API is identical through Caddy; Basic auth is only base64.
+  On a LAN/VPN, direct `:8080` firewalled to their IPs is fine — see
+  [SETUP.md](SETUP.md).
+
+To keep gofaxserver's admin API off the public address, add the commented
+IP-restriction snippet for `/admin/*` from `Caddyfile.sample` to your site
+block — or delete the fallback `handle` block so only `/portal/*` is exposed.
 
 **Inbound delivery to the portal:** to let org numbers receive faxes into
 the portal inbox, point gofaxserver at the portal and (optionally) set a
@@ -449,12 +476,13 @@ Run these once after either path (substitute `docker exec freeswitch …` for
       (see [BACKUP.md](../BACKUP.md))
 - [ ] Firewall: 5060 + RTP range restricted to known peers; 8021/8022/5432
       localhost-only; 8080/8081 not exposed publicly (front with Caddy)
-- [ ] Caddy: enable the commented IP-restriction block for `/admin/*` in
-      `portal/Caddyfile.sample` if admin API exposure worries you
+- [ ] Caddy: add the commented IP-restriction snippet for `/admin/*` from
+      `Caddyfile.sample` if admin API exposure worries you
 - [ ] `faxing.temp_dir` on an encrypted filesystem if fax content at rest is
       in scope for your threat model; `temp_max_age` tuned to your retention
       policy (default 24h janitor sweep)
-- [ ] `PORTAL_COOKIE_SECURE=true` behind HTTPS; bootstrap password rotated
+- [ ] `PORTAL_COOKIE_SECURE=true` once HTTPS is live (`false` while the
+      Caddyfile serves plain HTTP); bootstrap password rotated
 - [ ] Loki/remote logs treated as sensitive (they contain fax metadata)
 
 ## Troubleshooting

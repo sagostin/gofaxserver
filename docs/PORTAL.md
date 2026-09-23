@@ -16,6 +16,15 @@ gofaxserver ──(POST /portal/api/inbound/<svc>, X-API-Key)──► Portal :8
 
 Neither the admin API key nor service-account passwords ever reach the browser.
 
+> **Two integration models coexist on one server.** The portal is *one* way
+> tenants use gofaxserver, not *the* way. Portal orgs are ordinary tenants
+> whose `svc_*` service-account user is owned by the portal — don't hand-edit
+> or rotate those users via `/admin/*`. Alongside them, **direct-integration
+> tenants** keep working unchanged: an admin provisions their tenant, numbers,
+> and users via `/admin/*` (see [SETUP.md](SETUP.md)) and their on-site
+> systems call `/fax/*` with their own tenant-user username/password. Both
+> share the same tenant database, queue, and gateways.
+
 ## Quick start (from zero)
 
 0. **Deploy the updated gofaxserver** — for full functionality it must be
@@ -27,19 +36,24 @@ Neither the admin API key nor service-account passwords ever reach the browser.
    gateway work.
 1. **Create the portal database** (SQL under [Build & run](#build--run)) —
    schema auto-migrates on first start.
-2. **Secrets & env** — `cd portal && cp sample.env .env`, fill the five
-   required values (see [Configuration](#configuration) /
+2. **Secrets & env** — `make portal-env` from the repo root (or `cd portal &&
+   cp sample.env .env`), fill the five required values (see
+   [Configuration](#configuration) /
    [How config reaches the container](#how-config-reaches-the-container)):
    `PORTAL_SESSION_SECRET`, `PORTAL_ENCRYPTION_KEY` (back it up with the DB!),
    `PORTAL_ADMIN_API_KEY` (= gofaxserver `web.api_key`), `PORTAL_DB_PASSWORD`,
    `PORTAL_BOOTSTRAP_PASSWORD`.
-3. **Start it** — `docker compose up -d --build` (host networking, :8081), or
-   build the binary locally: `make portal-build` from the repo root (builds
+3. **Start it** — `make portal-up` from the repo root (host networking,
+   :8081), or `docker compose up -d --build` from `portal/`, or build the
+   binary locally: `make portal-build` from the repo root (builds
    the frontend dist, then the binary to `bin/gofaxportal`), or by hand
    `cd portal/frontend && npm install && npm run build` then
    `cd portal && go build -o gofaxportal ./cmd/portal`.
-4. **TLS** — `cp Caddyfile.sample Caddyfile`, set your hostname,
-   `docker compose --profile tls up -d` (see [TLS with Caddy](#tls-with-caddy-recommended)).
+4. **Reverse proxy** — Caddy runs with the main stack (`make up`); the
+   `Caddyfile` at the repo root (seeded by `make setup`) defaults to plain
+   HTTP on :80. Set your DNS name in it for automatic HTTPS (see
+   [Reverse proxy & TLS](#reverse-proxy--tls-caddy)). While on plain HTTP,
+   set `PORTAL_COOKIE_SECURE=false` in `portal/.env` or logins won't stick.
 5. **First login** — sign in with the bootstrap admin, then immediately
    Admin → Users → Reset PW (the bootstrap password lives in plaintext env
    until rotated); afterwards the bootstrap env vars can be blanked.
@@ -307,18 +321,25 @@ openssl rand -hex 32   # PORTAL_SESSION_SECRET
 openssl rand -hex 32   # PORTAL_ENCRYPTION_KEY (back this up with the DB!)
 ```
 
-## TLS with Caddy (recommended)
+## Reverse proxy & TLS (Caddy)
 
-Use `portal/Caddyfile.sample`: copy it to `portal/Caddyfile`, set your DNS
-name, then start the optional Caddy profile (host networking, so it binds
-80/443 directly; certificates are issued/renewed automatically):
+Caddy is part of the main stack (`docker-compose.full.yml`) and fronts
+**both** services on one address. The `Caddyfile` lives at the repo root,
+seeded from `Caddyfile.sample` by `make setup` (never clobbered):
 
-```bash
-cd portal && cp Caddyfile.sample Caddyfile && $EDITOR Caddyfile
-docker compose --profile tls up -d
-```
+- **Default: plain HTTP on :80** — no DNS or certificates needed; TLS is not
+  forced. Set `PORTAL_COOKIE_SECURE=false` in `portal/.env` in this mode or
+  logins won't stick (Secure cookies are never sent over http).
+- **HTTPS: set your DNS name** — switch to the commented hostname block in
+  the `Caddyfile` (DNS must resolve to the host; 80/443 reachable) and Caddy
+  obtains/renews certificates automatically, redirecting http → https. Set
+  `PORTAL_COOKIE_SECURE=true` again once live.
 
-The sample Caddyfile fronts **both** services on one hostname:
+Caddy runs with `make up`; manage it individually with `make caddy-up` /
+`caddy-down` / `caddy-logs`. It uses host networking, so it works against
+host-installed (Path B) services exactly the same.
+
+The address is split by path:
 
 - `/portal/*` → portal (`127.0.0.1:8081`)
 - everything else (`/fax/*`, `/admin/*`, `/tenant/*`, `/health`) → gofaxserver
@@ -326,14 +347,18 @@ The sample Caddyfile fronts **both** services on one hostname:
   (Basic-auth curl scripts etc.) keep working on the hostname unchanged, and
   can also keep hitting `:8080` directly if it's firewalled to them.
 
-The sample also includes a commented hardening block that IP-restricts
-`/admin/*` while leaving tenant-user fax endpoints public. If you do **not**
-want gofaxserver's admin API on the hostname at all, delete the fallback
-`handle` block instead and expose only `/portal/*` — clients then continue
-using direct `:8080` access.
+**Guidance for direct-integration tenants** (on-site systems calling `/fax/*`
+with their own tenant-user credentials): Basic auth sends credentials
+base64-only, so any client reaching the server over an untrusted network
+should use `https://<host>` — the API is byte-for-byte identical through
+Caddy, only the scheme and port change. On a LAN/VPN, continuing to hit
+`:8080` firewalled to the tenant's IPs is fine.
 
-Once HTTPS is live keep `PORTAL_COOKIE_SECURE=true` (the compose default) so
-session cookies are marked Secure.
+`Caddyfile.sample` ends with a commented IP-restriction snippet for `/admin/*`
+you can add to your site block while leaving tenant-user fax endpoints
+public. If you do **not** want gofaxserver's admin API on the address at all,
+delete the fallback `handle` block instead and expose only `/portal/*` —
+clients then continue using direct `:8080` access.
 
 ## Build & run
 
