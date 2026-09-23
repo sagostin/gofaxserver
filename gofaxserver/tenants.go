@@ -28,7 +28,7 @@ import (
 type Tenant struct {
 	ID      uint           `gorm:"primaryKey" json:"id"`
 	Name    string         `json:"name"`
-	Notify  string         `json:"notify"` // notify list, seperated by commas, eg. email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://webhook.com/endpoint
+	Notify  string         `json:"notify"` // notify list, seperated by commas, eg. email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://webhook.com/endpoint,portal->svc_username
 	Numbers []TenantNumber `gorm:"foreignKey:TenantID" json:"numbers"`
 }
 
@@ -47,7 +47,7 @@ type TenantNumber struct {
 	Number   string `gorm:"unique;not null" json:"number"` // 10 digit or what ever format matches the transformation rules
 	Name     string `json:"name"`                          // caller id name that is displayed on the fax? eg. +1 555-555-5555
 	Header   string `json:"header"`                        // this is the name displayed at the top of the fax eg. "Company Faxing Relay"
-	Notify   string `json:"notify"`                        // notify list, seperated by commas, eg. email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://webhook.com/endpoint
+	Notify   string `json:"notify"`                        // notify list, seperated by commas, eg. email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://webhook.com/endpoint,portal->svc_username
 }
 
 // loadTenants loads Tenants (with their associated numbers) from the database.

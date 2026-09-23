@@ -44,8 +44,8 @@ type Endpoint struct {
     ID           uint   `gorm:"primaryKey" json:"id"`
     Type         string `json:"type"`          // "tenant", "number", or "global"
     TypeID       uint   `json:"type_id"`       // Tenant ID, TenantNumber ID, or 0
-    EndpointType string `json:"endpoint_type"` // "gateway", "webhook", "email"
-    Endpoint     string `json:"endpoint"`      // gateway: "xml_name:publicIP"; webhook: URL; email: addr
+    EndpointType string `json:"endpoint_type"` // "gateway", "webhook", "email", "portal"
+    Endpoint     string `json:"endpoint"`      // gateway: "xml_name:publicIP"; webhook: URL; email: addr; portal: svc_username
     Priority     uint   `json:"priority"`      // Lower = higher priority
     Bridge       bool   `json:"bridge"`        // Enable T.38/G.711 transcoding
 }
@@ -53,7 +53,7 @@ type Endpoint struct {
 
 **Type values:**
 - `type` ∈ `{tenant, number, global}`
-- `endpoint_type` ∈ `{gateway, webhook, email}`
+- `endpoint_type` ∈ `{gateway, webhook, email, portal}`
 
 **Priority 666** — special value meaning "do not receive inbound faxes". The endpoint is filtered out of `getEndpointsForNumber` (inbound delivery) but is still present in `getEndpointsForBridge` for use as a source gateway in outbound bridge calls.
 
@@ -250,6 +250,7 @@ email_report->support@customer.com,webhook_form->https://n8n.example.com/webhook
 | `email_full_failure->` | Like `email_full` but only on failure | Only sent when fax fails; original fax included |
 | `webhook->` | HTTP POST with JSON payload | Base64-encoded PDF report + fax job data as JSON |
 | `webhook_form->` | Multipart form POST | First page PDF attached to form data |
+| `portal->` | HTTP POST to gofaxportal | Compact final-outcome JSON (see below) |
 
 **Notes:**
 - `email_report` sends a PDF report with attempt history but no fax attachment; it fires on completion in both directions (success or failure).
@@ -257,6 +258,7 @@ email_report->support@customer.com,webhook_form->https://n8n.example.com/webhook
 - `email_full_failure` is like `email_full` but only triggers on failed faxes (`all_attempts_failed == true`).
 - `webhook` sends a JSON POST with base64-encoded PDF report and fax job data.
 - `webhook_form` sends a multipart form POST with the first page of the fax as a PDF attachment (useful for n8n workflows).
+- `portal` sends a compact JSON status push to `portal.url + /portal/api/notify/<destination>`, where the destination is the portal org's service-account username (the portal manages this entry itself via its number assignments — see [PORTAL.md](PORTAL.md)). Carries no file data; requires `portal.url` (and `portal.api_key` when the portal has `inbound_api_key` set) in `config.json`.
 - Unknown types (e.g. a bare `email->` per the inline comment in `tenants.go:13`) are logged and dropped — only the documented types above are dispatched.
 
 ### Multiple Recipients

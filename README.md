@@ -43,7 +43,7 @@ A modern, multi-tenant Fax over IP server using FreeSWITCH and SpanDSP. Unlike l
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design and [gofaxserver.excalidraw](gofaxserver.excalidraw) for a visual diagram.
 
-> **Fax Portal:** a separate multi-tenant web UI (`portal/`, own binary + DB) that lets end users send faxes, track jobs, and receive inbound faxes into an encrypted-at-rest inbox — see [docs/PORTAL.md](docs/PORTAL.md).
+> **Fax Portal:** a separate multi-tenant web UI (`portal/`, own binary + DB) that lets end users send faxes, track jobs with instant pushed status updates, and receive inbound faxes into an encrypted-at-rest inbox — see [docs/PORTAL.md](docs/PORTAL.md).
 
 ### Core Components
 
@@ -78,12 +78,14 @@ Quick start (all containers on a Docker host — FreeSWITCH included):
 
 ```bash
 git clone <repo-url> gofaxserver && cd gofaxserver
-cp sample.env .env && cp config.json.sample config.json   # edit both (DB creds must match;
-                                                          # set SIGNALWIRE_TOKEN, api_key, psk)
-$EDITOR examples/freeswitch/vars.xml                       # REQUIRED: sofia_ip = host LAN IP
-mkdir -p volumes/gateways && sudo chown 1000:1000 volumes/gateways
-docker compose -f docker-compose.full.yml up -d --build
+make setup    # seeds .env, config.json, volumes/ — never overwrites existing files
+$EDITOR .env config.json                          # DB creds must match; set SIGNALWIRE_TOKEN, api_key, psk
+$EDITOR volumes/freeswitch/vars.xml               # REQUIRED: sofia_ip = host LAN IP
+make fs-build # needs SIGNALWIRE_TOKEN (from .env or the environment)
+make up
 ```
+
+No `make`? The equivalent manual steps are in [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
 To run FreeSWITCH as a Debian host service instead (with gofaxserver/PostgreSQL in Docker via `docker-compose.yml`, or bare-metal from the `debian/` package), see [Path B](docs/INSTALLATION.md#path-b--freeswitch-as-a-debian-host-service). The fax portal deploys on top of either path — see [docs/PORTAL.md](docs/PORTAL.md).
 
@@ -358,6 +360,8 @@ Full reference: [docs/API_REFERENCE.md](docs/API_REFERENCE.md).
 The entry point is `gofaxserver/cmd/gofaxserver/main.go`. The module path is `gofaxserver` (local), so the simplest build is:
 
 ```bash
+make build           # -> bin/gofaxserver
+# or by hand:
 go build -o gofaxserver ./gofaxserver/cmd/gofaxserver
 ```
 
@@ -366,7 +370,7 @@ Run with `-c /etc/gofaxserver/config.json` (default if not specified) and `-vers
 ### Build Docker image
 
 ```bash
-./build.sh           # uses the project-root Dockerfile
+make docker-build    # wraps the project-root Dockerfile (replaces build.sh)
 # or:
 docker build -t gofaxserver:latest .
 ```

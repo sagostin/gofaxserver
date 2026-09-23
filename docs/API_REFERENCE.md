@@ -219,7 +219,7 @@ POST /admin/number
 }
 ```
 
-The optional `notify` field overrides the tenant-level `notify` for faxes involving this number.
+The optional `notify` field overrides the tenant-level `notify` for faxes involving this number. See [TENANTS.md](TENANTS.md#supported-notification-types) for the supported destination types (`email_report`, `email_full`, `email_full_failure`, `webhook`, `webhook_form`, `portal`).
 
 **Example:**
 ```bash
@@ -283,8 +283,8 @@ POST /admin/endpoint
 |-------|------|-------------|
 | `type` | string | `"tenant"`, `"number"`, or `"global"` |
 | `type_id` | uint | Tenant ID (tenant scope), TenantNumber ID (number scope), or `0` (global) |
-| `endpoint_type` | string | `"gateway"`, `"webhook"`, or `"email"` |
-| `endpoint` | string | `xml_name:publicIP` for gateways, URL for webhooks, email address for email |
+| `endpoint_type` | string | `"gateway"`, `"webhook"`, `"email"`, or `"portal"` |
+| `endpoint` | string | `xml_name:publicIP` for gateways, URL for webhooks, email address for email, portal org's svc_username for portal |
 | `priority` | uint | Lower = higher priority; `666` = no inbound delivery; `999` = upstream-fallback |
 | `bridge` | bool | Enable T.38/G.711 transcoding |
 

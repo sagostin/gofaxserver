@@ -51,6 +51,69 @@ type NotifyDestination struct {
 	Destination string `json:"destination"`
 }
 
+// PortalStatusPayload is the compact status update POSTed to a `portal`
+// notify destination (gofaxportal's /portal/api/notify/{svc_username}). Unlike
+// the "webhook" notify type it carries no file data — just the final outcome,
+// so the portal can flip a job to success/failed without waiting for its
+// poller.
+type PortalStatusPayload struct {
+	UUID              string    `json:"uuid"`
+	Success           bool      `json:"success"`
+	AllAttemptsFailed bool      `json:"all_attempts_failed"`
+	Attempts          int       `json:"attempts"`
+	TransferredPages  uint      `json:"transferred_pages"`
+	ResultText        string    `json:"result_text,omitempty"`
+	HangupCause       string    `json:"hangup_cause,omitempty"`
+	CallerIdNumber    string    `json:"caller_id_number,omitempty"`
+	CalleeNumber      string    `json:"callee_number,omitempty"`
+	StartTs           time.Time `json:"start_ts,omitempty"`
+	EndTs             time.Time `json:"end_ts,omitempty"`
+}
+
+// buildPortalStatusPayload collapses all per-attempt results into one final
+// outcome: the successful attempt wins if there is one, otherwise the latest
+// attempt describes the failure. Pages are the max across attempts.
+func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
+	p := PortalStatusPayload{
+		AllAttemptsFailed: nfr.AllAttemptsFailed,
+		Attempts:          len(nfr.Results),
+	}
+	if nfr.FaxJob != nil {
+		p.UUID = nfr.FaxJob.UUID.String()
+		p.CallerIdNumber = nfr.FaxJob.CallerIdNumber
+		p.CalleeNumber = nfr.FaxJob.CalleeNumber
+	}
+
+	var successJob, lastJob *FaxJob
+	for _, job := range nfr.Results {
+		if job == nil || job.Result == nil {
+			continue
+		}
+		if job.Result.TransferredPages > p.TransferredPages {
+			p.TransferredPages = job.Result.TransferredPages
+		}
+		if job.Result.Success && successJob == nil {
+			successJob = job
+		}
+		if lastJob == nil || job.Result.EndTs.After(lastJob.Result.EndTs) {
+			lastJob = job
+		}
+	}
+
+	chosen := lastJob
+	if successJob != nil {
+		chosen = successJob
+	}
+	if chosen != nil {
+		p.Success = chosen.Result.Success
+		p.ResultText = chosen.Result.ResultText
+		p.HangupCause = chosen.Result.HangupCause
+		p.StartTs = chosen.Result.StartTs
+		p.EndTs = chosen.Result.EndTs
+	}
+	return p
+}
+
 func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 	// Construct output path using the FaxJob UUID.
 	outputPath := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf("notify_%s.pdf", nfr.FaxJob.UUID.String()))
@@ -222,7 +285,7 @@ func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error
 	return notifyDestinations, nil
 }
 
-// format of: email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://example.org/endpoint,gateway->TODO
+// format of: email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://example.org/endpoint,portal->svc_username,gateway->TODO
 
 func parseNotifyString(notify string) ([]NotifyDestination, error) {
 	var destinations []NotifyDestination
@@ -705,6 +768,84 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
 						))
 					}
+				}
+			case "portal":
+				// Push the final outcome to gofaxportal so it can update the
+				// job immediately instead of waiting for its next poll. The
+				// destination is the org's svc_username; auth mirrors inbound
+				// delivery (svc username in the path + optional X-API-Key).
+				portalBase := strings.TrimRight(gofaxlib.Config.Portal.URL, "/")
+				if portalBase == "" {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						"portal notify destination configured but portal.url is empty, skipping",
+						logrus.WarnLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+					break
+				}
+
+				payload, err := json.Marshal(nFR.buildPortalStatusPayload())
+				if err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("failed to marshal portal notify payload: %v", err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+					break
+				}
+
+				notifyURL := portalBase + "/portal/api/notify/" + dest.Destination
+				req, err := http.NewRequest("POST", notifyURL, bytes.NewReader(payload))
+				if err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("error creating portal notify request: %v", err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+					break
+				}
+				req.Header.Set("Content-Type", "application/json")
+				if gofaxlib.Config.Portal.APIKey != "" {
+					req.Header.Set("X-API-Key", gofaxlib.Config.Portal.APIKey)
+				}
+
+				client := &http.Client{Timeout: 10 * time.Second}
+				resp, err := client.Do(req)
+				if err != nil {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("error sending portal notify request: %v", err),
+						logrus.ErrorLevel,
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+					))
+					break
+				}
+				resp.Body.Close()
+				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						"portal status notification sent successfully",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"uuid":        nFR.FaxJob.UUID.String(),
+							"destination": dest.Destination,
+							"status_code": resp.StatusCode,
+							"type":        "portal",
+						},
+					))
+				} else {
+					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+						"Notify",
+						fmt.Sprintf("portal notify endpoint responded with status %d", resp.StatusCode),
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"uuid":        nFR.FaxJob.UUID.String(),
+							"destination": dest.Destination,
+						},
+					))
 				}
 			case "gateway":
 				// Example: process a gateway notification.

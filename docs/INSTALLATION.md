@@ -97,9 +97,14 @@ Everything runs from one compose file: `docker-compose.full.yml`.
 ```bash
 git clone <repo-url> gofaxserver && cd gofaxserver
 
-cp sample.env .env
-cp config.json.sample config.json
+make setup   # seeds .env, config.json, volumes/gateways and
+             # volumes/freeswitch — never overwrites existing files
 ```
+
+(`make setup` is idempotent sugar around the manual steps: `cp sample.env
+.env`, `cp config.json.sample config.json`, `mkdir -p volumes/gateways` +
+`chown 1000:1000`, and `cp -R examples/freeswitch volumes/freeswitch`. Run
+those by hand if you don't have `make`.)
 
 Edit `.env`:
 
@@ -133,7 +138,9 @@ chmod 600 .env config.json
 
 ### 2. Set the FreeSWITCH IP (the one mandatory FreeSWITCH edit)
 
-Edit `examples/freeswitch/vars.xml`:
+The compose stack mounts `volumes/freeswitch/` (your local copy of
+`examples/freeswitch/`, seeded by `make fs-config`) as `/etc/freeswitch`.
+Edit `volumes/freeswitch/vars.xml`:
 
 ```xml
 <X-PRE-PROCESS cmd="set" data="sofia_ip=192.0.2.10"/>  <!-- THIS host's LAN IP -->
@@ -141,9 +148,11 @@ Edit `examples/freeswitch/vars.xml`:
 
 `sofia_ip` is used for the SIP **and** RTP bind addresses *and* the
 advertised (external) IP. A wrong value breaks signaling or produces one-way
-audio. Everything else in `examples/freeswitch/` works as shipped.
+audio. Everything else in the seeded config tree works as shipped.
 
 ### 3. Prepare the shared directories
+
+Already done if you ran `make setup`. By hand:
 
 **Gateway directory** — API-driven gateway provisioning (portal **Admin →
 Gateways**) renders gateway XML into a directory shared by both containers at
@@ -164,6 +173,13 @@ it with the right ownership. See [Fax temp storage &
 cleanup](#fax-temp-storage--cleanup) for why this share exists.
 
 ### 4. Build and start
+
+```bash
+make fs-build   # needs SIGNALWIRE_TOKEN (from .env or the environment)
+make up         # docker compose -f docker-compose.full.yml up -d
+```
+
+By hand:
 
 ```bash
 export SIGNALWIRE_TOKEN=your-token        # consumed as a build secret
@@ -311,7 +327,10 @@ pre-shared key — add to gofaxserver's `config.json`:
 be left empty on loopback-only installs). Numbers added in the portal with
 the **Inbox** toggle on (the default) then get received faxes delivered into
 the portal, stored AES-256-GCM encrypted at rest — see
-[PORTAL.md](PORTAL.md#receiving-faxes-inbound).
+[PORTAL.md](PORTAL.md#receiving-faxes-inbound). The same `portal` block also
+enables the outbound status push: gofaxserver POSTs final job outcomes to the
+portal the moment a fax completes instead of waiting for its poller — see
+[PORTAL.md](PORTAL.md#outbound-status-push-notify-type-portal).
 
 ---
 
@@ -328,7 +347,7 @@ key-by-key reference with defaults is in the
 | `faxing.*` | `temp_dir` (must be shared with FreeSWITCH at the same path — see below), `temp_max_age` (janitor, default `24h`), retry policy, T.38 flags, `policy` (fax policy engine thresholds — optional, defaults apply) |
 | `database.*` | must match the PostgreSQL credentials from `.env` |
 | `web.*` | listen addr + admin `api_key` |
-| `portal.*` | optional; `url` + `api_key` for delivering received faxes to a gofaxportal inbox |
+| `portal.*` | optional; `url` + `api_key` for delivering received faxes to a gofaxportal inbox and pushing outbound job status back to it |
 | `dialplan` | `source: "config"` (rules in this file) or `"db"` (portal/API-editable); absent = built-in NANP defaults |
 | `smtp.*` | required for email notifications/receipts |
 | `loki.*` | optional log shipping |

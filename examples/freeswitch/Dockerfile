@@ -10,9 +10,10 @@
 #     --secret id=signalwire_token,env=SIGNALWIRE_TOKEN \
 #     -f examples/freeswitch/Dockerfile -t gofaxserver-freeswitch:latest .
 #
-# The example configuration tree (examples/freeswitch/) is bind-mounted over
-# /etc/freeswitch by docker-compose.full.yml at runtime — it is NOT baked in,
-# so editing vars.xml / sofia.conf.xml only needs a container restart.
+# A copy of the example configuration tree (examples/freeswitch/, seeded into
+# volumes/freeswitch by `make fs-config`) is bind-mounted over /etc/freeswitch
+# by docker-compose.full.yml at runtime — it is NOT baked in, so editing
+# vars.xml / sofia.conf.xml only needs a container restart.
 
 FROM debian:bookworm-slim
 

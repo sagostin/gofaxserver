@@ -240,8 +240,8 @@ GORM models in `gofaxserver/`. Auto-migrated on startup (`gofaxserver/db.go:migr
 | id | uint | Primary key |
 | type | string | `tenant`, `number`, or `global` |
 | type_id | uint | Tenant ID, TenantNumber ID, or 0 (global) |
-| endpoint_type | string | `gateway`, `webhook`, or `email` |
-| endpoint | string | `xml_name:publicIP` for gateway; URL for webhook; email addr for email |
+| endpoint_type | string | `gateway`, `webhook`, `email`, or `portal` |
+| endpoint | string | `xml_name:publicIP` for gateway; URL for webhook; email addr for email; portal org's svc_username for portal |
 | priority | uint | Lower = higher priority; `666` = no inbound delivery; `999` = upstream fallback |
 | bridge | bool | Enable T.38/G.711 transcoding |
 
@@ -260,7 +260,7 @@ GORM models in `gofaxserver/`. Auto-migrated on startup (`gofaxserver/db.go:migr
 A denormalized record of every fax attempt — one row per attempt, written from `queue.go:storeQueueFaxResult` via `QueueFaxResult`. Key fields:
 
 - `job_uuid`, `call_uuid` (correlation)
-- `result_type` — `reception`, `bridge`, `transmission`, or `delivery` (webhook/email)
+- `result_type` — `reception`, `bridge`, `transmission`, or `delivery` (webhook/email/portal)
 - `attempt_number`, `endpoint_id`, `endpoint_type` — which endpoint and which retry
 - `start_ts`, `end_ts`, `hangup_cause`, `transferred_pages`, `success`, `result_text`, `t38_status`, `v17_disabled` — outcome
 - `is_bridge`, `bridge_direction`, `bridge_gateway`, `bridge_t38` — bridge metadata

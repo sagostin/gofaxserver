@@ -11,11 +11,12 @@ version: '3.8'
 #   - SIP (5060) and the RTP range (16384-32768/udp) bind directly on the
 #     host, avoiding NAT/port-range pain for RTP.
 #
-# Before starting:
+# Before starting (or just: make setup):
 #   1. cp sample.env .env  and fill it in (incl. SIGNALWIRE_TOKEN)
 #   2. cp config.json.sample config.json  and edit it
-#   3. edit examples/freeswitch/vars.xml  -> sofia_ip = this host's LAN IP
-#   4. mkdir -p volumes/gateways && chown 1000:1000 volumes/gateways
+#   3. cp -R examples/freeswitch volumes/freeswitch  (make fs-config)
+#   4. edit volumes/freeswitch/vars.xml  -> sofia_ip = this host's LAN IP
+#   5. mkdir -p volumes/gateways && chown 1000:1000 volumes/gateways
 #      (gofaxserver's container user is uid 1000; FreeSWITCH runs as root
 #      and reads the 0640 files it writes)
 
@@ -44,9 +45,10 @@ services:
     image: gofaxserver-freeswitch:latest
     container_name: freeswitch
     volumes:
-      # Config tree (edit vars.xml -> sofia_ip before first start). The
-      # gateways subdirectory is overridden by the shared mount below.
-      - ./examples/freeswitch:/etc/freeswitch
+      # Config tree, seeded from examples/freeswitch by `make fs-config`
+      # (edit volumes/freeswitch/vars.xml -> sofia_ip before first start).
+      # The gateways subdirectory is overridden by the shared mount below.
+      - ./volumes/freeswitch:/etc/freeswitch
       # Shared with gofaxserver: API-driven gateway provisioning writes
       # rendered XML here. SAME path in both containers is required.
       - ./volumes/gateways:/etc/freeswitch/gateways

@@ -77,6 +77,9 @@ func (s *Server) BuildApp() *iris.Application {
 	// session/CSRF middleware: the caller is gofaxserver itself, authorized
 	// by the per-org service-account path + optional pre-shared X-API-Key.
 	apiParty.Post("/inbound/{svc_username}", s.handleInboundFax)
+	// Outbound job status push from gofaxserver's notify system (notify
+	// destination type "portal"). Same auth model as inbound delivery.
+	apiParty.Post("/notify/{svc_username}", s.handleStatusNotify)
 
 	// --- authenticated ---
 	authed := apiParty.Party("", s.authenticate, s.requireAuth)

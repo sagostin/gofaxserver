@@ -18,10 +18,13 @@ Neither the admin API key nor service-account passwords ever reach the browser.
 
 ## Quick start (from zero)
 
-0. **Deploy the updated gofaxserver** — it must be running a build that
-   includes the read-only list endpoints (`GET /admin/tenants|numbers|users|
-   endpoints`) or Admin → Reconcile will fail. Everything else works on older
-   builds too.
+0. **Deploy the updated gofaxserver** — for full functionality it must be
+   running a current build: the read-only list endpoints (`GET
+   /admin/tenants|numbers|users|endpoints`) or Admin → Reconcile fails; the
+   `portal` endpoint type or inbox delivery fails; the `portal` notify type
+   or outbound status pushes are silently skipped (the poller still covers
+   status, just delayed). Older builds degrade to outbound-only with manual
+   gateway work.
 1. **Create the portal database** (SQL under [Build & run](#build--run)) —
    schema auto-migrates on first start.
 2. **Secrets & env** — `cd portal && cp sample.env .env`, fill the five
@@ -31,7 +34,10 @@ Neither the admin API key nor service-account passwords ever reach the browser.
    `PORTAL_ADMIN_API_KEY` (= gofaxserver `web.api_key`), `PORTAL_DB_PASSWORD`,
    `PORTAL_BOOTSTRAP_PASSWORD`.
 3. **Start it** — `docker compose up -d --build` (host networking, :8081), or
-   build the binary locally with `go build -o gofaxportal ./cmd/portal`.
+   build the binary locally: `make portal-build` from the repo root (builds
+   the frontend dist, then the binary to `bin/gofaxportal`), or by hand
+   `cd portal/frontend && npm install && npm run build` then
+   `cd portal && go build -o gofaxportal ./cmd/portal`.
 4. **TLS** — `cp Caddyfile.sample Caddyfile`, set your hostname,
    `docker compose --profile tls up -d` (see [TLS with Caddy](#tls-with-caddy-recommended)).
 5. **First login** — sign in with the bootstrap admin, then immediately
@@ -140,6 +146,53 @@ Behavior details worth knowing:
   value used as `caller_number` in `/fax/send`.
 - Success-only / failure-only *report* emails are not supported natively and
   would require a gofaxserver change (deliberately out of scope).
+
+## Outbound status push (notify type `portal`)
+
+The portal tracks outbound jobs primarily by polling gofaxserver
+(`internal/poller` → `/fax/status`). To make final outcomes land instantly,
+the portal also registers itself as a notify destination: every number's
+derived notify string is
+
+```
+email_report->user1@x;user2@y,portal-><org svc_username>
+```
+
+(the `email_report` part only when users with emails are assigned; the
+`portal->` part always). gofaxserver's notify dispatcher understands the
+`portal` type: at job completion it POSTs a compact JSON payload — **no file
+data** — to `<portal.url>/portal/api/notify/<svc_username>` with the same
+`X-API-Key` pre-shared-key auth as inbound fax delivery:
+
+```json
+{
+  "uuid": "3f7c1f2e-…", "success": true, "all_attempts_failed": false,
+  "attempts": 2, "transferred_pages": 4,
+  "result_text": "OK", "hangup_cause": "NORMAL_CLEARING",
+  "caller_id_number": "+17785559876", "callee_number": "+16045551212",
+  "start_ts": "…", "end_ts": "…"
+}
+```
+
+The receiver (`handlers_notify.go`) flips the matching `FaxJob` to
+`success`/`failed` (with pages, result text, completed-at) — but only while
+the job is still non-terminal, so duplicate or late pushes never regress a
+finished job. Unknown job UUIDs are 200 no-ops: inbound faxes and faxes
+submitted outside the portal trigger the same notify string and must not
+error. The push is fire-and-forget upstream (one POST, logged on failure) —
+**the poller remains the source of truth** and converges anything a push
+missed (portal down, network blip, `portal.url` unset).
+
+Notes:
+
+- The notify string lives on the gofaxserver number, so existing numbers pick
+  up `portal->…` on their next portal-side update (assignment change, number
+  edit, or re-adding the number).
+- Requires `portal.url`/`portal.api_key` on gofaxserver and `inbound_api_key`
+  on the portal — the same pair inbound delivery already uses.
+- Mid-transmission events (page-by-page progress) are not pushed; the
+  queued→sending transition still comes from the poller's active-faxes
+  snapshot.
 
 ## Adding a new customer whose PBX delivers/receives via FreeSWITCH
 
@@ -314,7 +367,9 @@ After deployment, walk this once against your live gofaxserver:
 3. Create an org (Admin → Orgs) — this provisions the gofaxserver tenant + `svc_*` account
 4. Add a number to the org, create a fax user, assign the number to them
 5. Log in as the user, send a small test PDF
-6. Watch My Faxes flip `queued → sending → success/failed` (poller ticks every ~5 s)
+6. Watch My Faxes flip `queued → sending → success/failed` — the final
+   transition lands instantly via the `portal->` status push (the ~5 s poller
+   is the fallback)
 7. Confirm the `email_report` receipt lands in the user's inbox
 8. Send a fax *to* the org's number — it should appear in the user's Inbox
    (and Admin → Inbound Faxes) and open as a PDF
@@ -350,6 +405,7 @@ PDF, scoped to assigned numbers).
 
 Inbound delivery (gofaxserver → portal, no session):
 `POST /portal/api/inbound/{svc_username}` with optional `X-API-Key`.
+Outbound status push (same auth): `POST /portal/api/notify/{svc_username}`.
 
 Admin (`role=admin`): CRUD under `/portal/api/admin/{orgs,numbers,users,endpoints}`,
 gateway provisioning under `/portal/api/admin/{gateways,gateway-templates}`

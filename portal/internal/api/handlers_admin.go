@@ -400,7 +400,10 @@ func (s *Server) adminCreateNumber(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "number already registered in portal"})
 		return
 	}
-	created, err := s.FX.AddNumber(org.GofaxTenantID, number, req.Name, req.Header, "")
+	// New numbers have no user assignments yet, so the notify string is just
+	// the portal status-push destination (email_report entries are added by
+	// the assignment flow).
+	created, err := s.FX.AddNumber(org.GofaxTenantID, number, req.Name, req.Header, s.computeNotify(0, org.SvcUsername))
 	if err != nil {
 		ctx.StatusCode(502)
 		ctx.JSON(map[string]string{"error": "upstream add failed: " + err.Error()})
@@ -487,7 +490,7 @@ func (s *Server) adminUpdateNumber(ctx iris.Context) {
 		}
 		num.InboundEnabled = *req.InboundEnabled
 	}
-	notify := s.computeNotify(num.ID)
+	notify := s.computeNotify(num.ID, org.SvcUsername)
 	if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 		ctx.StatusCode(502)
 		ctx.JSON(map[string]string{"error": "upstream update failed: " + uerr.Error()})
@@ -522,18 +525,25 @@ func (s *Server) adminDeleteNumber(ctx iris.Context) {
 	ctx.JSON(map[string]bool{"ok": true})
 }
 
-// computeNotify builds the derived notify string for a number from its
-// assigned users' emails: email_report->a@x;b@y (empty when unassigned).
-func (s *Server) computeNotify(numberID uint) string {
+// computeNotify builds the derived notify string for a number: an
+// email_report destination per assigned user's email, plus the portal
+// status-push destination (portal->svc_username) so gofaxserver notifies the
+// portal of final job outcomes immediately. The portal destination is always
+// present for orgs with a service account, even with no assigned users.
+func (s *Server) computeNotify(numberID uint, svcUsername string) string {
+	dests := []string{}
 	emails := []string{}
 	s.DB.Table("portal_users").
 		Joins("JOIN user_numbers ON user_numbers.user_id = portal_users.id").
 		Where("user_numbers.number_id = ? AND portal_users.active = ? AND portal_users.email <> ''", numberID, true).
 		Distinct().Order("portal_users.email ASC").Pluck("portal_users.email", &emails)
-	if len(emails) == 0 {
-		return ""
+	if len(emails) > 0 {
+		dests = append(dests, "email_report->"+strings.Join(emails, ";"))
 	}
-	return "email_report->" + strings.Join(emails, ";")
+	if svcUsername != "" {
+		dests = append(dests, "portal->"+svcUsername)
+	}
+	return strings.Join(dests, ",")
 }
 
 func (s *Server) adminGetAssignments(ctx iris.Context) {
@@ -583,7 +593,7 @@ func (s *Server) adminSetAssignments(ctx iris.Context) {
 			return
 		}
 	}
-	notify := s.computeNotify(num.ID)
+	notify := s.computeNotify(num.ID, org.SvcUsername)
 	if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 		tx.Rollback()
 		ctx.StatusCode(502)

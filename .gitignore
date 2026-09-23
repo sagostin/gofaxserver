@@ -21,10 +21,14 @@ packaging/*.deb
 
 # --- Secrets / environment ---
 .env
+config.json
+portal/config.json
 
 # --- Local runtime data (docker compose mounts) ---
 postgres/data/
+volumes/
 backups/
+bin/
 
 # --- Logs & misc ---
 *.log

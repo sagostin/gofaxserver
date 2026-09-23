@@ -18,7 +18,15 @@ All backups are saved to `./backups/<type>/` by default, with timestamped filena
 The database dump covers all gofaxserver tables, including `gateway_templates`,
 `gateway_configs`, and `dialplan_rules`; rendered gateway XML is covered by the
 FreeSWITCH archive (`/etc/freeswitch`). If the portal is deployed, back up its
-`gofaxportal` database the same way (it holds orgs, users, and job history).
+`gofaxportal` database the same way (it holds orgs, users, job history, and
+AES-256-GCM-sealed inbound faxes — see the `encryption_key` note below).
+
+> **All-container installs (Path A):** the live FreeSWITCH config is
+> `volumes/freeswitch/` (plus `volumes/gateways/`), not `/etc/freeswitch` —
+> point `backup-freeswitch.sh` at it via `FS_CONFIG_DIR=volumes/freeswitch`
+> (and `volumes/gateways` separately if you want the rendered XML), or simply
+> add those directories to whatever host-level backup you run. The pristine
+> templates in `examples/freeswitch/` are in git and need no backup.
 
 > **Do not back up `faxing.temp_dir`** (default `/var/lib/gofaxserver/tmp`).
 > It holds transient store-and-forward fax content — sensitive and
