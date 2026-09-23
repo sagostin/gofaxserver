@@ -6,7 +6,8 @@ This document details FreeSWITCH gateway configuration for connecting customer P
 
 Gateway XML configuration files are stored in:
 ```
-/etc/freeswitch/gateways/
+# Path A (all containers):     <repo>/volumes/gateways/   (mounted into both containers)
+# Path B (FreeSWITCH on host): /etc/freeswitch/gateways/
 ```
 
 Templates are available in:
@@ -74,15 +75,19 @@ Gateways can be created **manually** (below) or **via the API/portal** (next sec
 ### 1. Copy the Template
 
 ```bash
-cp examples/freeswitch/gateways/pbx_example.xml /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
+# Path A — from the repo checkout (mounted into the containers):
+cp examples/freeswitch/gateways/pbx_example.xml volumes/gateways/pbx_<CUSTOMERNAME>.xml
 # or for an upstream carrier:
-cp examples/freeswitch/gateways/sbc_example.xml /etc/freeswitch/gateways/sbc_<CARRIERNAME>.xml
+cp examples/freeswitch/gateways/sbc_example.xml volumes/gateways/sbc_<CARRIERNAME>.xml
+
+# Path B — FreeSWITCH on the host: same copies into /etc/freeswitch/gateways/
 ```
 
 ### 2. Edit the Gateway File
 
 ```bash
-nano /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
+nano volumes/gateways/pbx_<CUSTOMERNAME>.xml        # Path A
+# nano /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml   # Path B
 ```
 
 Update the following:
@@ -91,7 +96,7 @@ Update the following:
 
 ### 3. Load the Gateway
 
-In FreeSWITCH CLI (`fs_cli`):
+In FreeSWITCH CLI (`fs_cli`, or `make fs-cli` / `docker exec -it freeswitch fs_cli` on Path A):
 
 ```bash
 sofia profile fax rescan
@@ -193,7 +198,8 @@ Templates** (edit templates). All actions are audit-logged.
 
 ```bash
 # Enter FreeSWITCH CLI
-fs_cli
+fs_cli                      # Path B (FreeSWITCH on host)
+make fs-cli                 # Path A (= docker exec -it freeswitch fs_cli)
 
 # Exit
 /quit

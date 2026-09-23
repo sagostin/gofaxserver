@@ -13,6 +13,10 @@ services:
       - POSTGRES_HOST_AUTH_METHOD=${POSTGRES_HOST_AUTH_METHOD}
     volumes:
       - ./postgres/data:/var/lib/postgresql/data
+    # Bind address: 127.0.0.1 (default) = localhost only. Set
+    # POSTGRES_LISTEN_ADDRESSES=0.0.0.0 in .env temporarily for remote DB
+    # access while debugging — firewall :5432 to trusted IPs when you do.
+    command: postgres -c listen_addresses=${POSTGRES_LISTEN_ADDRESSES:-127.0.0.1}
     network_mode: host
     restart: always
 

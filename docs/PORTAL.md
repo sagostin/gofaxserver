@@ -1,8 +1,9 @@
 # Fax Portal (gofaxportal)
 
 A standalone multi-tenant **send & receive fax portal** for gofaxserver. It is a
-separate Go module, separate binary, separate PostgreSQL database, and never
-imports gofaxserver packages — it talks to gofaxserver exclusively over its
+separate Go module, separate binary, and separate database — its compose stack
+runs its own dedicated PostgreSQL container on **port 5433**, fully isolated
+from gofaxserver's database on 5432 — and never imports gofaxserver packages — it talks to gofaxserver exclusively over its
 HTTP API (outbound + admin) and receives inbound faxes from gofaxserver over a
 single delivery endpoint (`POST /portal/api/inbound/<svc_username>`, see
 [Receiving faxes](#receiving-faxes-inbound)).
@@ -34,8 +35,11 @@ Neither the admin API key nor service-account passwords ever reach the browser.
    or outbound status pushes are silently skipped (the poller still covers
    status, just delayed). Older builds degrade to outbound-only with manual
    gateway work.
-1. **Create the portal database** (SQL under [Build & run](#build--run)) —
-   schema auto-migrates on first start.
+1. **Portal database** — nothing to do for the Docker path: `make portal-up`
+   brings up a dedicated PostgreSQL container on :5433 and auto-creates the
+   user/database from `portal/.env`; the schema auto-migrates on first start.
+   (Host-binary installs against an existing instance: SQL under
+   [Build & run](#build--run).)
 2. **Secrets & env** — `make portal-env` from the repo root (or `cd portal &&
    cp sample.env .env`), fill the five required values (see
    [Configuration](#configuration) /
@@ -49,10 +53,12 @@ Neither the admin API key nor service-account passwords ever reach the browser.
    the frontend dist, then the binary to `bin/gofaxportal`), or by hand
    `cd portal/frontend && npm install && npm run build` then
    `cd portal && go build -o gofaxportal ./cmd/portal`.
-4. **Reverse proxy** — Caddy runs with the main stack (`make up`); the
-   `Caddyfile` at the repo root (seeded by `make setup`) defaults to plain
-   HTTP on :80. Set your DNS name in it for automatic HTTPS (see
-   [Reverse proxy & TLS](#reverse-proxy--tls-caddy)). While on plain HTTP,
+4. **Reverse proxy** — in the combined deployment, Caddy runs with the main
+   stack (`make up`); the `Caddyfile` at the repo root (seeded by
+   `make setup`) defaults to plain HTTP on :80. Set your DNS name in it for
+   automatic HTTPS (see [Reverse proxy & TLS](#reverse-proxy--tls-caddy)).
+   Separated/standalone installs get **no** bundled proxy — front :8081 with
+   your own. While on plain HTTP,
    set `PORTAL_COOKIE_SECURE=false` in `portal/.env` or logins won't stick.
 5. **First login** — sign in with the bootstrap admin, then immediately
    Admin → Users → Reset PW (the bootstrap password lives in plaintext env
@@ -213,7 +219,8 @@ Notes:
 The portal provisions gofaxserver-side state (tenant, service account,
 numbers, endpoints). FreeSWITCH gateway configuration can also be automated
 when gofaxserver has `freeswitch.gateway_config_dir` set (a path shared with
-the FreeSWITCH host/container, e.g. `/etc/freeswitch/gateways`):
+the FreeSWITCH host/container — `/etc/freeswitch/gateways` on Path B,
+`./volumes/gateways` on Path A):
 
 **Admin → Gateways** — pick a template (`sbc` for upstream carriers, `pbx`
 for customer PBXs), enter the gateway name (e.g. `pbx_<customer>`), the
@@ -249,11 +256,13 @@ clear the persisted flip-flop pair states. See
 
 When provisioning is **not** enabled (no `gateway_config_dir`, or no shared
 filesystem with FreeSWITCH), the gateway XML must still be created manually
-on the FreeSWITCH host and loaded with `fs_cli -x "sofia profile fax rescan"`
+(`./volumes/gateways` on Path A, `/etc/freeswitch/gateways` on Path B) and
+loaded with `fs_cli -x "sofia profile fax rescan"` (`docker exec freeswitch
+fs_cli -x …` on Path A)
 — see [GATEWAYS.md](GATEWAYS.md); then register the matching endpoint in the
 portal (**Admin → Endpoints** or `POST /portal/api/admin/endpoints`):
 `type=tenant`, `type_id=<org>`, `endpoint_type=gateway`,
-`endpoint=pbx_<customer>:<PBX_IP>`, desired priority (use `666` for
+`endpoint=pbx_<customer>:<PBX_IP_OR_HOSTNAME>`, desired priority (use `666` for
 outbound-only, i.e. no inbound delivery).
 
 ## Layout
@@ -277,7 +286,8 @@ Copy `config.json.sample` to `config.json` or configure purely via env vars:
 | Env | Purpose |
 |-----|---------|
 | `PORTAL_LISTEN` | listen addr (default `:8081`) |
-| `PORTAL_DB_*` | `HOST`, `PORT`, `USER`, `PASSWORD`, `NAME`, `SSLMODE` |
+| `PORTAL_DB_*` | `HOST`, `PORT`, `USER`, `PASSWORD`, `NAME`, `SSLMODE` — the compose stack's own postgres listens on **5433**; the same values auto-create that container's user/database on first boot |
+| `PORTAL_DB_LISTEN_ADDRESSES` | portal DB bind address; default `127.0.0.1` (localhost only), set `0.0.0.0` temporarily for remote debug access (firewall :5433) |
 | `PORTAL_SESSION_SECRET` | required; any long random string |
 | `PORTAL_ENCRYPTION_KEY` | required; long random string (seals svc passwords) |
 | `PORTAL_GOFAX_BASE_URL` | default `http://127.0.0.1:8080` |
@@ -323,9 +333,14 @@ openssl rand -hex 32   # PORTAL_ENCRYPTION_KEY (back this up with the DB!)
 
 ## Reverse proxy & TLS (Caddy)
 
-Caddy is part of the main stack (`docker-compose.full.yml`) and fronts
-**both** services on one address. The `Caddyfile` lives at the repo root,
-seeded from `Caddyfile.sample` by `make setup` (never clobbered):
+Caddy is part of the **main stack only** (`docker-compose.full.yml`) and
+fronts **both** services on one address in the combined single-host
+deployment. The portal's own compose file deliberately ships **no** proxy:
+if you run the portal separated (portal/docker-compose.yml used directly,
+e.g. split-host), front `:8081` with your own proxy/TLS — the root Caddyfile
+assumes both services share a host and won't fit that topology. The
+`Caddyfile` lives at the repo root, seeded from `Caddyfile.sample` by
+`make setup` (never clobbered):
 
 - **Default: plain HTTP on :80** — no DNS or certificates needed; TLS is not
   forced. Set `PORTAL_COOKIE_SECURE=false` in `portal/.env` in this mode or
@@ -368,13 +383,19 @@ cd .. && go build -o gofaxportal ./cmd/portal
 ./gofaxportal -c config.json
 ```
 
-Docker (host networking to match the root compose):
+Docker (host networking to match the root compose) — this starts **two**
+containers: `gofaxportal-postgres` (its own PostgreSQL on :5433, data in
+`portal/postgres/data`) and `gofaxportal` (:8081):
 
 ```bash
 docker compose -f portal/docker-compose.yml up -d --build
 ```
 
-Database: create a `gofaxportal` database and user (schema auto-migrates):
+Database: the compose path needs no manual setup — the postgres container
+auto-creates the user/database from `PORTAL_DB_USER` / `PORTAL_DB_PASSWORD` /
+`PORTAL_DB_NAME` on first boot, and the portal auto-migrates its schema. For
+host-binary installs against an existing PostgreSQL instance, create a
+`gofaxportal` database and user by hand:
 
 ```sql
 CREATE DATABASE gofaxportal;
@@ -382,6 +403,16 @@ CREATE USER gofaxportal WITH PASSWORD '...';
 GRANT ALL PRIVILEGES ON DATABASE gofaxportal TO gofaxportal;
 GRANT ALL ON SCHEMA public TO gofaxportal;
 ```
+
+> **Migrating an existing portal DB out of gofaxserver's postgres?** Older
+> installs kept the portal database inside the main instance on :5432. To move
+> it into the dedicated container:
+> ```bash
+> pg_dump -h 127.0.0.1 -p 5432 -U gofaxportal gofaxportal > portal_dump.sql
+> make portal-up   # creates the fresh :5433 container
+> psql -h 127.0.0.1 -p 5433 -U gofaxportal gofaxportal < portal_dump.sql
+> # then set PORTAL_DB_PORT=5433 in portal/.env and restart the portal
+> ```
 
 ## First-run smoke checklist
 

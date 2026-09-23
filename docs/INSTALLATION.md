@@ -18,6 +18,7 @@ day-2 work — adding customers, gateways, numbers — see
                  │ gofaxserver (API :8080) ──► PostgreSQL :5432                         │
                  │   ▲                                                                  │
                  │   └── HTTP ── fax portal :8081 (optional) ◄── browsers               │
+                 │            └──► own PostgreSQL :5433                                 │
                  └───────────────────────────────▲──────────────────────────────────────┘
                                                  └── Caddy :80 (HTTPS when a DNS name is set)
 ```
@@ -80,11 +81,19 @@ Fax is low-throughput; the database and FreeSWITCH logs dominate disk use.
 | 8022 | tcp | gofaxserver inbound ESL listener | **localhost only** |
 | 8080 | tcp | gofaxserver REST API | localhost / trusted clients (or via Caddy) |
 | 8081 | tcp | Fax portal | localhost (front with Caddy) |
-| 5432 | tcp | PostgreSQL | **localhost only** |
+| 5432 | tcp | PostgreSQL (gofaxserver) | **localhost only** (see below) |
+| 5433 | tcp | PostgreSQL (portal, dedicated container) | **localhost only** (see below) |
 | 80 (443) | tcp | Caddy reverse proxy (HTTP default; 443 when a DNS name is set) | public |
 
 Firewall 5060 and the RTP range to known peer IPs where possible; everything
 else should stay on localhost or behind Caddy.
+
+> Both PostgreSQL containers bind `127.0.0.1` by default (the compose files
+> pass `-c listen_addresses=…`). For remote DB access while debugging — a GUI
+> client or another host — set `POSTGRES_LISTEN_ADDRESSES=0.0.0.0` in `.env`
+> (and `PORTAL_DB_LISTEN_ADDRESSES=0.0.0.0` in `portal/.env` for the portal
+> DB), restart the stack, and **firewall 5432/5433 to trusted IPs** while it
+> is open. Switch it back when done.
 
 ---
 
@@ -289,23 +298,31 @@ source (`go build -o gofaxserver ./gofaxserver/cmd/gofaxserver`), then follow
 ## 4. Portal + reverse proxy (optional, recommended)
 
 The portal gives end users a web UI and automates tenant/gateway management.
-Full details: [PORTAL.md](PORTAL.md). Short version (works on both paths):
+Full details: [PORTAL.md](PORTAL.md). Short version (works on both paths).
+The portal compose stack runs its **own dedicated PostgreSQL container on
+port 5433** — fully separate from gofaxserver's database on 5432 — and
+auto-creates the portal user/database from `portal/.env` on first boot, so
+no manual SQL is needed:
 
 ```bash
-# Portal database (same PostgreSQL instance):
-psql -U postgres -c "CREATE DATABASE gofaxportal;" \
-     -c "CREATE USER gofaxportal WITH PASSWORD '...';" \
-     -c "GRANT ALL PRIVILEGES ON DATABASE gofaxportal TO gofaxportal;" \
-     -c "GRANT ALL ON SCHEMA public TO gofaxportal;" gofaxportal
-
 # From the repo root:
 make portal-env && $EDITOR portal/.env
 #   PORTAL_SESSION_SECRET / PORTAL_ENCRYPTION_KEY: openssl rand -hex 32
 #   PORTAL_ADMIN_API_KEY = gofaxserver web.api_key
-#   PORTAL_DB_*          = the database above
+#   PORTAL_DB_*          = creds for the portal's own postgres container
+#                          (auto-created; defaults to port 5433)
 #   PORTAL_BOOTSTRAP_PASSWORD = first admin login (rotate after first use)
-make portal-up                                      # portal on :8081
+make portal-up                                      # portal db (:5433) + portal (:8081)
 ```
+
+> Running the portal as a host binary against an existing PostgreSQL instead?
+> Create the database by hand and set `PORTAL_DB_PORT` accordingly:
+> ```bash
+> psql -U postgres -c "CREATE DATABASE gofaxportal;" \
+>      -c "CREATE USER gofaxportal WITH PASSWORD '...';" \
+>      -c "GRANT ALL PRIVILEGES ON DATABASE gofaxportal TO gofaxportal;" \
+>      -c "GRANT ALL ON SCHEMA public TO gofaxportal;" gofaxportal
+> ```
 
 First login: sign in with the bootstrap admin and immediately reset its
 password (**Admin → Users → Reset PW**).
@@ -474,7 +491,9 @@ Run these once after either path (substitute `docker exec freeswitch …` for
       (`openssl rand -hex 32`); `chmod 600` on `config.json` and `.env`
 - [ ] `psk` and portal `PORTAL_ENCRYPTION_KEY` backed up with the databases
       (see [BACKUP.md](../BACKUP.md))
-- [ ] Firewall: 5060 + RTP range restricted to known peers; 8021/8022/5432
+- [ ] Firewall: 5060 + RTP range restricted to known peers; 8021/8022/5432/5433
+  localhost-only (default `listen_addresses=127.0.0.1` — if you set
+  `0.0.0.0` for debugging, restrict those ports to trusted IPs)
       localhost-only; 8080/8081 not exposed publicly (front with Caddy)
 - [ ] Caddy: add the commented IP-restriction snippet for `/admin/*` from
       `Caddyfile.sample` if admin API exposure worries you

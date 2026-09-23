@@ -7,9 +7,10 @@
 #   make up
 #
 # Portal + reverse proxy:
-#   make portal-env               # seed portal/.env (Caddyfile seeded by make setup)
+#   (portal/.env is seeded by make setup with generated secrets)
 #   $EDITOR portal/.env Caddyfile # HTTPS: set your DNS name in Caddyfile
-#   make portal-up                # portal on :8081; Caddy runs with the main stack
+#   make up                       # starts everything: gofaxserver stack +
+#                                 # portal db (:5433) + portal (:8081) + Caddy
 #                                 # (make up) on :80 — HTTPS once a DNS name is set
 #
 # `make help` lists everything.
@@ -17,7 +18,6 @@
 SHELL := /bin/bash
 
 COMPOSE        := docker compose -f docker-compose.full.yml
-PORTAL_COMPOSE := docker compose -f portal/docker-compose.yml
 FS_IMAGE       := gofaxserver-freeswitch:latest
 FS_CONFIG      := volumes/freeswitch
 FS_EXAMPLES    := examples/freeswitch
@@ -42,14 +42,15 @@ help: ## List targets
 # First-time setup (all idempotent — existing files are never overwritten)
 # ---------------------------------------------------------------------------
 
-setup: env config dirs fs-config caddy-setup ## Full first-time bootstrap (env, config, volumes, FS config, Caddyfile)
+setup: env config dirs fs-config caddy-setup portal-env ## Full first-time bootstrap (env, config, volumes, FS config, Caddyfile, portal env)
 	@echo ""
 	@echo "Setup complete. Before 'make up':"
 	@echo "  1. Fill in .env (POSTGRES_PASSWORD, SIGNALWIRE_TOKEN, ...)"
 	@echo "  2. Edit config.json"
 	@echo "  3. Set sofia_ip in $(FS_CONFIG)/vars.xml to this host's LAN IP"
 	@echo "  4. Caddyfile defaults to plain HTTP on :80; set a DNS name for HTTPS"
-	@echo "  5. Portal: make portal-env && edit portal/.env && make portal-up"
+	@echo "  5. portal/.env was seeded with generated secrets (portal DB on :5433,"
+	@echo "     portal on :8081 — both start with 'make up')"
 
 env: ## Create .env from sample.env if missing
 	@if [[ ! -f .env ]]; then \
@@ -88,7 +89,7 @@ fs-config: ## Seed volumes/freeswitch from examples/freeswitch (never clobbers)
 # Builds
 # ---------------------------------------------------------------------------
 
-fs-build: ## Build the FreeSWITCH image (requires SIGNALWIRE_TOKEN)
+fs-build: portal-env ## Build the FreeSWITCH image (requires SIGNALWIRE_TOKEN)
 	@if [[ -z "$${SIGNALWIRE_TOKEN}" ]]; then \
 		echo "SIGNALWIRE_TOKEN is not set."; \
 		echo "Get a token from https://id.signalwire.com (personal access token),"; \
@@ -115,7 +116,7 @@ test: ## go test ./... for gofaxserver and the portal
 # Running the stack (docker-compose.full.yml: postgres + freeswitch + gofaxserver)
 # ---------------------------------------------------------------------------
 
-up: setup ## Start postgres + freeswitch + gofaxserver (runs setup first)
+up: setup ## Start the whole stack: postgres + freeswitch + gofaxserver + portal db + portal + caddy
 	$(COMPOSE) up -d
 
 down: ## Stop the stack
@@ -134,22 +135,40 @@ fs-reload: ## reloadxml inside the freeswitch container (after config edits)
 	docker exec freeswitch fs_cli -x reloadxml
 
 # ---------------------------------------------------------------------------
-# Portal (portal/docker-compose.yml) + Caddy reverse proxy (root compose)
+# Portal (included into the full stack via docker-compose.full.yml's
+# `include:` of portal/docker-compose.yml) + Caddy reverse proxy
 # ---------------------------------------------------------------------------
 
-portal-env: ## Create portal/.env from portal/sample.env if missing
+portal-env: ## Create portal/.env with generated secrets if missing
 	@if [[ ! -f portal/.env ]]; then \
-		cp portal/sample.env portal/.env && echo "created portal/.env from portal/sample.env"; \
-		echo "NOTE: set secrets with: openssl rand -hex 32"; \
+		cp portal/sample.env portal/.env; \
+		apikey=$$(grep -o '"api_key": *"[^"]*"' config.json 2>/dev/null | head -1 | cut -d'"' -f4); \
+		if [[ -z "$$apikey" || "$$apikey" == "apikeyhere" ]]; then \
+			apikey=$$(openssl rand -hex 32); \
+			if grep -q '"api_key": *"apikeyhere"' config.json 2>/dev/null; then \
+				perl -pi -e "s/\"api_key\": *\"apikeyhere\"/\"api_key\": \"$$apikey\"/" config.json; \
+				echo "generated web.api_key in config.json"; \
+			fi; \
+		fi; \
+		bootpw=$$(openssl rand -hex 12); \
+		perl -pi -e "s/^PORTAL_SESSION_SECRET=.*/PORTAL_SESSION_SECRET=$$(openssl rand -hex 32)/; \
+			s/^PORTAL_ENCRYPTION_KEY=.*/PORTAL_ENCRYPTION_KEY=$$(openssl rand -hex 32)/; \
+			s/^PORTAL_DB_PASSWORD=.*/PORTAL_DB_PASSWORD=$$(openssl rand -hex 24)/; \
+			s/^PORTAL_BOOTSTRAP_PASSWORD=.*/PORTAL_BOOTSTRAP_PASSWORD=$$bootpw/; \
+			s|^PORTAL_ADMIN_API_KEY=.*|PORTAL_ADMIN_API_KEY=$$apikey|" portal/.env; \
+		echo "created portal/.env with generated secrets"; \
+		echo "  first portal admin login: admin / $$bootpw  (reset after first login!)"; \
+		echo "  PORTAL_ADMIN_API_KEY synced with web.api_key in config.json"; \
 	else \
 		echo "portal/.env exists — leaving it alone"; \
 	fi
 
-portal-up: ## Start the portal (no TLS) on :8081
-	$(PORTAL_COMPOSE) up -d
+portal-up: portal-env ## Start just the portal services (postgres-portal :5433 + gofaxportal :8081)
+	$(COMPOSE) up -d postgres-portal gofaxportal
 
-portal-down: ## Stop the portal stack
-	$(PORTAL_COMPOSE) down
+portal-down: ## Stop the portal services (leaves the rest of the stack up)
+	-$(COMPOSE) stop gofaxportal postgres-portal
+	-$(COMPOSE) rm -f gofaxportal postgres-portal
 
 caddy-setup: ## Create Caddyfile from the sample if missing
 	@if [[ ! -f Caddyfile ]]; then \
@@ -163,7 +182,7 @@ caddy-setup: ## Create Caddyfile from the sample if missing
 		echo "Caddyfile exists — leaving it alone"; \
 	fi
 
-caddy-up: ## Start the Caddy reverse proxy (:80, or :443 with a hostname set)
+caddy-up: portal-env ## Start the Caddy reverse proxy (:80, or :443 with a hostname set)
 	$(COMPOSE) up -d caddy
 
 caddy-down: ## Stop the Caddy reverse proxy (leaves the rest of the stack up)

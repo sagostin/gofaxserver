@@ -1,15 +1,48 @@
 services:
+  # Dedicated PostgreSQL for the portal — fully separate from gofaxserver's
+  # database (root docker-compose.yml). User + database are auto-created on
+  # first boot from the PORTAL_DB_* values below (interpolated from ./.env),
+  # so no manual CREATE DATABASE step is needed.
+  # Named postgres-portal (not "postgres") so this file can also be included
+  # from docker-compose.full.yml, which has its own "postgres" service.
+  postgres-portal:
+    image: postgres:15-alpine
+    container_name: gofaxportal-postgres
+    environment:
+      - POSTGRES_USER=${PORTAL_DB_USER:-gofaxportal}
+      - POSTGRES_PASSWORD=${PORTAL_DB_PASSWORD}
+      - POSTGRES_DB=${PORTAL_DB_NAME:-gofaxportal}
+      # Host networking ignores ports: mappings — postgres itself must bind
+      # the port. Kept in sync with the portal's PORTAL_DB_PORT.
+      - PGPORT=${PORTAL_DB_PORT:-5433}
+    # Bind address: 127.0.0.1 (default) = localhost only. Set
+    # PORTAL_DB_LISTEN_ADDRESSES=0.0.0.0 in .env temporarily for remote DB
+    # access while debugging — firewall :5433 to trusted IPs when you do.
+    command: postgres -c listen_addresses=${PORTAL_DB_LISTEN_ADDRESSES:-127.0.0.1}
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+    network_mode: host
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -p $${PGPORT:-5433} -U $${POSTGRES_USER:-gofaxportal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   gofaxportal:
     build:
       context: ..
       dockerfile: portal/Dockerfile
     image: gofaxportal:latest
     container_name: gofaxportal
+    depends_on:
+      postgres-portal:
+        condition: service_healthy
     environment:
       # Set false if the portal is served over plain HTTP (no TLS proxy).
       - PORTAL_COOKIE_SECURE=${PORTAL_COOKIE_SECURE:-true}
       - PORTAL_DB_HOST=${PORTAL_DB_HOST:-127.0.0.1}
-      - PORTAL_DB_PORT=${PORTAL_DB_PORT:-5432}
+      - PORTAL_DB_PORT=${PORTAL_DB_PORT:-5433}
       - PORTAL_DB_USER=${PORTAL_DB_USER:-gofaxportal}
       - PORTAL_DB_PASSWORD=${PORTAL_DB_PASSWORD}
       - PORTAL_DB_NAME=${PORTAL_DB_NAME:-gofaxportal}
@@ -27,6 +60,10 @@ services:
     network_mode: host
     restart: always
 
-# The Caddy reverse proxy lives in the root docker-compose.full.yml (Caddyfile
-# at the repo root) — it fronts both this portal and gofaxserver; TLS is
-# configured in the Caddyfile. See docs/INSTALLATION.md "Reverse proxy & TLS".
+# No reverse proxy here on purpose:
+# - Combined single-host deploys: Caddy comes from the root
+#   docker-compose.full.yml (which `include`s this file) and fronts both the
+#   portal and gofaxserver — see docs/INSTALLATION.md "Reverse proxy & TLS".
+# - Separated/standalone deploys (this file used directly, e.g. split-host):
+#   front :8081 with your OWN proxy/TLS config — the root Caddyfile assumes
+#   both services are on the same host and won't fit your topology.

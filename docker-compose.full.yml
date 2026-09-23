@@ -1,7 +1,14 @@
-# All-containerized deployment: PostgreSQL + FreeSWITCH + gofaxserver + Caddy
-# (reverse proxy; plain HTTP by default, TLS configured in the Caddyfile).
+# All-containerized deployment: PostgreSQL (gofaxserver) + FreeSWITCH +
+# gofaxserver + PostgreSQL (portal, :5433) + portal + Caddy (reverse proxy;
+# plain HTTP by default, TLS configured in the Caddyfile).
 # FreeSWITCH runs in a container here; for FreeSWITCH as a Debian host
 # service use docker-compose.yml instead. See docs/INSTALLATION.md.
+#
+# The portal stack (portal/docker-compose.yml: postgres-portal on :5433 +
+# gofaxportal on :8081) is pulled in via `include` below, so `make up` starts
+# everything with TWO separate databases: gofaxserver's on :5432 and the
+# portal's on :5433, each with its own credentials. Portal env comes from
+# portal/.env (seeded with generated secrets by `make setup`).
 #
 # Everything uses host networking on purpose:
 #   - FreeSWITCH's ESL binds 127.0.0.1:8021 and the fax profile's dialplan
@@ -19,12 +26,23 @@
 #      (gofaxserver's container user is uid 1000; FreeSWITCH runs as root
 #      and reads the 0640 files it writes)
 
+# Pull in the portal stack (its own postgres on :5433 + the portal on :8081)
+# so `make up` starts the complete system. Portal variables interpolate from
+# portal/.env (NOT the root .env); the portal compose file also still works
+# standalone.
+include:
+  - path: portal/docker-compose.yml
+    env_file:
+      - portal/.env
+
 services:
   postgres:
     image: postgres:15-alpine
     container_name: postgres
     env_file:
       # optional so `up -d caddy` works on host-service (Path B) installs
+      # (note: parsing this file still requires portal/.env to exist —
+      # `make portal-env` seeds it — because of the `include` above)
       - path: .env
         required: false
     environment:
@@ -34,6 +52,10 @@ services:
       - POSTGRES_HOST_AUTH_METHOD=${POSTGRES_HOST_AUTH_METHOD}
     volumes:
       - ./postgres/data:/var/lib/postgresql/data
+    # Bind address: 127.0.0.1 (default) = localhost only. Set
+    # POSTGRES_LISTEN_ADDRESSES=0.0.0.0 in .env temporarily for remote DB
+    # access while debugging — firewall :5432 to trusted IPs when you do.
+    command: postgres -c listen_addresses=${POSTGRES_LISTEN_ADDRESSES:-127.0.0.1}
     network_mode: host
     restart: always
 

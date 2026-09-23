@@ -6,5 +6,8 @@ config.json
 # Built binary (go build -o gofaxportal ./cmd/portal)
 /gofaxportal
 
+# Local PostgreSQL container data (portal/docker-compose.yml mount)
+postgres/
+
 # Logs
 *.log

@@ -19,10 +19,21 @@ This document describes the procedure for adding a new customer/tenant to gofaxs
 ## Overview
 
 The fax relay system consists of:
-- **FreeSWITCH** (`examples/freeswitch/`) — SIP gateway and T.38 termination. Listens for inbound ESL on `:8022`.
+- **FreeSWITCH** (`examples/freeswitch/`) — SIP gateway and T.38 termination. gofaxserver drives it over ESL (`:8021` outbound commands) and receives inbound calls on its own ESL listener (`:8022`).
 - **gofaxserver** (`gofaxserver/server.go`, entry point `gofaxserver/cmd/gofaxserver/main.go`) — Multi-tenant fax routing and management.
 - **PostgreSQL** — Persistent storage for tenants, numbers, endpoints, tenant users, and fax job results. Schema is auto-migrated on first startup.
 - **REST API** — Administration interface on `:8080` (or `web.listen` from `config.json`).
+
+> **Path A vs Path B cheat-sheet.** The steps below work on both deployment
+> paths from [INSTALLATION.md](INSTALLATION.md), but paths and CLI access
+> differ. Everything else (API calls on `:8080`) is identical.
+>
+> | | **Path A — all containers** | **Path B — FreeSWITCH on host** |
+> |---|---|---|
+> | Gateway XML dir | `./volumes/gateways` (repo root; shared mount into both containers) | `/etc/freeswitch/gateways` |
+> | FreeSWITCH config tree | `./volumes/freeswitch` | `/etc/freeswitch` |
+> | FreeSWITCH CLI | `make fs-cli` (= `docker exec -it freeswitch fs_cli`) | `fs_cli` |
+> | Example gateway templates | `examples/freeswitch/gateways/` in the repo checkout | same (copy from repo checkout) |
 
 ## Supported Integration Modes
 
@@ -70,14 +81,22 @@ sudo su
 >    `freeswitch.gateway_config_chown` (e.g. `"freeswitch:freeswitch"`) and run
 >    gofaxserver with permission to chown (root or `CAP_CHOWN`); chown failures
 >    are logged as warnings, not fatal.
+>
+> On **Path A (all containers)** neither prerequisite applies: the seeded
+> `volumes/freeswitch` config already includes `gateways/*.xml`, and
+> `make setup` created `volumes/gateways` with the right ownership
+> (`1000:1000`).
 
-Templates are in `examples/freeswitch/gateways/`. Copy the appropriate one for this customer:
+Templates are in `examples/freeswitch/gateways/`. Copy the appropriate one for this customer
+(into `./volumes/gateways/` on Path A, `/etc/freeswitch/gateways/` on Path B):
 
 ```bash
-# Customer PBX gateway
-cp examples/freeswitch/gateways/pbx_example.xml /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
+# Path A (all containers) — run from the repo checkout:
+cp examples/freeswitch/gateways/pbx_example.xml volumes/gateways/pbx_<CUSTOMERNAME>.xml
+cp examples/freeswitch/gateways/sbc_example.xml volumes/gateways/sbc_<CARRIERNAME>.xml
 
-# Upstream carrier / SBC gateway (if this is for an upstream trunk)
+# Path B (FreeSWITCH on host):
+cp examples/freeswitch/gateways/pbx_example.xml /etc/freeswitch/gateways/pbx_<CUSTOMERNAME>.xml
 cp examples/freeswitch/gateways/sbc_example.xml /etc/freeswitch/gateways/sbc_<CARRIERNAME>.xml
 ```
 
@@ -96,7 +115,7 @@ Edit the gateway file and update:
 ```
 
 **Key gateway parameters:**
-- `realm` — The public host or domain of the remote peer. **This is also matched by gofaxserver's `fsGatewayACL`** (the endpoint's `endpoint` value must be `xml_name:publicIP`, and the part after the `:` is compared exactly against the inbound source IP) for inbound ACL to pass.
+- `realm` — The host or IP of the remote peer. **This is also matched by gofaxserver's `fsGatewayACL`**: the endpoint's `endpoint` value is `xml_name:IP-or-hostname`. IPs are compared exactly against the inbound source IP; hostnames are resolved (and re-resolved periodically, tracking far-end IP changes automatically — see [GATEWAYS.md](GATEWAYS.md) "ACL Matching").
 - `extension` — How to route calls to this gateway (default: `auto_to_user`).
 - `register` — Set to `false` for IP-based authentication.
 
@@ -125,10 +144,15 @@ On the customer's PBX:
 ## Step 4: Access FreeSWITCH CLI
 
 ```bash
+# Path B (FreeSWITCH on host):
 fs_cli
+
+# Path A (all containers):
+make fs-cli        # = docker exec -it freeswitch fs_cli
 ```
 
-Exit with `/quit`.
+Exit with `/quit`. (One-off commands without attaching: `fs_cli -x "<cmd>"` or
+`docker exec freeswitch fs_cli -x "<cmd>"`.)
 
 **Useful CLI commands:**
 
@@ -155,7 +179,12 @@ The `fax` profile name comes from `examples/freeswitch/autoload_configs/sofia.co
 After creating the gateway XML file, scan it in the FreeSWITCH CLI:
 
 ```bash
+# either inside fs_cli (Step 4):
 sofia profile fax rescan
+
+# or as a one-off:
+fs_cli -x "sofia profile fax rescan"                       # Path B
+docker exec freeswitch fs_cli -x "sofia profile fax rescan"  # Path A
 ```
 
 You should see the newly scanned gateway listed.
@@ -202,13 +231,13 @@ Multiple email addresses for the same notification type are separated by `;` —
 
 ## Step 7: Add Endpoint
 
-Endpoint format for gateways: `<GATEWAY_XML_NAME>:<PBX_IP>` (the `publicIP` is what gofaxserver's `fsGatewayACL` checks against the inbound source IP).
+Endpoint format for gateways: `<GATEWAY_XML_NAME>:<PBX_IP_OR_HOSTNAME>` (the part after `:` is what gofaxserver's `fsGatewayACL` checks against the inbound source IP — hostnames are resolved and kept up to date automatically).
 
 ### Endpoint Types
 
 | Type | Description | Endpoint Format | `type_id` |
 |------|-------------|------------------|-----------|
-| `gateway` | SIP gateway to PBX | `xml_name:ip` | per scope |
+| `gateway` | SIP gateway to PBX | `xml_name:ip-or-hostname` | per scope |
 | `webhook` | HTTP POST delivery | Full URL (e.g., `https://...`) | per scope |
 | `email` | Email delivery | Email address | per scope |
 
@@ -403,7 +432,7 @@ activate-tbcustomerconfig
 
 - Active fax jobs: `curl http://<FAX_SERVER_HOST>:8080/admin/faxes` (admin auth)
 - Fax status by UUID: `curl "http://<FAX_SERVER_HOST>:8080/fax/status?uuid=<JOB_UUID>"` (tenant user auth, not admin)
-- FreeSWITCH debugging: `fs_cli` then `sofia global siptrace on`
+- FreeSWITCH debugging: `fs_cli` (`make fs-cli` on Path A) then `sofia global siptrace on`
 - Loki queries: filter by `job="faxserver"` and the component type (`Server.StartUp`, `Router`, `Queue`, etc.)
 
 ---
