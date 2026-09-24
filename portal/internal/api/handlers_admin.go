@@ -130,6 +130,11 @@ func (s *Server) adminCreateOrg(ctx iris.Context) {
 type updateOrgReq struct {
 	Name   *string `json:"name"`
 	Active *bool   `json:"active"`
+	// TenantNotify, when present, makes the portal manage the tenant-level
+	// notify rules upstream: the value is validated, stored on the org, and
+	// pushed via UpdateTenant (empty string clears the upstream rules). When
+	// absent the upstream tenant notify is left untouched.
+	TenantNotify *string `json:"tenant_notify"`
 }
 
 func (s *Server) adminUpdateOrg(ctx iris.Context) {
@@ -146,16 +151,30 @@ func (s *Server) adminUpdateOrg(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "invalid payload"})
 		return
 	}
+	if req.TenantNotify != nil {
+		tenantNotify, cerr := normalizeCustomNotify(*req.TenantNotify)
+		if cerr != nil {
+			ctx.StatusCode(400)
+			ctx.JSON(map[string]string{"error": "tenant_notify: " + cerr.Error()})
+			return
+		}
+		org.TenantNotify = tenantNotify
+	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
 		newName := strings.TrimSpace(*req.Name)
-		// Preserve the tenant-level notify: UpdateTenant rewrites the row, and
-		// an empty string would silently clear any notify set out-of-band.
-		liveTenants, lerr := s.FX.ListTenants()
-		notify := ""
-		if lerr == nil {
-			for _, t := range liveTenants {
-				if t.ID == org.GofaxTenantID {
-					notify = t.Notify
+		// Determine the tenant-level notify to write: portal-managed rules
+		// when set on the org (or explicitly cleared in this request);
+		// otherwise preserve whatever is live upstream (UpdateTenant rewrites
+		// the row, and an empty string would silently clear any notify set
+		// out-of-band).
+		notify := org.TenantNotify
+		if notify == "" && req.TenantNotify == nil {
+			liveTenants, lerr := s.FX.ListTenants()
+			if lerr == nil {
+				for _, t := range liveTenants {
+					if t.ID == org.GofaxTenantID {
+						notify = t.Notify
+					}
 				}
 			}
 		}
@@ -165,6 +184,14 @@ func (s *Server) adminUpdateOrg(ctx iris.Context) {
 			return
 		}
 		org.Name = newName
+	} else if req.TenantNotify != nil {
+		// Notify-only change: UpdateTenant rewrites the row, so re-assert the
+		// current name alongside the managed notify rules.
+		if uerr := s.FX.UpdateTenant(org.GofaxTenantID, org.Name, org.TenantNotify); uerr != nil {
+			ctx.StatusCode(502)
+			ctx.JSON(map[string]string{"error": "upstream notify update failed: " + uerr.Error()})
+			return
+		}
 	}
 	if req.Active != nil {
 		org.Active = *req.Active
@@ -315,16 +342,20 @@ func (s *Server) adminReconcileOrg(ctx iris.Context) {
 	report := map[string]any{
 		"org_id":                   org.ID,
 		"tenant_exists":            false,
-		"svc_account_ok":           false,      // user exists upstream
-		"svc_auth_ok":              false,      // stored password actually authenticates
-		"missing_upstream_numbers": []string{}, // in portal DB, not on gofaxserver
-		"missing_local_numbers":    []string{}, // on gofaxserver, not in portal DB
+		"tenant_notify_drift":      map[string]string{}, // only when org.TenantNotify is portal-managed
+		"svc_account_ok":           false,               // user exists upstream
+		"svc_auth_ok":              false,               // stored password actually authenticates
+		"missing_upstream_numbers": []string{},          // in portal DB, not on gofaxserver
+		"missing_local_numbers":    []string{},          // on gofaxserver, not in portal DB
 		"number_field_drift":       []map[string]string{},
 	}
 
 	for _, t := range liveTenants {
 		if t.ID == org.GofaxTenantID {
 			report["tenant_exists"] = true
+			if org.TenantNotify != "" && t.Notify != org.TenantNotify {
+				report["tenant_notify_drift"] = map[string]string{"portal": org.TenantNotify, "live": t.Notify}
+			}
 		}
 	}
 	for _, u := range liveUsers {
@@ -362,7 +393,7 @@ func (s *Server) adminReconcileOrg(ctx iris.Context) {
 				map[string]string{"number": number, "field": "gofax_number_id",
 					"portal": fmt.Sprint(lnLocal.GofaxNumberID), "live": fmt.Sprint(ln.ID)})
 		}
-		if want := s.computeNotify(s.DB, lnLocal.ID, org.SvcUsername); ln.Notify != want {
+		if want := s.computeNotify(s.DB, lnLocal.ID, org.SvcUsername, lnLocal.CustomNotify); ln.Notify != want {
 			report["number_field_drift"] = append(report["number_field_drift"].([]map[string]string),
 				map[string]string{"number": number, "field": "notify",
 					"portal": want, "live": ln.Notify})
@@ -411,6 +442,7 @@ type createNumberReq struct {
 	Name           string `json:"name"`
 	Header         string `json:"header"`
 	InboundEnabled *bool  `json:"inbound_enabled"` // default true
+	CustomNotify   string `json:"custom_notify"`
 }
 
 // provisionPortalEndpoint creates the backend "portal" endpoint that
@@ -476,17 +508,23 @@ func (s *Server) adminCreateNumber(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "number already registered in portal"})
 		return
 	}
-	// New numbers have no user assignments yet, so the notify string is just
-	// the portal status-push destination (email_report entries are added by
-	// the assignment flow).
-	created, err := s.FX.AddNumber(org.GofaxTenantID, number, req.Name, req.Header, s.computeNotify(s.DB, 0, org.SvcUsername))
+	customNotify, cerr := normalizeCustomNotify(req.CustomNotify)
+	if cerr != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "custom_notify: " + cerr.Error()})
+		return
+	}
+	// New numbers have no user assignments yet, so the derived notify portion
+	// is just the portal status-push destination (email_report entries are
+	// added by the assignment flow); custom segments ride along from the start.
+	created, err := s.FX.AddNumber(org.GofaxTenantID, number, req.Name, req.Header, s.computeNotify(s.DB, 0, org.SvcUsername, customNotify))
 	if err != nil {
 		ctx.StatusCode(502)
 		ctx.JSON(map[string]string{"error": "upstream add failed: " + err.Error()})
 		return
 	}
 	inboundEnabled := req.InboundEnabled == nil || *req.InboundEnabled
-	row := &models.Number{Number: number, Name: req.Name, Header: req.Header, GofaxNumberID: created.ID, OrgID: org.ID, Active: true, InboundEnabled: inboundEnabled}
+	row := &models.Number{Number: number, Name: req.Name, Header: req.Header, GofaxNumberID: created.ID, OrgID: org.ID, Active: true, InboundEnabled: inboundEnabled, CustomNotify: customNotify}
 	if err := s.DB.Create(row).Error; err != nil {
 		_ = s.FX.DeleteNumber(org.GofaxTenantID, number)
 		ctx.StatusCode(500)
@@ -529,6 +567,7 @@ type updateNumberReq struct {
 	Header         *string `json:"header"`
 	Active         *bool   `json:"active"`
 	InboundEnabled *bool   `json:"inbound_enabled"`
+	CustomNotify   *string `json:"custom_notify"`
 }
 
 func (s *Server) adminUpdateNumber(ctx iris.Context) {
@@ -554,6 +593,15 @@ func (s *Server) adminUpdateNumber(ctx iris.Context) {
 	if req.Active != nil {
 		num.Active = *req.Active
 	}
+	if req.CustomNotify != nil {
+		customNotify, cerr := normalizeCustomNotify(*req.CustomNotify)
+		if cerr != nil {
+			ctx.StatusCode(400)
+			ctx.JSON(map[string]string{"error": "custom_notify: " + cerr.Error()})
+			return
+		}
+		num.CustomNotify = customNotify
+	}
 	if req.InboundEnabled != nil && *req.InboundEnabled != num.InboundEnabled {
 		if *req.InboundEnabled {
 			if perr := s.provisionPortalEndpoint(num, org); perr != nil {
@@ -566,7 +614,7 @@ func (s *Server) adminUpdateNumber(ctx iris.Context) {
 		}
 		num.InboundEnabled = *req.InboundEnabled
 	}
-	notify := s.computeNotify(s.DB, num.ID, org.SvcUsername)
+	notify := s.computeNotify(s.DB, num.ID, org.SvcUsername, num.CustomNotify)
 	if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 		ctx.StatusCode(502)
 		ctx.JSON(map[string]string{"error": "upstream update failed: " + uerr.Error()})
@@ -601,15 +649,19 @@ func (s *Server) adminDeleteNumber(ctx iris.Context) {
 	ctx.JSON(map[string]bool{"ok": true})
 }
 
-// computeNotify builds the derived notify string for a number: an
+// computeNotify builds the desired notify string for a number: an
 // email_report destination per assigned user's email, plus the portal
 // status-push destination (portal->svc_username) so gofaxserver notifies the
-// portal of final job outcomes immediately. The portal destination is always
-// present for orgs with a service account, even with no assigned users.
-// Only active users with an email and email_notify enabled are included.
+// portal of final job outcomes immediately, plus any custom segments stored
+// on the number (customNotify — already normalized at write time; invalid
+// segments are skipped here so a hand-edited row can never break a resync).
+// The portal destination is always present for orgs with a service account,
+// even with no assigned users. Only active users with an email and
+// email_notify enabled are included. Custom segments duplicating a derived
+// one are dropped so the output is deterministic.
 // db is usually s.DB, or an open transaction whose uncommitted user /
 // assignment changes the computation must see.
-func (s *Server) computeNotify(db *gorm.DB, numberID uint, svcUsername string) string {
+func (s *Server) computeNotify(db *gorm.DB, numberID uint, svcUsername, customNotify string) string {
 	dests := []string{}
 	emails := []string{}
 	db.Table("portal_users").
@@ -622,7 +674,57 @@ func (s *Server) computeNotify(db *gorm.DB, numberID uint, svcUsername string) s
 	if svcUsername != "" {
 		dests = append(dests, "portal->"+svcUsername)
 	}
-	return strings.Join(dests, ",")
+	return mergeNotifySegments(dests, customNotify)
+}
+
+// mergeNotifySegments appends the normalized custom segments to the derived
+// destination list, dropping segments that duplicate a derived one, so the
+// final notify string is deterministic.
+func mergeNotifySegments(derived []string, customNotify string) string {
+	seen := map[string]bool{}
+	out := append([]string{}, derived...)
+	for _, d := range derived {
+		seen[d] = true
+	}
+	if custom, err := normalizeCustomNotify(customNotify); err == nil && custom != "" {
+		for _, seg := range strings.Split(custom, ",") {
+			if !seen[seg] {
+				seen[seg] = true
+				out = append(out, seg)
+			}
+		}
+	}
+	return strings.Join(out, ",")
+}
+
+// normalizeCustomNotify validates and canonicalizes a custom notify segment
+// list ("email_full->ops@acme.tld, webhook->https://…"). Segments are split
+// on commas, trimmed, and each must be a non-empty "type->destination" pair;
+// duplicates are dropped. Returns the canonical comma-joined string.
+// Syntactic validation only — gofaxserver performs the real parsing and
+// dispatch.
+func normalizeCustomNotify(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, seg := range strings.Split(raw, ",") {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		typ, dest, found := strings.Cut(seg, "->")
+		if !found || strings.TrimSpace(typ) == "" || strings.TrimSpace(dest) == "" {
+			return "", fmt.Errorf("invalid notify segment %q (want type->destination)", seg)
+		}
+		if !seen[seg] {
+			seen[seg] = true
+			out = append(out, seg)
+		}
+	}
+	return strings.Join(out, ","), nil
 }
 
 // resyncUserNotify re-pushes the derived notify string for every number
@@ -646,7 +748,7 @@ func (s *Server) resyncNotifyForNumberIDs(db *gorm.DB, numberIDs []uint) []strin
 			failures = append(failures, fmt.Sprintf("number:%d (%s)", nid, err))
 			continue
 		}
-		notify := s.computeNotify(db, num.ID, org.SvcUsername)
+		notify := s.computeNotify(db, num.ID, org.SvcUsername, num.CustomNotify)
 		if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 			failures = append(failures, fmt.Sprintf("%s (%s)", num.Number, uerr))
 		}
@@ -677,7 +779,7 @@ func (s *Server) adminResyncOrgNotify(ctx iris.Context) {
 	failures := 0
 	for i := range numbers {
 		num := &numbers[i]
-		notify := s.computeNotify(s.DB, num.ID, org.SvcUsername)
+		notify := s.computeNotify(s.DB, num.ID, org.SvcUsername, num.CustomNotify)
 		r := result{Number: num.Number, Notify: notify, OK: true}
 		if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 			r.OK = false
@@ -744,7 +846,7 @@ func (s *Server) adminSetAssignments(ctx iris.Context) {
 			return
 		}
 	}
-	notify := s.computeNotify(tx, num.ID, org.SvcUsername)
+	notify := s.computeNotify(tx, num.ID, org.SvcUsername, num.CustomNotify)
 	if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 		tx.Rollback()
 		ctx.StatusCode(502)

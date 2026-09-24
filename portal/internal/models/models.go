@@ -32,14 +32,19 @@ const (
 )
 
 type Org struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	Name           string    `gorm:"uniqueIndex;not null" json:"name"`
-	GofaxTenantID  uint      `gorm:"index;not null" json:"gofax_tenant_id"`
-	SvcUsername    string    `gorm:"not null" json:"svc_username"`
-	SvcPasswordEnc []byte    `gorm:"not null" json:"-"` // AES-256-GCM sealed
-	Active         bool      `gorm:"not null;default:true" json:"active"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uint   `gorm:"primaryKey" json:"id"`
+	Name           string `gorm:"uniqueIndex;not null" json:"name"`
+	GofaxTenantID  uint   `gorm:"index;not null" json:"gofax_tenant_id"`
+	SvcUsername    string `gorm:"not null" json:"svc_username"`
+	SvcPasswordEnc []byte `gorm:"not null" json:"-"` // AES-256-GCM sealed
+	// TenantNotify holds optional custom tenant-level notify rules pushed to
+	// gofaxserver verbatim (e.g. "email_full->ops@acme.tld"). Empty means the
+	// portal does not manage the tenant notify field and preserves whatever
+	// is set upstream.
+	TenantNotify string    `json:"tenant_notify"`
+	Active       bool      `gorm:"not null;default:true" json:"active"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type PortalUser struct {
@@ -70,10 +75,14 @@ type Number struct {
 	// InboundEnabled controls whether received faxes for this number are
 	// delivered into the portal inbox. When true the portal maintains a
 	// "portal"-type endpoint on gofaxserver for this number.
-	InboundEnabled   bool      `gorm:"not null;default:true" json:"inbound_enabled"`
-	PortalEndpointID uint      `json:"portal_endpoint_id"` // gofaxserver endpoint id auto-provisioned for inbound delivery (0 = none)
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	InboundEnabled   bool `gorm:"not null;default:true" json:"inbound_enabled"`
+	PortalEndpointID uint `json:"portal_endpoint_id"` // gofaxserver endpoint id auto-provisioned for inbound delivery (0 = none)
+	// CustomNotify holds operator-defined notify segments appended to the
+	// derived notify string (assigned-user emails + portal status push) on
+	// every upstream sync, so re-syncs never remove them.
+	CustomNotify string    `json:"custom_notify"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // UserNumber is the per-user outbound allowlist.

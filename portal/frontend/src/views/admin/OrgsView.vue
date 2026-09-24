@@ -7,6 +7,7 @@ interface Org {
   name: string
   gofax_tenant_id: number
   svc_username: string
+  tenant_notify: string
   active: boolean
   user_count: number
   number_count: number
@@ -72,6 +73,19 @@ async function resyncNotify(o: Org) {
   try { report.value = await api<any>(`/admin/orgs/${o.id}/notify/resync`, { method: 'POST' }) }
   catch (e: any) { error.value = e.message }
 }
+
+async function editTenantNotify(o: Org) {
+  const notify = prompt(
+    'Tenant-level notify rules (email_full->ops@acme.tld,webhook->https://…). Applies to all of this org\'s numbers. Empty clears the upstream rules and hands control back to out-of-band edits.',
+    o.tenant_notify,
+  )
+  if (notify === null) return
+  error.value = ''
+  try {
+    await api(`/admin/orgs/${o.id}`, { method: 'PUT', json: { tenant_notify: notify } })
+    await load()
+  } catch (e: any) { error.value = e.message }
+}
 </script>
 
 <template>
@@ -102,7 +116,9 @@ async function resyncNotify(o: Org) {
             <td>{{ o.id }}</td>
             <td>{{ o.name }}</td>
             <td>#{{ o.gofax_tenant_id }}</td>
-            <td class="muted">{{ o.svc_username }}</td>
+            <td class="muted">{{ o.svc_username }}
+              <div v-if="o.tenant_notify" class="muted" style="font-size:11px" :title="o.tenant_notify">tenant notify managed</div>
+            </td>
             <td>{{ o.user_count }}</td>
             <td>{{ o.number_count }}</td>
             <td><span class="badge" :class="o.active ? 'active' : 'inactive'">{{ o.active ? 'active' : 'inactive' }}</span></td>
@@ -110,6 +126,7 @@ async function resyncNotify(o: Org) {
               <button class="secondary" @click="toggleActive(o)">{{ o.active ? 'Deactivate' : 'Reactivate' }}</button>
               <button class="secondary" @click="reconcile(o)">Reconcile</button>
               <button class="secondary" @click="resyncNotify(o)">Re-sync notify</button>
+              <button class="secondary" @click="editTenantNotify(o)">Tenant notify</button>
               <button class="secondary" @click="rotateCredentials(o)">Rotate credentials</button>
               <button class="danger" @click="purge(o)">Purge</button>
             </td>

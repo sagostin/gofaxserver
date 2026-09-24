@@ -26,10 +26,13 @@ interface TenantUser {
 }
 
 const tenants = ref<Tenant[]>([])
+const orgTenantIDs = ref<Set<number>>(new Set()) // gofax tenant IDs claimed by portal orgs
 const error = ref('')
 const busy = ref(false)
 const expanded = ref(0) // tenant id whose detail panel is open
 const users = ref<TenantUser[]>([])
+
+function orgManaged(tid: number) { return orgTenantIDs.value.has(tid) }
 
 // Create tenant form
 const tForm = ref({ name: '', notify: '' })
@@ -48,6 +51,8 @@ async function load() {
   error.value = ''
   try {
     tenants.value = (await api<Tenant[]>('/admin/tenants')) || []
+    const orgs = (await api<{ gofax_tenant_id: number }[]>('/admin/orgs')) || []
+    orgTenantIDs.value = new Set(orgs.map((o) => o.gofax_tenant_id))
   } catch (e: any) { error.value = e.message }
 }
 onMounted(load)
@@ -203,11 +208,17 @@ async function removeNumber(n: TenantNumber) {
                 <template v-if="tEdit?.id === t.id">
                   <input v-model="tEditForm.name" style="width:160px" />
                 </template>
-                <template v-else>{{ t.name }}</template>
+                <template v-else>
+                  {{ t.name }}
+                  <span v-if="orgManaged(t.id)" class="badge active" title="Claimed by a portal organization">portal org</span>
+                </template>
               </td>
               <td>
                 <template v-if="tEdit?.id === t.id">
                   <input v-model="tEditForm.notify" style="width:220px" />
+                  <div v-if="orgManaged(t.id)" class="muted" style="font-size:11px;max-width:260px">
+                    Portal-managed tenant: org-level rules are set via Organizations → Tenant notify. Edits here may be overwritten by the portal.
+                  </div>
                 </template>
                 <template v-else>{{ t.notify || '—' }}</template>
               </td>
@@ -259,6 +270,9 @@ async function removeNumber(n: TenantNumber) {
 
                 <div class="panel" style="margin:8px 0">
                   <h3>Numbers <span class="muted">(assigned to this tenant)</span></h3>
+                  <p v-if="orgManaged(t.id)" class="muted" style="font-size:12px">
+                    This tenant is claimed by a portal organization — number notify fields are re-synced from portal state (assigned users + portal status push + per-number custom rules). Direct edits to notify here will be overwritten; set custom rules via the Numbers page instead.
+                  </p>
                   <table>
                     <thead>
                       <tr><th>Number</th><th>Name</th><th>Header</th><th>Notify</th><th></th></tr>

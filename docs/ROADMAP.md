@@ -2,6 +2,25 @@
 
 Planned / proposed work items. Newest first.
 
+## Reconcile "adopt" action for out-of-band notify rules
+
+**Status:** proposed — not implemented.
+
+Numbers/tenants whose notify rules were edited out-of-band (direct on
+gofaxserver, or via the direct admin UI) show as permanent `notify` drift in
+the org reconcile report, and the next portal re-sync would silently delete
+the unrecognized segments. The manual workaround is copying the extra
+segments into the portal-managed `CustomNotify` / `TenantNotify` fields.
+
+### Proposed design
+
+`POST /admin/orgs/{id}/notify/adopt`: for each drifted number, compute
+`live segments − computed segments`, append the extras into
+`Number.CustomNotify` (tenant-level extras into `Org.TenantNotify`), and
+re-push. One click converts out-of-band rules into portal-managed ones and
+turns the reconcile report green. Add an "Adopt" button per drift row in
+OrgsView.
+
 ## Per-org email notification templates (portal admin)
 
 **Status:** proposed — not implemented.

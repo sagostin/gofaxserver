@@ -14,6 +14,7 @@ interface NumberRow {
   active: boolean
   inbound_enabled: boolean
   assigned_count: number
+  custom_notify: string
 }
 interface User { id: number; username: string; role: string; active: boolean; org_id: number | null }
 
@@ -23,7 +24,7 @@ const users = ref<User[]>([])
 const error = ref('')
 const busy = ref(false)
 
-const form = ref({ org_id: 0, number: '', name: '', header: '' })
+const form = ref({ org_id: 0, number: '', name: '', header: '', custom_notify: '' })
 const assignFor = ref<NumberRow | null>(null)
 const assignSel = ref<number[]>([])
 
@@ -41,7 +42,7 @@ async function create() {
   busy.value = true
   try {
     await api('/admin/numbers', { json: form.value })
-    form.value = { org_id: 0, number: '', name: '', header: '' }
+    form.value = { org_id: 0, number: '', name: '', header: '', custom_notify: '' }
     await load()
   } catch (e: any) { error.value = e.message } finally { busy.value = false }
 }
@@ -51,9 +52,14 @@ async function edit(n: NumberRow) {
   if (name === null) return
   const header = prompt('Fax header text', n.header)
   if (header === null) return
+  const custom = prompt(
+    'Custom notify rules (email_full->ops@acme.tld,webhook->https://…). Appended to the derived rules on every re-sync; leave empty for none.',
+    n.custom_notify,
+  )
+  if (custom === null) return
   error.value = ''
   try {
-    await api(`/admin/numbers/${n.id}`, { method: 'PUT', json: { name, header } })
+    await api(`/admin/numbers/${n.id}`, { method: 'PUT', json: { name, header, custom_notify: custom } })
     await load()
   } catch (e: any) { error.value = e.message }
 }
@@ -120,9 +126,10 @@ function orgUsers(orgId: number) {
         <div><label>Number</label><input v-model="form.number" placeholder="5551234567" required /></div>
         <div><label>Caller ID name</label><input v-model="form.name" /></div>
         <div><label>Fax header</label><input v-model="form.header" /></div>
+        <div><label>Custom notify <span class="muted">(optional)</span></label><input v-model="form.custom_notify" placeholder="email_full->ops@acme.tld,webhook->…" /></div>
         <button :disabled="busy">Add number</button>
       </form>
-      <p class="muted">Receipt emails are derived from assigned users and pushed to gofaxserver's notify field.</p>
+      <p class="muted">Receipt emails are derived from assigned users and pushed to gofaxserver's notify field. Custom notify rules are stored on the number and appended on every re-sync, so they survive assignment changes.</p>
       <p v-if="error" class="error">{{ error }}</p>
     </div>
 
@@ -135,7 +142,9 @@ function orgUsers(orgId: number) {
           <tr v-for="n in numbers" :key="n.id">
             <td><strong>{{ n.number }}</strong></td>
             <td>{{ n.org_name }}</td>
-            <td>{{ n.name || '—' }} / {{ n.header || '—' }}</td>
+            <td>{{ n.name || '—' }} / {{ n.header || '—' }}
+              <div v-if="n.custom_notify" class="muted" style="font-size:11px" :title="n.custom_notify">+custom notify</div>
+            </td>
             <td class="muted">#{{ n.gofax_number_id }}</td>
             <td><span class="badge" :class="n.active ? 'active' : 'inactive'">{{ n.active ? 'active' : 'inactive' }}</span></td>
             <td>

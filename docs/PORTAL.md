@@ -157,13 +157,14 @@ gofaxserver dispatches notifications at the end of every queued fax job
 regardless of direction:
 
 - **Outbound (portal sends):** destinations resolve from the **source side** —
-  the *caller* number's `notify` first, falling back to the source tenant's.
-  The router stamps `SrcTenantID` from the caller number
-  (`router.go:routeFax:50-51`), so a number registered to an org receives its
-  own transmission receipts. This is what the portal wires up on assignment.
+  the *caller* number's `notify` **merged with** the source tenant's (both
+  fire, deduplicated by `type->destination`). The router stamps `SrcTenantID`
+  from the caller number (`router.go:routeFax`), so a number registered to an
+  org receives its own transmission receipts. This is what the portal wires up
+  on assignment.
 - **Inbound receptions:** same mechanism from the destination side (callee
-  number first, then tenant). A number therefore also gets reception notices —
-  harmless for outbound-only assignments.
+  number's `notify` merged with the destination tenant's). A number therefore
+  also gets reception notices — harmless for outbound-only assignments.
 
 Behavior details worth knowing:
 
@@ -172,8 +173,19 @@ Behavior details worth knowing:
   status table). It does not attach the fax itself (`email_full` does), and it
   is not failure-gated (`email_full_failure` is).
 - Multiple recipients on one entry are `;`-separated (the SMTP layer splits).
-- Number-level `notify` overrides tenant-level when non-empty; the portal only
-  ever writes number-level strings derived from assigned users.
+- Number-level and tenant-level `notify` are **merged** at dispatch — both
+  fire, deduplicated by `type->destination` (see TENANTS.md). The portal only
+  ever writes number-level strings.
+- **Custom notify rules** survive re-syncs because the portal owns them: each
+  number has a `custom_notify` field and each org an optional `tenant_notify`
+  field (both validated `type->destination[,…]` segment lists). The derived
+  string pushed upstream is `assigned-user emails + portal->svc + custom
+  segments`, so assignment changes, user edits, and full org re-syncs rewrite
+  the derived portion while custom segments ride along untouched. Rules set
+  out-of-band (direct on gofaxserver) are *not* preserved — reconcile flags
+  them as drift and the next re-sync removes them; enter customs in the portal
+  instead. The direct TenantsView admin UI warns when editing a tenant claimed
+  by a portal org.
 - Lookups are exact string matches on the registered number, so numbers must
   be stored in the dialplan-normalized format (e.g. 10 digits) — the same
   value used as `caller_number` in `/fax/send`.
@@ -185,14 +197,15 @@ Behavior details worth knowing:
 The portal tracks outbound jobs primarily by polling gofaxserver
 (`internal/poller` → `/fax/status`). To make final outcomes land instantly,
 the portal also registers itself as a notify destination: every number's
-derived notify string is
+pushed notify string is
 
 ```
-email_report->user1@x;user2@y,portal-><org svc_username>
+email_report->user1@x;user2@y,portal-><org svc_username>[,custom segments…]
 ```
 
 (the `email_report` part only when assigned users with emails *and* the
-`email_notify` toggle on exist; the `portal->` part always). gofaxserver's
+`email_notify` toggle on exist; the `portal->` part always; custom segments
+only when the number's `custom_notify` field is set). gofaxserver's
 notify dispatcher understands the
 `portal` type: at job completion it POSTs a compact JSON payload — **no file
 data** — to `<portal.url>/portal/api/notify/<svc_username>` with the same
@@ -560,10 +573,12 @@ users|endpoints`; the portal's per-org **Reconcile** button diffs the mirror
 against live state: missing tenants/numbers/users, ID mismatches, whether the
 service account exists (`svc_account_ok`) **and whether the stored password
 still authenticates** (`svc_auth_ok`), plus per-number `notify` drift against
-the derived-from-assignments string. Reconcile is read-only; repairs are
-explicit actions: **Rotate credentials** (fresh svc password + API key,
-recreates the upstream user if missing) and **Re-sync notify** (re-pushes the
-derived notify string for every number in the org). The rule:
+the computed string (derived + custom segments), and tenant-level notify drift
+(`tenant_notify_drift`) when the org manages tenant rules. Reconcile is
+read-only; repairs are explicit actions: **Rotate credentials** (fresh svc
+password + API key, recreates the upstream user if missing) and **Re-sync
+notify** (re-pushes the computed notify string for every number in the org,
+custom segments included). The rule:
 **manage gofaxserver tenants through the portal**, treat CLI/curl edits as
 exceptional, and re-run reconcile after them.
 

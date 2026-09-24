@@ -65,6 +65,68 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
+func TestNormalizeCustomNotify(t *testing.T) {
+	valid := map[string]string{
+		"":                         "",
+		"  ":                       "",
+		"email_full->ops@acme.tld": "email_full->ops@acme.tld",
+		" email_full->ops@acme.tld , webhook->https://hooks/x ": "email_full->ops@acme.tld,webhook->https://hooks/x",
+		"email->a@b.c,,email->a@b.c":                            "email->a@b.c",              // empties + duplicates dropped
+		"email_report->a@b.c;c@d.e":                             "email_report->a@b.c;c@d.e", // multi-recipient intact
+	}
+	for in, want := range valid {
+		got, err := normalizeCustomNotify(in)
+		if err != nil {
+			t.Errorf("normalizeCustomNotify(%q) unexpected error: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("normalizeCustomNotify(%q) = %q, want %q", in, got, want)
+		}
+	}
+	invalid := []string{
+		"no-arrow",
+		"->dest",
+		"type->",
+		"email_full->ops@acme.tld,bad-segment",
+		"type->  ",
+	}
+	for _, in := range invalid {
+		if _, err := normalizeCustomNotify(in); err == nil {
+			t.Errorf("normalizeCustomNotify(%q) should have failed", in)
+		}
+	}
+}
+
+func TestMergeNotifySegments(t *testing.T) {
+	derived := []string{"email_report->alice@acme.tld", "portal->svc_acme"}
+
+	// Customs append after derived, in order.
+	got := mergeNotifySegments(derived, "email_full->ops@acme.tld,webhook->https://hooks/x")
+	want := "email_report->alice@acme.tld,portal->svc_acme,email_full->ops@acme.tld,webhook->https://hooks/x"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	// A custom segment duplicating a derived one is dropped.
+	got = mergeNotifySegments(derived, "portal->svc_acme,email_full->ops@acme.tld")
+	want = "email_report->alice@acme.tld,portal->svc_acme,email_full->ops@acme.tld"
+	if got != want {
+		t.Errorf("dedup: got %q, want %q", got, want)
+	}
+
+	// Invalid customs never break a resync: derived survives untouched.
+	got = mergeNotifySegments(derived, "bad-segment")
+	if got != "email_report->alice@acme.tld,portal->svc_acme" {
+		t.Errorf("invalid custom must be skipped, got %q", got)
+	}
+
+	// Empty custom = derived only.
+	if got := mergeNotifySegments(derived, ""); got != "email_report->alice@acme.tld,portal->svc_acme" {
+		t.Errorf("empty custom: got %q", got)
+	}
+}
+
 func TestValidateEndpointRules(t *testing.T) {
 	s := &Server{}
 
