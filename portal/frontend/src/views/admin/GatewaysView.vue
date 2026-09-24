@@ -325,7 +325,7 @@ async function provisionFromEndpoint() {
         The gateway name must match <code>name=</code> in the XML and the endpoint prefix.
       </p>
       <form class="inline" @submit.prevent="submit">
-        <div><label>Name</label><input v-model="form.name" placeholder="pbx_acme" pattern="[a-z0-9_]+" :disabled="!!editing" required /></div>
+        <div><label>Name</label><input v-model="form.name" placeholder="pbx_acme" pattern="[A-Za-z0-9_]+" :disabled="!!editing" required /></div>
         <div>
           <label>Template</label>
           <select v-model.number="form.template_id">

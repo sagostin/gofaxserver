@@ -30,20 +30,17 @@ import (
 	"strings"
 )
 
-// tiffToPdf takes an input TIFF file path, converts it to a PDF using Ghostscript,
+// tiffToPdf takes an input TIFF file path, converts it to a PDF using ImageMagick,
 // and returns the new PDF file's path. The original TIFF file is left unchanged.
 func tiffToPdf(inputTiff string) (pdfPath string, err error) {
 	// Derive the output PDF file name by replacing the TIFF extension with .pdf.
 	baseName := strings.TrimSuffix(inputTiff, filepath.Ext(inputTiff))
 	pdfPath = baseName + ".pdf"
 
-	// Construct the Ghostscript command to convert TIFF to PDF.
-	// The command used:
-	// gs -q -dNOPAUSE -dBATCH -sDEVICE=pdfwrite -sOutputFile=<pdfPath> <inputTiff>
-	cmdStr := fmt.Sprintf("magick %s %s", inputTiff, pdfPath)
-	cmd := exec.Command("/bin/bash", "-c", cmdStr)
-	if err = cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to convert TIFF to PDF: %w", err)
+	cmd := exec.Command("magick", inputTiff, pdfPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to convert TIFF to PDF: %v, output: %s", err, string(output))
 	}
 
 	return pdfPath, nil

@@ -252,6 +252,10 @@ The gateway name in the XML file (`name="pbx_<CUSTOMERNAME>"`) must match:
 1. The filename sans `.xml` extension
 2. The prefix used in the `/admin/endpoint` API call
 
+Allowed characters are letters (any case), digits and underscores — the name
+must match `^[A-Za-z0-9_]+$`. Case is significant and preserved verbatim: the
+XML filename, `<gateway name>` and endpoint prefix must use identical casing.
+
 For example, if gateway file is `pbx_acme.xml` with `name="pbx_acme"`:
 - API endpoint value: `pbx_acme:<PBX_IP>` (or `pbx_acme:<PBX_HOSTNAME>` — see ACL Matching below)
 - This is what gofaxserver's `fsGatewayACL` uses to match the inbound source IP for ACL pass.

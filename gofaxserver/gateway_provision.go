@@ -48,8 +48,10 @@ import (
 // filename (sans .xml) and the prefix of the linked Endpoint value.
 
 // gatewayNameRe restricts gateway names to filename-safe, dialstring-safe
-// characters (e.g. "pbx_acme", "sbc_easybell").
-var gatewayNameRe = regexp.MustCompile(`^[a-z0-9_]+$`)
+// characters (e.g. "pbx_acme", "sbc_easybell", "pbx_CarterFinancial").
+// Case is preserved verbatim: the same string is used as the XML filename,
+// the <gateway name>, the endpoint prefix and the sofia dialstring name.
+var gatewayNameRe = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 // GatewayTemplate is a database-backed FreeSWITCH gateway XML template.
 // The body uses Go text/template syntax; variables (e.g. {{.realm}}) are

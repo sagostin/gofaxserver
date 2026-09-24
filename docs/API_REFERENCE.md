@@ -421,7 +421,7 @@ POST /admin/gateway
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Gateway name (`^[a-z0-9_]+$`); equals the XML filename and endpoint prefix |
+| `name` | string | Gateway name (`^[A-Za-z0-9_]+$`); equals the XML filename and endpoint prefix |
 | `template_id` | uint | ID of a gateway template (see below) |
 | `params` | object | Template variables; `realm` required, `register=true` requires `username`+`password` |
 | `type` | string | Linked endpoint scope: `tenant`, `number`, or `global` |

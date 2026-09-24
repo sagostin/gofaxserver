@@ -125,12 +125,12 @@ func TestValidateSpec(t *testing.T) {
 }
 
 func TestValidateGatewayName(t *testing.T) {
-	for _, ok := range []string{"pbx_acme", "sbc_easybell", "gw01"} {
+	for _, ok := range []string{"pbx_acme", "sbc_easybell", "gw01", "PBX_ACME", "pbx_CarterFinancial"} {
 		if err := validateGatewayName(ok); err != nil {
 			t.Errorf("%q should be valid: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "PBX_ACME", "pbx acme", "pbx;rm", "../etc", "pbx.xml", "sbc-gw"} {
+	for _, bad := range []string{"", "pbx acme", "pbx;rm", "../etc", "pbx.xml", "sbc-gw"} {
 		if err := validateGatewayName(bad); err == nil {
 			t.Errorf("%q should be invalid", bad)
 		}
@@ -482,7 +482,7 @@ func TestFromEndpointParsing(t *testing.T) {
 	}{
 		{"pbx_acme:192.0.2.10", "pbx_acme", "192.0.2.10", true},
 		{"sbc_gw", "sbc_gw", "", true},
-		{"PBX:1.2.3.4", "PBX", "1.2.3.4", false}, // uppercase name unusable
+		{"pbx_CarterFinancial:216.138.253.72", "pbx_CarterFinancial", "216.138.253.72", true}, // imported mixed-case name
 		{"weird name:1.2.3.4", "weird name", "1.2.3.4", false},
 	}
 	for _, c := range cases {

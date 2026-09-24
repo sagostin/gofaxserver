@@ -881,7 +881,8 @@ func firstPageTiff(uuid, inputPath string) (string, error) {
 	}
 
 	// Step 1: Convert entire TIFF to PDF
-	cmd := exec.Command("convert",
+	// NB: 'magick' (IM7) not 'convert' (IM6) — source-built IM7 only ships 'magick'.
+	cmd := exec.Command("magick",
 		"-density", "300",
 		"-compress", "lzw",
 		"-quality", "100",

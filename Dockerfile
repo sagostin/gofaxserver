@@ -13,6 +13,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -a -installsuffix cgo -o main 
 FROM debian:bookworm-slim
 
 # Update package lists and install runtime & build dependencies in one RUN command.
+# The lib*-dev packages are ImageMagick delegates: without them, ./configure
+# silently disables TIFF/JPEG/PDF support and magick fails at runtime with
+# "no decode delegate for this image format".
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     bash \
@@ -22,22 +25,41 @@ RUN apt-get update && apt-get install -y \
     autoconf \
     pkg-config \
     build-essential \
-    libpng-dev && \
+    libpng-dev \
+    libtiff-dev \
+    libjpeg-dev \
+    libopenjp2-7-dev \
+    libgs-dev \
+    libfontconfig-dev \
+    libfreetype6-dev \
+    libbz2-dev \
+    libxml2-dev \
+    zlib1g-dev \
+    liblcms2-dev \
+    liblzma-dev \
+    libwebp-dev \
+    libgraphviz-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user
 RUN adduser --disabled-password --gecos "" appuser
 
-# Download and build ImageMagick 7 from source
+# Download and build ImageMagick 7 from source (7.1.1-44, matching the
+# known-good bare-metal installs).
 WORKDIR /tmp
-RUN wget https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.0-31.tar.gz && \
-    tar xzf 7.1.0-31.tar.gz && \
-    cd ImageMagick-7.1.0-31 && \
+RUN wget https://github.com/ImageMagick/ImageMagick/archive/refs/tags/7.1.1-44.tar.gz && \
+    tar xzf 7.1.1-44.tar.gz && \
+    cd ImageMagick-7.1.1-44 && \
     ./configure --prefix=/usr/local --with-bzlib=yes --with-fontconfig=yes --with-freetype=yes --with-gslib=yes --with-gvc=yes --with-jpeg=yes --with-jp2=yes --with-png=yes --with-tiff=yes --with-xml=yes --with-gs-font-dir=/usr/share/fonts --disable-static && \
     make -j$(nproc) && \
     make install && \
     ldconfig /usr/local/lib && \
-    cd / && rm -rf /tmp/ImageMagick-7.1.0-31*
+    cd / && rm -rf /tmp/ImageMagick-7.1.1-44*
+
+# Fail the image build if the TIFF/PDF delegates were not picked up — better
+# to break the build than to ship a container that can't convert faxes.
+RUN magick -list format | grep -qE '^ *TIFF.*rw' && \
+    magick -list format | grep -qE '^ *PDF.*rw'
 
 # Set working directory and copy the pre-built Go binary from the builder stage
 WORKDIR /app
