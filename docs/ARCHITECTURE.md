@@ -339,5 +339,6 @@ PostgreSQL SSL mode and timezone are environment-variable overrides (`POSTGRES_S
 - [TENANTS.md](TENANTS.md) — Tenant, endpoint, and notify configuration
 - [API_REFERENCE.md](API_REFERENCE.md) — Full HTTP API documentation
 - [GATEWAYS.md](GATEWAYS.md) — FreeSWITCH gateway configuration
+- [ROADMAP.md](ROADMAP.md) — Planned / proposed work items
 - [`../BACKUP.md`](../BACKUP.md) — Backup and restore procedures
 - [`../gofaxserver.excalidraw`](../gofaxserver.excalidraw) — Visual architecture diagram

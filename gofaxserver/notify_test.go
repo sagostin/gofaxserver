@@ -18,6 +18,7 @@
 package gofaxserver
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -395,5 +396,98 @@ func TestGenerateFaxResultsPDFEndpointless(t *testing.T) {
 	}
 	if path == "" {
 		t.Fatal("expected a report path")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// emailSubjectBody
+// ---------------------------------------------------------------------------
+
+func emailJob(sourceType string, caller, callee, cidName string) *FaxJob {
+	return &FaxJob{
+		UUID:           uuid.New(),
+		CallUUID:       uuid.New(),
+		CallerIdNumber: caller,
+		CallerIdName:   cidName,
+		CalleeNumber:   callee,
+		SourceInfo:     FaxSourceInfo{Timestamp: time.Now(), SourceType: sourceType},
+	}
+}
+
+func TestEmailSubjectBodyOutboundSuccess(t *testing.T) {
+	now := time.Now()
+	job := emailJob("webhook", "2365461209", "2507620300", "testing")
+	nfr := NotifyFaxResults{
+		FaxJob: job,
+		Results: map[string]*FaxJob{
+			"a": attemptJob(true, 1, "OK", "NORMAL_CLEARING", now),
+		},
+	}
+	subject, body := nfr.emailSubjectBody("email_report")
+	if subject != "Fax to 2507620300 succeeded (1 page)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+	for _, want := range []string{"Status:    SUCCESS", "Direction: Sent", "From:      2365461209 (testing)", "To:        2507620300", "Pages:     1", "report is attached"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestEmailSubjectBodyInboundReceived(t *testing.T) {
+	now := time.Now()
+	job := emailJob("gateway", "2507620300", "2365461209", "TOPS Telecom")
+	nfr := NotifyFaxResults{
+		FaxJob: job,
+		Results: map[string]*FaxJob{
+			"a": attemptJob(true, 4, "OK", "NORMAL_CLEARING", now),
+		},
+	}
+	subject, body := nfr.emailSubjectBody("email_full")
+	if subject != "Fax from 2507620300 succeeded (4 pages)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+	if !strings.Contains(body, "Direction: Received") {
+		t.Errorf("body missing received direction:\n%s", body)
+	}
+	if !strings.Contains(body, "report and the original fax are attached") {
+		t.Errorf("email_full body should note the original fax attachment:\n%s", body)
+	}
+}
+
+func TestEmailSubjectBodyFailure(t *testing.T) {
+	now := time.Now()
+	job := emailJob("webhook", "2365461209", "2507620300", "")
+	nfr := NotifyFaxResults{
+		FaxJob:            job,
+		AllAttemptsFailed: true,
+		Results: map[string]*FaxJob{
+			"a": attemptJob(false, 0, "NO ANSWER", "NO_ANSWER", now),
+		},
+	}
+	subject, body := nfr.emailSubjectBody("email_full_failure")
+	if subject != "Fax to 2507620300 FAILED (NO_ANSWER)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+	for _, want := range []string{"Status:    FAILED", "Cause:     NO_ANSWER"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestEmailSubjectBodyBridged(t *testing.T) {
+	now := time.Now()
+	job := emailJob("gateway", "2507620300", "2365461209", "")
+	job.IsBridge = true
+	nfr := NotifyFaxResults{
+		FaxJob: job,
+		Results: map[string]*FaxJob{
+			"a": attemptJob(true, 2, "Bridge completed", "NORMAL_CLEARING", now),
+		},
+	}
+	subject, _ := nfr.emailSubjectBody("email_report")
+	if subject != "Bridged fax 2507620300 → 2365461209 succeeded (2 pages)" {
+		t.Errorf("unexpected subject: %q", subject)
 	}
 }

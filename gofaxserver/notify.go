@@ -115,6 +115,87 @@ func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 	return p
 }
 
+// emailSubjectBody builds a human-readable subject and plain-text body for
+// fax notification emails from the collapsed job outcome, so recipients can
+// see the result (direction, parties, pages, status, cause) without opening
+// the attached report. kind tailors the attachment note ("email_report" vs
+// the "email_full*" types which also attach the original fax).
+func (nfr *NotifyFaxResults) emailSubjectBody(kind string) (subject, body string) {
+	p := nfr.buildPortalStatusPayload()
+	j := nfr.FaxJob
+
+	// Direction and remote party. Reception/bridge results come from the
+	// pre-queue call; outbound jobs are submitted via the API/portal.
+	var phrase, direction string
+	switch {
+	case j.IsBridge:
+		direction = "Bridged"
+		phrase = fmt.Sprintf("Bridged fax %s → %s", j.CallerIdNumber, j.CalleeNumber)
+	case j.SourceInfo.SourceType == "gateway":
+		direction = "Received"
+		phrase = fmt.Sprintf("Fax from %s", j.CallerIdNumber)
+	default:
+		direction = "Sent"
+		phrase = fmt.Sprintf("Fax to %s", j.CalleeNumber)
+	}
+
+	pages := fmt.Sprintf("%d pages", p.TransferredPages)
+	if p.TransferredPages == 1 {
+		pages = "1 page"
+	}
+
+	if p.Success {
+		subject = fmt.Sprintf("%s succeeded (%s)", phrase, pages)
+	} else {
+		cause := p.HangupCause
+		if cause == "" {
+			cause = p.ResultText
+		}
+		if cause == "" {
+			cause = "unknown error"
+		}
+		subject = fmt.Sprintf("%s FAILED (%s)", phrase, cause)
+	}
+
+	status := "SUCCESS"
+	if !p.Success {
+		status = "FAILED"
+	}
+
+	from := j.CallerIdNumber
+	if j.CallerIdName != "" {
+		from = fmt.Sprintf("%s (%s)", j.CallerIdNumber, j.CallerIdName)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", subject)
+	fmt.Fprintf(&b, "Status:    %s\n", status)
+	fmt.Fprintf(&b, "Direction: %s\n", direction)
+	fmt.Fprintf(&b, "From:      %s\n", from)
+	fmt.Fprintf(&b, "To:        %s\n", j.CalleeNumber)
+	fmt.Fprintf(&b, "Pages:     %d\n", p.TransferredPages)
+	fmt.Fprintf(&b, "Attempts:  %d\n", p.Attempts)
+	if p.ResultText != "" {
+		fmt.Fprintf(&b, "Result:    %s\n", p.ResultText)
+	}
+	if p.HangupCause != "" {
+		fmt.Fprintf(&b, "Cause:     %s\n", p.HangupCause)
+	}
+	if !p.StartTs.IsZero() {
+		fmt.Fprintf(&b, "Started:   %s\n", p.StartTs.Format("2006-01-02 15:04:05 MST"))
+	}
+	if !p.EndTs.IsZero() {
+		fmt.Fprintf(&b, "Completed: %s\n", p.EndTs.Format("2006-01-02 15:04:05 MST"))
+	}
+	fmt.Fprintf(&b, "Job UUID:  %s\n", p.UUID)
+	if kind == "email_full" || kind == "email_full_failure" {
+		b.WriteString("\nThe detailed fax report and the original fax are attached.\n")
+	} else {
+		b.WriteString("\nThe detailed fax report is attached.\n")
+	}
+	return subject, b.String()
+}
+
 func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 	// Construct output path using the FaxJob UUID.
 	outputPath := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf("notify_%s.pdf", nfr.FaxJob.UUID.String()))
@@ -191,6 +272,9 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 			timestamp = faxJob.Result.EndTs.Format("2006-01-02 15:04:05")
 			if faxJob.Result.ResultText != "" {
 				resultText = faxJob.Result.ResultText
+			} else if faxJob.Result.HangupCause != "" {
+				// Failed receptions often carry only a hangup cause.
+				resultText = faxJob.Result.HangupCause
 			}
 			if faxJob.Result.Success {
 				success = "success"
@@ -598,10 +682,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 			case "email", "email_report":
 				// "email" is the legacy alias for email_report (normally
 				// normalized at parse time; kept here for robustness).
-				// Send an email notification with the PDF report attached.
-				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
-				subject := "Fax Report"
-				body := "Please find the attached fax report."
+				subject, body := nFR.emailSubjectBody("email_report")
 				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{faxReport}); err != nil {
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
@@ -634,8 +715,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					}
 				}
 
-				subject := "Full Fax Report"
-				body := "Please find the attached fax report & original fax."
+				subject, body := nFR.emailSubjectBody(dest.Type)
 
 				attachments := []string{faxReport}
 				pdf, err := tiffToPdf(nFR.FaxJob.FileName)
@@ -1011,14 +1091,17 @@ func firstPageTiff(uuid, inputPath string) (string, error) {
 
 	// Step 1: Convert entire TIFF to PDF
 	// NB: 'magick' (IM7) not 'convert' (IM6) — source-built IM7 only ships 'magick'.
+	// IM7 requires image OPERATORS (-alpha, -resize) to come AFTER the input;
+	// only SETTINGS (-density, -background) may precede it. Putting '-alpha
+	// remove' before the input fails with "no images found for operation".
 	cmd := exec.Command("magick",
 		"-density", "300",
+		"-background", "white",
+		inputPath+"[0]",
+		"-alpha", "remove",
+		"-resize", "2550x3300>",
 		"-compress", "lzw",
 		"-quality", "100",
-		"-background", "white",
-		"-alpha", "remove",
-		inputPath+"[0]",
-		"-resize", "2550x3300>",
 		outputPath)
 
 	output, err := cmd.CombinedOutput()

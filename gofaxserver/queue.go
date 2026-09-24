@@ -137,6 +137,33 @@ func (q *Queue) processFax(f *FaxJob) {
 		resultsMu.Unlock()
 	}
 
+	// snapshotCallOutcome records the job's PRE-QUEUE call outcome — the
+	// inbound reception from a gateway, or a bridged call's result — into the
+	// notify results, so reports and emails show the actual CALL result
+	// (pages, hangup cause, result text) instead of only internal delivery
+	// attempts (e.g. a portal POST returning "status 201"). Delivery and
+	// transmission attempts are snapshotted separately via sendResult.
+	// Synthetic enqueue placeholders (webhook/API submissions) are skipped.
+	snapshotCallOutcome := func() {
+		if f.Result == nil || isPlaceholderResult(f) {
+			return
+		}
+		label := "reception"
+		if f.IsBridge {
+			label = "bridge"
+		}
+		copyFax := *f
+		if copyFax.CallUUID == uuid.Nil {
+			copyFax.CallUUID = f.UUID // report shows the real channel ID
+		}
+		// Synthetic endpoint purely for the report's type column
+		// ("success (reception)" / "success (bridge)").
+		copyFax.Endpoints = []*Endpoint{{EndpointType: label}}
+		resultsMu.Lock()
+		notifyFaxResults.Results[copyFax.CallUUID.String()] = &copyFax
+		resultsMu.Unlock()
+	}
+
 	// ----------------- Retry config (safe defaults)
 	maxAttempts := 3
 	if s := gofaxlib.Config.Faxing.RetryAttempts; s != "" {
@@ -158,10 +185,10 @@ func (q *Queue) processFax(f *FaxJob) {
 	// ----------------- Notify-only jobs skip endpoint delivery entirely
 	// Failed inbound receptions and bridged calls are routed through the
 	// queue purely for notification dispatch: no delivery is attempted.
-	// Snapshot the existing outcome so the notify tail below treats the job
-	// like any other completed job. The router's progress tick already queued
-	// this job's result for storage, so this must NOT sendResult — that would
-	// store a duplicate row.
+	// The router's progress tick already queued this job's result for
+	// storage, so this must NOT sendResult — that would store a duplicate
+	// row. The outcome is recorded for the notify report by the
+	// snapshotCallOutcome call below.
 	if f.NotifyOnly {
 		if f.IsBridge && f.Result != nil && !f.Result.Success && f.Result.HangupCause == "NORMAL_CLEARING" {
 			// Mirror the storeQueueFaxResult inference so portal payloads and
@@ -176,11 +203,12 @@ func (q *Queue) processFax(f *FaxJob) {
 		logAttempt(logrus.InfoLevel, "notify-only job: skipping endpoint delivery, dispatching notifications only", map[string]interface{}{
 			"uuid": f.UUID.String(), "is_bridge": f.IsBridge,
 		})
-		copyFax := *f
-		resultsMu.Lock()
-		notifyFaxResults.Results[f.CallUUID.String()] = &copyFax
-		resultsMu.Unlock()
 	}
+
+	// Record the pre-queue call outcome (inbound reception / bridged call)
+	// for the notify report. No-op for outbound jobs carrying the synthetic
+	// enqueue placeholder.
+	snapshotCallOutcome()
 
 	stampAndSend := func(ff *FaxJob, start time.Time, success bool, humanStatus string) {
 		if ff.Result == nil {
@@ -581,6 +609,14 @@ func (q *Queue) processFax(f *FaxJob) {
 						ff := *f
 						ff.Endpoints = []*Endpoint{ep}
 						ff.Result = &gofaxlib.FaxResult{}
+						// Carry the pre-queue call outcome's page count (the
+						// inbound reception) in the delivery payload: consumers
+						// like the portal inbox need the reception's pages, not
+						// the blank delivery-attempt result that replaces
+						// ff.Result above.
+						if f.Result != nil && !isPlaceholderResult(f) {
+							ff.NPages = int(f.Result.TransferredPages)
+						}
 
 						epTy, epLbl, epVal := endpointBriefOr(ep, epType)
 
@@ -759,18 +795,24 @@ func (q *Queue) processFax(f *FaxJob) {
 		}
 	}(f.FileName)
 
-	fpTiff, err := firstPageTiff(f.UUID.String(), f.FileName)
-	if err != nil {
+	var fpTiff string
+	if _, statErr := os.Stat(f.FileName); os.IsNotExist(statErr) {
+		// No local fax file (failed reception with zero pages, bridged
+		// call) — nothing to preview; this is expected, not an error.
+		logAttempt(logrus.InfoLevel, "no fax file; dispatching notifications without first-page preview", map[string]interface{}{
+			"uuid": f.UUID.String(), "file": f.FileName,
+		})
+	} else if tiff, tiffErr := firstPageTiff(f.UUID.String(), f.FileName); tiffErr != nil {
 		// Preview generation must NEVER suppress notifications — only
 		// webhook_form delivery uses the preview file. Historically this
 		// early-returned and silently killed all notify dispatch (email,
 		// portal push, webhooks) whenever ImageMagick was unavailable or
 		// misconfigured.
 		logAttempt(logrus.ErrorLevel, "failed to build first-page preview; dispatching notifications without it", map[string]interface{}{
-			"uuid": f.UUID.String(), "file": f.FileName, "error": err.Error(),
+			"uuid": f.UUID.String(), "file": f.FileName, "error": tiffErr.Error(),
 		})
-		fpTiff = ""
 	} else {
+		fpTiff = tiff
 		defer func(path string) {
 			if err := os.Remove(path); err != nil {
 				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
@@ -779,6 +821,19 @@ func (q *Queue) processFax(f *FaxJob) {
 				))
 			}
 		}(fpTiff)
+	}
+
+	// Zero-page failed receptions (the losing leg of a simultaneous-ring
+	// gateway pair, immediate hangups, non-fax calls) carry no usable content
+	// and are pure noise as notifications — the outcome is still stored and
+	// the temp files cleaned up, but nothing is dispatched. PARTIAL
+	// receptions (≥1 page transferred before the failure) DO notify.
+	if f.NotifyOnly && !f.IsBridge && f.Result != nil && !f.Result.Success && f.Result.TransferredPages == 0 {
+		logAttempt(logrus.InfoLevel, "zero-page failed reception; skipping notify dispatch", map[string]interface{}{
+			"uuid": f.UUID.String(), "hangup_cause": f.Result.HangupCause,
+		})
+		complete("zero-page-failed-reception")
+		return
 	}
 
 	notifyDestinations, err := q.processNotifyDestinations(f)
