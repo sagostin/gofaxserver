@@ -69,22 +69,22 @@ func TestValidateEndpointRules(t *testing.T) {
 	s := &Server{}
 
 	badType := &fsclient.Endpoint{Type: "weird", EndpointType: "gateway", Endpoint: "x"}
-	if msg := s.validateEndpoint(badType); msg == "" {
+	if msg := s.validateEndpoint(badType, "direct"); msg == "" {
 		t.Fatal("invalid type must be rejected")
 	}
 
 	badKind := &fsclient.Endpoint{Type: "global", EndpointType: "smoke", Endpoint: "x"}
-	if msg := s.validateEndpoint(badKind); msg == "" {
+	if msg := s.validateEndpoint(badKind, "direct"); msg == "" {
 		t.Fatal("invalid endpoint_type must be rejected")
 	}
 
 	emptyVal := &fsclient.Endpoint{Type: "global", EndpointType: "gateway", Endpoint: ""}
-	if msg := s.validateEndpoint(emptyVal); msg == "" {
+	if msg := s.validateEndpoint(emptyVal, "direct"); msg == "" {
 		t.Fatal("empty endpoint value must be rejected")
 	}
 
 	g := &fsclient.Endpoint{Type: "global", TypeID: 55, EndpointType: "gateway", Endpoint: "sbc:1.1.1.1"}
-	if msg := s.validateEndpoint(g); msg != "" || g.TypeID != 0 {
+	if msg := s.validateEndpoint(g, "direct"); msg != "" || g.TypeID != 0 {
 		t.Fatalf("global scope must force type_id=0, got msg=%q id=%d", msg, g.TypeID)
 	}
 }

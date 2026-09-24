@@ -455,6 +455,46 @@ DELETE /admin/gateway/{name}
 Kills the gateway (`sofia killgw fax <name>`), removes the XML, rescans the
 profile, and deletes the linked endpoint.
 
+#### Provision Gateway From Existing Endpoint
+
+```
+POST /admin/gateways/from-endpoint
+```
+
+Brings an existing unmanaged `gateway`-type endpoint (e.g. a routing row from
+an imported database) under gateway management. The endpoint value
+(`name:ip`) supplies the gateway name and default `realm`; the template is
+rendered and written, FreeSWITCH is reloaded, and a `gateway_configs` row is
+linked to the **existing** endpoint (no new endpoint is created, and the
+endpoint's scope/priority/bridge are untouched).
+
+**Payload:**
+
+```json
+{
+  "endpoint_id": 12,
+  "template_id": 2,
+  "params": { "realm": "", "register": false }
+}
+```
+
+`params.realm` defaults to the IP part of the endpoint value; if the endpoint
+has no IP (`name` only), `realm` is required. Fails with an error when the
+endpoint is already managed, is not `endpoint_type=gateway`, or its name
+prefix is not a valid gateway name.
+
+#### FreeSWITCH Profile Control
+
+```
+POST /admin/freeswitch/rescan
+POST /admin/freeswitch/profile/restart?confirm=true
+```
+
+`rescan` runs `reloadxml` + `sofia profile <gateway_profile> rescan` — safe,
+no impact on active calls. `restart` runs `sofia profile <gateway_profile>
+restart`, which drops all active calls on the profile, and therefore requires
+the `confirm=true` query parameter.
+
 ### Gateway Templates
 
 Templates use Go `text/template` syntax (`{{.realm}}`, `{{if .register}}…{{end}}`).

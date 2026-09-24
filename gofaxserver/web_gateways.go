@@ -228,6 +228,28 @@ func (s *Server) handleUpdateGateway(ctx iris.Context) {
 	ctx.JSON(gs)
 }
 
+func (s *Server) handleProvisionGatewayFromEndpoint(ctx iris.Context) {
+	var spec ProvisionGatewayFromEndpointSpec
+	if err := ctx.ReadJSON(&spec); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	if spec.EndpointID == 0 || spec.TemplateID == 0 {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "endpoint_id and template_id are required"})
+		return
+	}
+	gs, err := s.ProvisionGatewayFromEndpoint(spec)
+	if err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+	ctx.StatusCode(http.StatusCreated)
+	ctx.JSON(gs)
+}
+
 func (s *Server) handleDeprovisionGateway(ctx iris.Context) {
 	name := ctx.Params().Get("name")
 	if err := s.DeprovisionGateway(name); err != nil {
@@ -236,4 +258,31 @@ func (s *Server) handleDeprovisionGateway(ctx iris.Context) {
 		return
 	}
 	ctx.JSON(iris.Map{"ok": true})
+}
+
+// handleRescanFSProfile reloads the XML config and rescans the gateway
+// profile — safe, no impact on active calls.
+func (s *Server) handleRescanFSProfile(ctx iris.Context) {
+	if err := fsReloadGateways(); err != nil {
+		ctx.StatusCode(http.StatusBadGateway)
+		ctx.JSON(iris.Map{"error": "freeswitch rescan failed: " + err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"ok": true, "profile": gatewayProfile()})
+}
+
+// handleRestartFSProfile restarts the sofia profile, dropping active calls
+// on it — requires confirm=true.
+func (s *Server) handleRestartFSProfile(ctx iris.Context) {
+	if ctx.URLParam("confirm") != "true" {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "refusing to restart the sofia profile (drops active calls) without confirm=true query param"})
+		return
+	}
+	if err := fsRestartProfile(); err != nil {
+		ctx.StatusCode(http.StatusBadGateway)
+		ctx.JSON(iris.Map{"error": "freeswitch profile restart failed: " + err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"ok": true, "profile": gatewayProfile()})
 }

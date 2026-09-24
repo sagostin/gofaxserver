@@ -135,10 +135,34 @@ func (s *Server) BuildApp() *iris.Application {
 	gateways.Get("/", s.adminListGateways)
 	gateways.Post("/", s.adminProvisionGateway)
 	gateways.Post("/adopt", s.adminAdoptGateway)
+	gateways.Post("/from-endpoint", s.adminProvisionGatewayFromEndpoint)
 	gateways.Delete("/unmanaged/{name}", s.adminDeleteUnmanagedGateway)
 	gateways.Post("/{name}/repair", s.adminRepairGateway)
 	gateways.Put("/{name}", s.adminUpdateGateway)
 	gateways.Delete("/{name}", s.adminDeprovisionGateway)
+
+	// FreeSWITCH profile control.
+	admin.Post("/freeswitch/rescan", s.adminRescanFSProfile)
+	admin.Post("/freeswitch/profile/restart", s.adminRestartFSProfile)
+
+	// Upstream pickers (feed scope dropdowns; direct tenants included).
+	admin.Get("/upstream/tenants", s.adminListUpstreamTenants)
+	admin.Get("/upstream/numbers", s.adminListUpstreamNumbers)
+
+	// Direct (non-portal) gofaxserver tenants: pure proxy, nothing mirrored.
+	direct := admin.Party("/tenants")
+	direct.Get("/", s.adminListUpstreamTenants)
+	direct.Post("/", s.adminCreateDirectTenant)
+	direct.Put("/{id:uint}", s.adminUpdateDirectTenant)
+	direct.Delete("/{id:uint}", s.adminDeleteDirectTenant)
+	direct.Get("/{id:uint}/users", s.adminListDirectTenantUsers)
+	direct.Post("/{id:uint}/users", s.adminCreateDirectTenantUser)
+	direct.Post("/{id:uint}/numbers", s.adminCreateDirectNumber)
+
+	admin.Put("/tenant-users/{id:uint}", s.adminUpdateDirectTenantUser)
+	admin.Delete("/tenant-users/{id:uint}", s.adminDeleteDirectTenantUser)
+	admin.Put("/tenant-numbers/{id:uint}", s.adminUpdateDirectNumber)
+	admin.Delete("/tenant-numbers/{id:uint}", s.adminDeleteDirectNumber)
 
 	dialplan := admin.Party("/dialplan")
 	dialplan.Get("/", s.adminGetDialplan)

@@ -72,11 +72,13 @@ dirs: ## Create shared volumes (gateways dir owned by the container uid)
 	fi
 	@echo "volumes/gateways ready"
 
-fs-config: ## Seed volumes/freeswitch from examples/freeswitch (never clobbers)
+fs-config: ## Seed volumes/freeswitch from examples/freeswitch (never clobbers; example gateways excluded)
 	@if [[ ! -d $(FS_CONFIG) ]]; then \
 		mkdir -p volumes && \
 		cp -R $(FS_EXAMPLES) $(FS_CONFIG) && \
+		rm -f $(FS_CONFIG)/gateways/*.xml && \
 		echo "copied $(FS_EXAMPLES) -> $(FS_CONFIG)"; \
+		echo "gateways dir seeded empty (samples stay in $(FS_EXAMPLES)/gateways/)"; \
 	else \
 		echo "$(FS_CONFIG) exists — leaving it alone"; \
 	fi

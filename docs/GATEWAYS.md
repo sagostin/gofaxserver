@@ -15,6 +15,10 @@ Templates are available in:
 gofaxserver/examples/freeswitch/gateways/
 ```
 
+(These are reference samples only — `make fs-config` seeds
+`volumes/freeswitch/gateways/` empty so the examples are never loaded by a
+real FreeSWITCH instance.)
+
 The `fax` Sofia profile (`examples/freeswitch/autoload_configs/sofia.conf.xml`) loads everything in that directory via:
 
 ```xml
@@ -148,7 +152,15 @@ Other operations:
 - `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision). The linked endpoint's scope, priority and bridge flag are preserved — only its `name:ip-or-hostname` value tracks realm/`endpoint_ip` changes, and the in-memory ACL (incl. DNS resolution) is reloaded immediately
 - `DELETE /admin/gateway/{name}` — `sofia killgw`, remove XML, rescan, delete linked endpoint
 - `POST /admin/gateway/{name}/repair` — re-render a managed gateway from its stored template+params (restores a file deleted or edited out-of-band)
+- `POST /admin/gateways/from-endpoint` — bring an existing unmanaged endpoint under gateway management: `{endpoint_id, template_id, params}`. The endpoint value (`name:ip`) supplies the gateway name and default `realm`; the template is rendered, written, loaded, and a `GatewayConfig` row is linked to the existing endpoint (no new endpoint is created). Useful for imported databases where routing rows already exist
 - `GET|POST /admin/gateway/templates`, `PUT|DELETE /admin/gateway/templates/{id}` — manage templates
+
+### FreeSWITCH profile control
+
+- `POST /admin/freeswitch/rescan` — `reloadxml` + `sofia profile <gateway_profile> rescan`. Safe, no call impact.
+- `POST /admin/freeswitch/profile/restart?confirm=true` — full `sofia profile <gateway_profile> restart`. Drops all active calls on the profile; requires the confirm flag.
+
+Both are also exposed in the portal admin UI (Gateways page).
 
 ### Sync between the database and disk
 

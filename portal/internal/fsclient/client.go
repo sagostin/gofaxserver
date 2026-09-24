@@ -194,6 +194,14 @@ type UnmanagedFile struct {
 	Name string `json:"name"`
 }
 
+// ProvisionGatewayFromEndpointSpec is the payload for bringing an existing
+// unmanaged endpoint under gateway management.
+type ProvisionGatewayFromEndpointSpec struct {
+	EndpointID uint                   `json:"endpoint_id"`
+	TemplateID uint                   `json:"template_id"`
+	Params     map[string]interface{} `json:"params"`
+}
+
 // GatewayOverview mirrors gofaxserver's full DB + disk gateway picture.
 type GatewayOverview struct {
 	Gateways  []GatewayStatus `json:"gateways"`
@@ -396,6 +404,18 @@ func (c *Client) DeleteTenantUser(id uint) error {
 	return c.doAdmin(http.MethodDelete, fmt.Sprintf("/admin/user/%d", id), nil, nil)
 }
 
+// UpdateTenantUser updates an upstream tenant user. Empty password leaves the
+// existing password unchanged (upstream behavior).
+func (c *Client) UpdateTenantUser(id, tenantID uint, username, password, apiKey string) error {
+	payload := map[string]any{
+		"tenant_id": tenantID,
+		"username":  username,
+		"password":  password,
+		"api_key":   apiKey,
+	}
+	return c.doAdmin(http.MethodPut, fmt.Sprintf("/admin/user/%d", id), payload, nil)
+}
+
 func (c *Client) AddEndpoint(ep Endpoint) (*Endpoint, error) {
 	out := &Endpoint{}
 	err := c.doAdmin(http.MethodPost, "/admin/endpoint", ep, out)
@@ -454,6 +474,12 @@ func (c *Client) RepairGateway(name string) (*GatewayStatus, error) {
 	return out, err
 }
 
+func (c *Client) ProvisionGatewayFromEndpoint(spec ProvisionGatewayFromEndpointSpec) (*GatewayStatus, error) {
+	out := &GatewayStatus{}
+	err := c.doAdmin(http.MethodPost, "/admin/gateways/from-endpoint", spec, out)
+	return out, err
+}
+
 func (c *Client) ProvisionGateway(spec GatewayProvisionSpec) (*GatewayStatus, error) {
 	out := &GatewayStatus{}
 	err := c.doAdmin(http.MethodPost, "/admin/gateway", spec, out)
@@ -468,6 +494,16 @@ func (c *Client) UpdateGateway(name string, spec GatewayProvisionSpec) (*Gateway
 
 func (c *Client) DeprovisionGateway(name string) error {
 	return c.doAdmin(http.MethodDelete, "/admin/gateway/"+name, nil, nil)
+}
+
+// --- FreeSWITCH profile control ---
+
+func (c *Client) RescanFSProfile() error {
+	return c.doAdmin(http.MethodPost, "/admin/freeswitch/rescan", nil, nil)
+}
+
+func (c *Client) RestartFSProfile() error {
+	return c.doAdmin(http.MethodPost, "/admin/freeswitch/profile/restart?confirm=true", nil, nil)
 }
 
 // --- dialplan rules ---

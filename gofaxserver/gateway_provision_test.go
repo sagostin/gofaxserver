@@ -471,6 +471,31 @@ func TestGatewayNameFromFile(t *testing.T) {
 	}
 }
 
+// TestFromEndpointParsing covers the endpoint-value parsing used by
+// ProvisionGatewayFromEndpoint: "name:ip" → gateway name + default realm.
+func TestFromEndpointParsing(t *testing.T) {
+	cases := []struct {
+		value     string
+		wantName  string
+		wantIP    string
+		nameValid bool
+	}{
+		{"pbx_acme:192.0.2.10", "pbx_acme", "192.0.2.10", true},
+		{"sbc_gw", "sbc_gw", "", true},
+		{"PBX:1.2.3.4", "PBX", "1.2.3.4", false}, // uppercase name unusable
+		{"weird name:1.2.3.4", "weird name", "1.2.3.4", false},
+	}
+	for _, c := range cases {
+		name, ip, _ := strings.Cut(c.value, ":")
+		if name != c.wantName || ip != c.wantIP {
+			t.Errorf("cut %q: got (%q, %q), want (%q, %q)", c.value, name, ip, c.wantName, c.wantIP)
+		}
+		if err := validateGatewayName(name); (err == nil) != c.nameValid {
+			t.Errorf("validateGatewayName(%q) valid=%v, want %v", name, err == nil, c.nameValid)
+		}
+	}
+}
+
 func TestMonitorTransition(t *testing.T) {
 	if changed, _ := monitorTransition("REGED", "REGED"); changed {
 		t.Error("same state should not be a transition")

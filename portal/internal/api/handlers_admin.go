@@ -806,32 +806,88 @@ func (s *Server) adminDeleteUser(ctx iris.Context) {
 var validEndpointTypes = map[string]bool{"tenant": true, "number": true, "global": true}
 var validEndpointKinds = map[string]bool{"gateway": true, "webhook": true, "email": true, "portal": true}
 
-func (s *Server) validateEndpoint(ep *fsclient.Endpoint) string {
-	if !validEndpointTypes[ep.Type] {
-		return "type must be tenant, number or global"
+// endpointReq / gatewaySpecReq wrap the upstream payloads with the portal-only
+// scope_source field, which selects the ID namespace for type_id:
+//   - "portal": type_id is a portal org/number id → translated to the linked
+//     gofaxserver tenant/number id before proxying.
+//   - anything else ("direct" or empty): type_id is a raw gofaxserver
+//     tenant/number id → validated live against the upstream.
+type endpointReq struct {
+	fsclient.Endpoint
+	ScopeSource string `json:"scope_source"`
+}
+
+type gatewaySpecReq struct {
+	fsclient.GatewayProvisionSpec
+	ScopeSource string `json:"scope_source"`
+}
+
+// resolveScopeTypeID validates a scope reference and returns the
+// gofaxserver-side type_id to use.
+func (s *Server) resolveScopeTypeID(scopeType, scopeSource string, typeID uint) (uint, string) {
+	if !validEndpointTypes[scopeType] {
+		return 0, "type must be tenant, number or global"
 	}
+	if scopeType == "global" {
+		return 0, ""
+	}
+	if scopeSource == "portal" {
+		switch scopeType {
+		case "tenant":
+			var org models.Org
+			if err := s.DB.First(&org, typeID).Error; err != nil {
+				return 0, "unknown tenant scope: no such portal org"
+			}
+			return org.GofaxTenantID, ""
+		case "number":
+			var num models.Number
+			if err := s.DB.First(&num, typeID).Error; err != nil {
+				return 0, "unknown number scope: no such portal number"
+			}
+			return num.GofaxNumberID, ""
+		}
+	}
+	// Direct scope: type_id is an upstream gofaxserver id — validate live so
+	// typos don't create endpoints pointing at nothing.
+	switch scopeType {
+	case "tenant":
+		tenants, err := s.FX.ListTenants()
+		if err != nil {
+			return 0, "failed to validate tenant upstream: " + err.Error()
+		}
+		for _, t := range tenants {
+			if t.ID == typeID {
+				return typeID, ""
+			}
+		}
+		return 0, "unknown tenant scope: no such upstream tenant id"
+	case "number":
+		numbers, err := s.FX.ListNumbers(0)
+		if err != nil {
+			return 0, "failed to validate number upstream: " + err.Error()
+		}
+		for _, n := range numbers {
+			if n.ID == typeID {
+				return typeID, ""
+			}
+		}
+		return 0, "unknown number scope: no such upstream number id"
+	}
+	return 0, ""
+}
+
+func (s *Server) validateEndpoint(ep *fsclient.Endpoint, scopeSource string) string {
 	if !validEndpointKinds[ep.EndpointType] {
 		return "endpoint_type must be gateway, webhook, email or portal"
 	}
 	if strings.TrimSpace(ep.Endpoint) == "" {
 		return "endpoint value required"
 	}
-	switch ep.Type {
-	case "tenant":
-		var cnt int64
-		s.DB.Model(&models.Org{}).Where("id = ?", ep.TypeID).Count(&cnt)
-		if cnt == 0 {
-			return "unknown tenant scope: no such org"
-		}
-	case "number":
-		var cnt int64
-		s.DB.Model(&models.Number{}).Where("id = ?", ep.TypeID).Count(&cnt)
-		if cnt == 0 {
-			return "unknown number scope: no such number id"
-		}
-	case "global":
-		ep.TypeID = 0
+	tid, msg := s.resolveScopeTypeID(ep.Type, scopeSource, ep.TypeID)
+	if msg != "" {
+		return msg
 	}
+	ep.TypeID = tid
 	return ""
 }
 
@@ -848,13 +904,14 @@ func (s *Server) adminListEndpoints(ctx iris.Context) {
 }
 
 func (s *Server) adminCreateEndpoint(ctx iris.Context) {
-	var ep fsclient.Endpoint
-	if err := ctx.ReadJSON(&ep); err != nil {
+	var req endpointReq
+	if err := ctx.ReadJSON(&req); err != nil {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": "invalid payload"})
 		return
 	}
-	if msg := s.validateEndpoint(&ep); msg != "" {
+	ep := req.Endpoint
+	if msg := s.validateEndpoint(&ep, req.ScopeSource); msg != "" {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": msg})
 		return
@@ -872,14 +929,15 @@ func (s *Server) adminCreateEndpoint(ctx iris.Context) {
 
 func (s *Server) adminUpdateEndpoint(ctx iris.Context) {
 	id := ctx.Params().GetUintDefault("id", 0)
-	var ep fsclient.Endpoint
-	if err := ctx.ReadJSON(&ep); err != nil {
+	var req endpointReq
+	if err := ctx.ReadJSON(&req); err != nil {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": "invalid payload"})
 		return
 	}
+	ep := req.Endpoint
 	ep.ID = id
-	if msg := s.validateEndpoint(&ep); msg != "" {
+	if msg := s.validateEndpoint(&ep, req.ScopeSource); msg != "" {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": msg})
 		return
@@ -1038,41 +1096,29 @@ func (s *Server) adminRepairGateway(ctx iris.Context) {
 // validateGatewaySpec sanity-checks the scope fields before proxying; the
 // upstream performs full validation (name, realm, template, XML). Scope
 // fields are only validated when present — updates omit them and the upstream
-// preserves the existing endpoint's scope.
-func (s *Server) validateGatewaySpec(spec *fsclient.GatewayProvisionSpec) string {
+// preserves the existing endpoint's scope. scope_source selects the type_id
+// namespace (portal ids are translated, direct ids validated upstream).
+func (s *Server) validateGatewaySpec(spec *fsclient.GatewayProvisionSpec, scopeSource string) string {
 	if spec.Scope == "" {
 		return ""
 	}
-	if !validEndpointTypes[spec.Scope] {
-		return "type must be tenant, number or global"
+	tid, msg := s.resolveScopeTypeID(spec.Scope, scopeSource, spec.TypeID)
+	if msg != "" {
+		return msg
 	}
-	switch spec.Scope {
-	case "tenant":
-		var cnt int64
-		s.DB.Model(&models.Org{}).Where("id = ?", spec.TypeID).Count(&cnt)
-		if cnt == 0 {
-			return "unknown tenant scope: no such org"
-		}
-	case "number":
-		var cnt int64
-		s.DB.Model(&models.Number{}).Where("id = ?", spec.TypeID).Count(&cnt)
-		if cnt == 0 {
-			return "unknown number scope: no such number id"
-		}
-	case "global":
-		spec.TypeID = 0
-	}
+	spec.TypeID = tid
 	return ""
 }
 
 func (s *Server) adminProvisionGateway(ctx iris.Context) {
-	var spec fsclient.GatewayProvisionSpec
-	if err := ctx.ReadJSON(&spec); err != nil {
+	var req gatewaySpecReq
+	if err := ctx.ReadJSON(&req); err != nil {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": "invalid payload"})
 		return
 	}
-	if msg := s.validateGatewaySpec(&spec); msg != "" {
+	spec := req.GatewayProvisionSpec
+	if msg := s.validateGatewaySpec(&spec, req.ScopeSource); msg != "" {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": msg})
 		return
@@ -1090,13 +1136,14 @@ func (s *Server) adminProvisionGateway(ctx iris.Context) {
 
 func (s *Server) adminUpdateGateway(ctx iris.Context) {
 	name := ctx.Params().Get("name")
-	var spec fsclient.GatewayProvisionSpec
-	if err := ctx.ReadJSON(&spec); err != nil {
+	var req gatewaySpecReq
+	if err := ctx.ReadJSON(&req); err != nil {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": "invalid payload"})
 		return
 	}
-	if msg := s.validateGatewaySpec(&spec); msg != "" {
+	spec := req.GatewayProvisionSpec
+	if msg := s.validateGatewaySpec(&spec, req.ScopeSource); msg != "" {
 		ctx.StatusCode(400)
 		ctx.JSON(map[string]string{"error": msg})
 		return

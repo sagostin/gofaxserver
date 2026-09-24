@@ -12,6 +12,7 @@ const links = computed(() => {
       { to: '/admin', label: 'Orgs' },
       { to: '/admin/numbers', label: 'Numbers' },
       { to: '/admin/users', label: 'Users' },
+      { to: '/admin/tenants', label: 'Tenants' },
       { to: '/admin/endpoints', label: 'Endpoints' },
       { to: '/admin/gateways', label: 'Gateways' },
       { to: '/admin/templates', label: 'Templates' },

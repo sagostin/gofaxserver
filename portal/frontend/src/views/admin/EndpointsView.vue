@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api } from '../../api'
+import { useScopeTargets } from '../../scope'
 
 interface Ep {
   id: number
@@ -16,14 +17,18 @@ const eps = ref<Ep[]>([])
 const managedBy = ref<Record<number, string>>({}) // endpoint_id -> gateway name
 const error = ref('')
 const busy = ref(false)
-const form = ref({ type: 'tenant', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false })
+const form = ref({ type: 'tenant', scope_source: 'portal', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false })
 const confirmGlobal = ref(false)
+
+const scope = useScopeTargets()
+const scopeOptions = computed(() => scope.options(form.value.type, form.value.scope_source))
 
 async function load() {
   try {
     const [list, gw] = await Promise.all([
       api<Ep[]>('/admin/endpoints'),
       api<{ gateways: { gateway: { name: string; endpoint_id: number } }[] }>('/admin/gateways').catch(() => null),
+      scope.load(),
     ])
     eps.value = list
     const map: Record<number, string> = {}
@@ -39,8 +44,10 @@ async function create() {
   error.value = ''
   busy.value = true
   try {
-    await api('/admin/endpoints', { json: form.value })
-    form.value = { type: 'tenant', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false }
+    const body: Record<string, any> = { ...form.value }
+    if (form.value.type === 'global') { body.type_id = 0; delete body.scope_source }
+    await api('/admin/endpoints', { json: body })
+    form.value = { type: 'tenant', scope_source: 'portal', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false }
     await load()
   } catch (e: any) { error.value = e.message } finally { busy.value = false }
 }
@@ -73,7 +80,20 @@ async function editPriority(ep: Ep) {
           <label>Scope type</label>
           <select v-model="form.type"><option value="tenant">tenant</option><option value="number">number</option><option value="global">global</option></select>
         </div>
-        <div><label>Type ID</label><input v-model.number="form.type_id" :disabled="form.type === 'global'" /></div>
+        <div v-if="form.type !== 'global'">
+          <label>Scope source</label>
+          <select v-model="form.scope_source" @change="form.type_id = 0">
+            <option value="portal">portal (orgs/numbers)</option>
+            <option value="direct">direct (gofaxserver tenant)</option>
+          </select>
+        </div>
+        <div v-if="form.type !== 'global'">
+          <label>Target</label>
+          <select v-model.number="form.type_id" required>
+            <option :value="0" disabled>select…</option>
+            <option v-for="o in scopeOptions" :key="o.id" :value="o.id">{{ o.label }}</option>
+          </select>
+        </div>
         <div>
           <label>Endpoint kind</label>
           <select v-model="form.endpoint_type"><option>gateway</option><option>webhook</option><option>email</option><option>portal</option></select>

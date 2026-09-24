@@ -229,11 +229,25 @@ the FreeSWITCH host/container — `/etc/freeswitch/gateways` on Path B,
 for customer PBXs), enter the gateway name (e.g. `pbx_<customer>`), the
 `realm` (PBX/SBC host or IP), optional SIP-auth credentials
 (`register` + username/password), the scope (tenant/number/global), priority,
-and whether to use bridge/transcoding mode. Submitting renders the XML into
-the gateways directory, reloads the `fax` sofia profile over the event
+and whether to use bridge/transcoding mode. Scope targets are chosen from
+dropdowns: **portal** orgs/numbers (translated to the linked gofaxserver
+tenant/number automatically) or **direct** gofaxserver tenants/numbers —
+including tenants that have no portal org at all. Submitting renders the XML
+into the gateways directory, reloads the `fax` sofia profile over the event
 socket, and creates the matching endpoint in one step. The table shows each
 gateway's live `sofia status` state — registered gateways additionally show
 the monitor's tracked `last_state`.
+
+The Gateways tab header also exposes **FreeSWITCH profile control**:
+**Rescan profile** (`reloadxml` + `sofia profile fax rescan`, safe) and
+**Restart profile** (full restart — drops active calls, double-confirmed).
+
+Gateway-kind endpoints that exist without a managed gateway (e.g. rows from
+an imported database) are listed under **Unmanaged gateway endpoints** with a
+**Provision…** action: pick a template, adjust the extracted params (realm
+defaults to the endpoint's IP), and the portal renders the FreeSWITCH XML and
+links the existing endpoint to the new managed gateway — no routing row is
+recreated.
 
 The Gateways tab also surfaces **drift** between the database and disk:
 XML files present in the directory with no DB record appear under
@@ -264,9 +278,31 @@ loaded with `fs_cli -x "sofia profile fax rescan"` (`docker exec freeswitch
 fs_cli -x …` on Path A)
 — see [GATEWAYS.md](GATEWAYS.md); then register the matching endpoint in the
 portal (**Admin → Endpoints** or `POST /portal/api/admin/endpoints`):
-`type=tenant`, `type_id=<org>`, `endpoint_type=gateway`,
+`type=tenant`, scope source `portal` with `type_id=<portal org id>`
+(or `direct` with `type_id=<gofaxserver tenant id>`), `endpoint_type=gateway`,
 `endpoint=pbx_<customer>:<PBX_IP_OR_HOSTNAME>`, desired priority (use `666` for
 outbound-only, i.e. no inbound delivery).
+
+## Direct-integration tenants (Admin → Tenants)
+
+Not every customer belongs on the portal. **Admin → Tenants** manages
+gofaxserver tenants directly — nothing is mirrored into the portal database,
+and every change is proxied live to gofaxserver's `/admin/*` API and recorded
+in the audit log (`DIRECT_TENANT_*`, `DIRECT_USER_*`, `DIRECT_NUMBER_*`).
+For each tenant you can:
+
+- create/rename/delete the tenant and set its notify list,
+- manage **auth users** (username/password + API key) used for direct
+  `/fax/send` basic-auth sending and `/tenant/user/authenticate`; blank
+  password/API key on creation auto-generates them, and the credentials are
+  shown exactly once,
+- assign/remove **numbers** (number, caller-ID name, fax header, notify) —
+  including to tenants that were created out-of-band (imported databases,
+  CLI provisioning).
+
+These tenants keep working entirely outside the portal: no org, no portal
+users, no inbox. Inbound routing for them is managed via **Admin →
+Endpoints** with the `direct` scope source.
 
 ## Layout
 

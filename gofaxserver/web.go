@@ -81,11 +81,16 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Delete("/gateway/templates/{id}", s.handleDeleteGatewayTemplate)
 		admin.Get("/gateways", s.handleListGateways)
 		admin.Post("/gateways/adopt", s.handleAdoptGateway)
+		admin.Post("/gateways/from-endpoint", s.handleProvisionGatewayFromEndpoint)
 		admin.Delete("/gateways/unmanaged/{name}", s.handleDeleteUnmanagedGateway)
 		admin.Post("/gateway", s.handleProvisionGateway)
 		admin.Put("/gateway/{name}", s.handleUpdateGateway)
 		admin.Post("/gateway/{name}/repair", s.handleRepairGateway)
 		admin.Delete("/gateway/{name}", s.handleDeprovisionGateway)
+
+		// FreeSWITCH profile control (rescan is safe; restart drops calls).
+		admin.Post("/freeswitch/rescan", s.handleRescanFSProfile)
+		admin.Post("/freeswitch/profile/restart", s.handleRestartFSProfile)
 
 		// Dialplan rule management (active when dialplan.source = "db").
 		admin.Get("/dialplan", s.handleGetDialplan)

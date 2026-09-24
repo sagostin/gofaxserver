@@ -405,6 +405,13 @@ func fsKillGateway(name string) error {
 	return fsReloadGateways()
 }
 
+// fsRestartProfile restarts the configured sofia profile. This drops all
+// active calls on the profile — callers must require explicit confirmation.
+func fsRestartProfile() error {
+	_, err := fsAPI("sofia profile " + gatewayProfile() + " restart")
+	return err
+}
+
 // fsGatewayState best-effort parses `sofia status gateway <name>` output.
 func fsGatewayState(name string) string {
 	out, err := fsAPI("sofia status gateway " + name)
@@ -755,6 +762,105 @@ func (s *Server) DeprovisionGateway(name string) error {
 		map[string]interface{}{"gateway": name},
 	))
 	return nil
+}
+
+// ProvisionGatewayFromEndpointSpec is the payload for bringing an existing
+// (e.g. imported) endpoint under gateway management: the endpoint's value
+// ("name:ip") supplies the gateway name and default realm, the chosen
+// template is rendered and written, and a GatewayConfig row is linked to the
+// existing endpoint (no new endpoint is created).
+type ProvisionGatewayFromEndpointSpec struct {
+	EndpointID uint                   `json:"endpoint_id"`
+	TemplateID uint                   `json:"template_id"`
+	Params     map[string]interface{} `json:"params"`
+}
+
+// ProvisionGatewayFromEndpoint renders a gateway XML for an existing
+// unmanaged endpoint and records the GatewayConfig linkage.
+func (s *Server) ProvisionGatewayFromEndpoint(spec ProvisionGatewayFromEndpointSpec) (*GatewayStatus, error) {
+	dir, err := gatewayDir()
+	if err != nil {
+		return nil, err
+	}
+
+	var ep Endpoint
+	if err := s.DB.First(&ep, spec.EndpointID).Error; err != nil {
+		return nil, fmt.Errorf("endpoint %d: %w", spec.EndpointID, err)
+	}
+	if ep.EndpointType != "gateway" {
+		return nil, fmt.Errorf("endpoint %d is type %q, not gateway", ep.ID, ep.EndpointType)
+	}
+	if gwName, managed := s.gatewayManagingEndpoint(ep.ID); managed {
+		return nil, fmt.Errorf("endpoint %d is already managed by gateway %q", ep.ID, gwName)
+	}
+
+	// Endpoint value is "name" or "name:ip" (see endpointValue).
+	name, ip, _ := strings.Cut(ep.Endpoint, ":")
+	if err := validateGatewayName(name); err != nil {
+		return nil, fmt.Errorf("endpoint %d value %q does not start with a usable gateway name: %w", ep.ID, ep.Endpoint, err)
+	}
+	var existing int64
+	s.DB.Model(&GatewayConfig{}).Where("name = ?", name).Count(&existing)
+	if existing > 0 {
+		return nil, fmt.Errorf("gateway %q is already provisioned", name)
+	}
+
+	var tpl GatewayTemplate
+	if err := s.DB.First(&tpl, spec.TemplateID).Error; err != nil {
+		return nil, fmt.Errorf("template %d: %w", spec.TemplateID, err)
+	}
+
+	params := provisionDefaults(spec.Params)
+	if realm, _ := params["realm"].(string); strings.TrimSpace(realm) == "" {
+		if ip == "" {
+			return nil, fmt.Errorf("endpoint %d value %q has no IP; params.realm is required", ep.ID, ep.Endpoint)
+		}
+		params["realm"] = ip
+	}
+	params["name"] = name
+	rendered, err := renderGatewayTemplate(tpl.Body, params)
+	if err != nil {
+		return nil, err
+	}
+
+	// Write the XML first so a FreeSWITCH failure never leaves a DB-only row.
+	path, err := writeGatewayFile(dir, name, rendered)
+	if err != nil {
+		return nil, err
+	}
+	applyGatewayFileOwner(s.LogManager, path)
+	if err := fsReloadGateways(); err != nil {
+		os.Remove(path)
+		return nil, fmt.Errorf("wrote %s but FreeSWITCH reload failed (rolled back): %w", path, err)
+	}
+
+	paramsJSON, err := encodeParams(params)
+	if err != nil {
+		os.Remove(path)
+		_ = fsKillGateway(name)
+		return nil, fmt.Errorf("encode gateway params: %w", err)
+	}
+	gw := GatewayConfig{
+		Name:       name,
+		TemplateID: tpl.ID,
+		Params:     paramsJSON,
+		EndpointID: ep.ID,
+	}
+	if err := s.DB.Create(&gw).Error; err != nil {
+		os.Remove(path)
+		_ = fsKillGateway(name)
+		return nil, fmt.Errorf("persist gateway config: %w", err)
+	}
+
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Gateway.Provision",
+		fmt.Sprintf("provisioned gateway %s from existing endpoint %d", name, ep.ID),
+		logrus.InfoLevel,
+		map[string]interface{}{"gateway": name, "template": tpl.Name, "file": path, "endpoint_id": ep.ID},
+	))
+	gw.Template = tpl
+	gw.Params = maskedParamsJSON(gw.Params)
+	return &GatewayStatus{Gateway: gw, File: path, State: fsGatewayState(name), Exists: true}, nil
 }
 
 // GatewayOverview is the full DB + disk picture for the gateways directory.

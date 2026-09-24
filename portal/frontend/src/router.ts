@@ -13,6 +13,7 @@ const router = createRouter({
     { path: '/admin', component: () => import('./views/admin/OrgsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/numbers', component: () => import('./views/admin/NumbersView.vue'), meta: { role: 'admin' } },
     { path: '/admin/users', component: () => import('./views/admin/UsersView.vue'), meta: { role: 'admin' } },
+    { path: '/admin/tenants', component: () => import('./views/admin/TenantsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/endpoints', component: () => import('./views/admin/EndpointsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/gateways', component: () => import('./views/admin/GatewaysView.vue'), meta: { role: 'admin' } },
     { path: '/admin/templates', component: () => import('./views/admin/TemplatesView.vue'), meta: { role: 'admin' } },

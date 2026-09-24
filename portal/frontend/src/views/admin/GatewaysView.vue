@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../../api'
+import { useScopeTargets } from '../../scope'
 
 interface Tpl {
   id: number
@@ -30,27 +31,45 @@ interface UnmanagedFile {
   name: string
 }
 
+interface Ep {
+  id: number
+  type: string
+  type_id: number
+  endpoint_type: string
+  endpoint: string
+  priority: number
+  bridge: boolean
+}
+
 const templates = ref<Tpl[]>([])
 const gateways = ref<GwStatus[]>([])
 const unmanaged = ref<UnmanagedFile[]>([])
+const endpoints = ref<Ep[]>([])
 const error = ref('')
 const busy = ref(false)
+const fsBusy = ref('')
+const fsMsg = ref('')
 const editing = ref('') // gateway name when in update mode
 
 // System-provided / structural variables get dedicated inputs or are handled
 // by checkboxes; everything else renders as a generic text input.
 const RESERVED = new Set(['name'])
 
+const scope = useScopeTargets()
+
 const form = ref({
   name: '',
   template_id: 0,
   type: 'tenant',
+  scope_source: 'portal',
   type_id: 0,
   priority: 0,
   bridge: false,
   endpoint_ip: '',
 })
 const params = ref<Record<string, any>>({})
+
+const scopeOptions = computed(() => scope.options(form.value.type, form.value.scope_source))
 
 const selectedTemplate = computed(() => templates.value.find(t => t.id === form.value.template_id))
 const dynamicVars = computed(() => (selectedTemplate.value?.variables || []).filter(v => !RESERVED.has(v)))
@@ -65,6 +84,40 @@ watch(selectedTemplate, (tpl) => {
   params.value = next
 })
 
+// --- provision-from-endpoint state ---
+const feEndpoint = ref<Ep | null>(null)
+const feTemplateId = ref(0)
+const feParams = ref<Record<string, any>>({})
+
+const feTemplate = computed(() => templates.value.find(t => t.id === feTemplateId.value))
+const feVars = computed(() => (feTemplate.value?.variables || []).filter(v => !RESERVED.has(v)))
+
+watch(feTemplate, (tpl) => {
+  const next: Record<string, any> = {}
+  for (const v of tpl?.variables || []) {
+    if (RESERVED.has(v)) continue
+    next[v] = v === 'register' ? false : (feParams.value[v] ?? '')
+  }
+  // realm defaults to the endpoint's IP part; the server does the same.
+  const ip = feEndpoint.value?.endpoint.split(':')[1] || ''
+  if (ip && !next.realm) next.realm = ip
+  feParams.value = next
+})
+
+const managedEndpointIDs = computed(() => {
+  const m = new Set<number>()
+  for (const gs of gateways.value) {
+    if (gs.gateway.endpoint_id) m.add(gs.gateway.endpoint_id)
+  }
+  return m
+})
+
+// Gateway-kind endpoints with no managing GatewayConfig — candidates for
+// "provision from existing endpoint" (e.g. rows from an imported DB).
+const unmanagedEndpoints = computed(() =>
+  endpoints.value.filter(e => e.endpoint_type === 'gateway' && !managedEndpointIDs.value.has(e.id))
+)
+
 function parsedParams(gs: GwStatus): Record<string, any> {
   try { return JSON.parse(gs.gateway.params || '{}') } catch { return {} }
 }
@@ -76,15 +129,21 @@ function isRegistered(gs: GwStatus): boolean {
 async function load() {
   error.value = ''
   try {
-    const [t, g] = await Promise.all([
+    const [t, g, epsList] = await Promise.all([
       api<Tpl[]>('/admin/gateway-templates'),
       api<{ gateways: GwStatus[]; unmanaged: UnmanagedFile[] }>('/admin/gateways'),
+      api<Ep[]>('/admin/endpoints').catch(() => []),
+      scope.load(),
     ])
     templates.value = t || []
     gateways.value = g.gateways || []
     unmanaged.value = g.unmanaged || []
+    endpoints.value = epsList || []
     if (!form.value.template_id && templates.value.length) {
       form.value.template_id = templates.value[0].id
+    }
+    if (!feTemplateId.value && templates.value.length) {
+      feTemplateId.value = templates.value[0].id
     }
   } catch (e: any) { error.value = e.message }
 }
@@ -92,7 +151,7 @@ onMounted(load)
 
 function resetForm() {
   editing.value = ''
-  form.value = { name: '', template_id: templates.value[0]?.id || 0, type: 'tenant', type_id: 0, priority: 0, bridge: false, endpoint_ip: '' }
+  form.value = { name: '', template_id: templates.value[0]?.id || 0, type: 'tenant', scope_source: 'portal', type_id: 0, priority: 0, bridge: false, endpoint_ip: '' }
 }
 
 function payload() {
@@ -112,6 +171,7 @@ function payload() {
   if (!editing.value) {
     body.type = form.value.type
     body.type_id = form.value.type === 'global' ? 0 : form.value.type_id
+    if (form.value.type !== 'global') body.scope_source = form.value.scope_source
     body.priority = form.value.priority
     body.bridge = form.value.bridge
   }
@@ -138,6 +198,7 @@ function edit(gs: GwStatus) {
     name: gs.gateway.name,
     template_id: gs.gateway.template_id,
     type: 'tenant', // scope is stored on the endpoint; adjust via the Endpoints tab
+    scope_source: 'direct',
     type_id: 0,
     priority: 0,
     bridge: false,
@@ -181,10 +242,81 @@ async function removeUnmanaged(u: UnmanagedFile) {
     await load()
   } catch (e: any) { error.value = e.message }
 }
+
+// --- FreeSWITCH profile control ---
+
+async function rescanProfile() {
+  error.value = ''
+  fsMsg.value = ''
+  fsBusy.value = 'rescan'
+  try {
+    await api('/admin/freeswitch/rescan', { method: 'POST' })
+    fsMsg.value = 'Profile rescanned (reloadxml + sofia rescan).'
+    await load()
+  } catch (e: any) { error.value = e.message } finally { fsBusy.value = '' }
+}
+
+async function restartProfile() {
+  if (!confirm('Restart the sofia fax profile? This DROPS all active calls on the profile.')) return
+  if (!confirm('Really restart? In-progress faxes on this profile will fail.')) return
+  error.value = ''
+  fsMsg.value = ''
+  fsBusy.value = 'restart'
+  try {
+    await api('/admin/freeswitch/profile/restart?confirm=true', { method: 'POST' })
+    fsMsg.value = 'Profile restarted.'
+    await load()
+  } catch (e: any) { error.value = e.message } finally { fsBusy.value = '' }
+}
+
+// --- provision from existing endpoint ---
+
+function startFromEndpoint(ep: Ep) {
+  feEndpoint.value = ep
+  if (!feTemplateId.value && templates.value.length) feTemplateId.value = templates.value[0].id
+}
+
+async function provisionFromEndpoint() {
+  if (!feEndpoint.value) return
+  error.value = ''
+  busy.value = true
+  try {
+    const p: Record<string, any> = {}
+    for (const [k, v] of Object.entries(feParams.value)) {
+      if (v === '' || v === false) continue
+      p[k] = v
+    }
+    await api('/admin/gateways/from-endpoint', {
+      json: { endpoint_id: feEndpoint.value.id, template_id: feTemplateId.value, params: p },
+    })
+    feEndpoint.value = null
+    feParams.value = {}
+    await load()
+  } catch (e: any) { error.value = e.message } finally { busy.value = false }
+}
 </script>
 
 <template>
   <main class="page">
+    <div class="panel">
+      <h2>
+        FreeSWITCH profile
+        <span class="muted">(sofia profile hosting the gateways)</span>
+      </h2>
+      <div>
+        <button class="secondary" :disabled="!!fsBusy" @click="rescanProfile">
+          {{ fsBusy === 'rescan' ? 'Rescanning…' : 'Rescan profile' }}
+        </button>
+        <button class="danger" style="margin-left:8px" :disabled="!!fsBusy" @click="restartProfile">
+          {{ fsBusy === 'restart' ? 'Restarting…' : 'Restart profile' }}
+        </button>
+      </div>
+      <p class="muted">
+        Rescan is safe (reloadxml + rescan, no call impact). Restart drops all active calls on the profile.
+      </p>
+      <p v-if="fsMsg" class="muted">{{ fsMsg }}</p>
+    </div>
+
     <div class="panel">
       <h2>{{ editing ? `Update gateway ${editing}` : 'Provision FreeSWITCH gateway' }}</h2>
       <p class="muted">
@@ -204,7 +336,20 @@ async function removeUnmanaged(u: UnmanagedFile) {
           <label>Scope</label>
           <select v-model="form.type" :disabled="!!editing"><option value="tenant">tenant</option><option value="number">number</option><option value="global">global</option></select>
         </div>
-        <div><label>Type ID</label><input v-model.number="form.type_id" :disabled="form.type === 'global' || !!editing" /></div>
+        <div v-if="form.type !== 'global'">
+          <label>Scope source</label>
+          <select v-model="form.scope_source" :disabled="!!editing" @change="form.type_id = 0">
+            <option value="portal">portal (orgs/numbers)</option>
+            <option value="direct">direct (gofaxserver tenant)</option>
+          </select>
+        </div>
+        <div v-if="form.type !== 'global'">
+          <label>Target</label>
+          <select v-model.number="form.type_id" :disabled="!!editing" required>
+            <option :value="0" disabled>select…</option>
+            <option v-for="o in scopeOptions" :key="o.id" :value="o.id">{{ o.label }}</option>
+          </select>
+        </div>
         <div><label>Priority</label><input v-model.number="form.priority" /></div>
         <div style="align-self:center"><label style="font-size:13px;color:var(--text)"><input type="checkbox" v-model="form.bridge" /> bridge</label></div>
         <div><label>Endpoint IP <span class="muted">(ACL)</span></label><input v-model="form.endpoint_ip" placeholder="defaults to realm" /></div>
@@ -257,6 +402,52 @@ async function removeUnmanaged(u: UnmanagedFile) {
           <tr v-if="!gateways.length"><td colspan="7" class="muted">No gateways provisioned yet.</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <div v-if="unmanagedEndpoints.length" class="panel">
+      <h3>Unmanaged gateway endpoints <span class="muted">(routing rows without a managed FreeSWITCH gateway)</span></h3>
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Scope</th><th>Type ID</th><th>Value</th><th>Pri</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="ep in unmanagedEndpoints" :key="ep.id">
+            <td>{{ ep.id }}</td>
+            <td>{{ ep.type }}</td>
+            <td>{{ ep.type_id }}</td>
+            <td>{{ ep.endpoint }}</td>
+            <td>{{ ep.priority }}</td>
+            <td class="actions-cell">
+              <button class="secondary" @click="startFromEndpoint(ep)">Provision…</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div v-if="feEndpoint" style="margin-top:12px">
+        <h4>Provision gateway for endpoint #{{ feEndpoint.id }} ({{ feEndpoint.endpoint }})</h4>
+        <form class="inline" @submit.prevent="provisionFromEndpoint">
+          <div>
+            <label>Template</label>
+            <select v-model.number="feTemplateId">
+              <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }} — {{ t.description }}</option>
+            </select>
+          </div>
+          <div v-for="v in feVars" :key="v">
+            <template v-if="v === 'register'">
+              <label style="font-size:13px;color:var(--text);align-self:center"><input type="checkbox" v-model="feParams.register" /> register (SIP auth)</label>
+            </template>
+            <template v-else>
+              <label>{{ v }}</label>
+              <input v-model="feParams[v]" :type="v === 'password' ? 'password' : 'text'" :placeholder="v === 'realm' ? 'defaults to endpoint IP' : ''" />
+            </template>
+          </div>
+        </form>
+        <div style="margin-top:12px">
+          <button :disabled="busy" @click="provisionFromEndpoint">Provision from endpoint</button>
+          <button class="secondary" style="margin-left:8px" @click="feEndpoint = null">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <div v-if="unmanaged.length" class="panel">
