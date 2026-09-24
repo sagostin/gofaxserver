@@ -355,7 +355,8 @@ the repo root; Caddy starts with `make up` (`make caddy-up`/`caddy-down`/
   obtains/renews certificates automatically. Set `PORTAL_COOKIE_SECURE=true`
   again once live.
 
-Caddy splits by path: `/portal/*` → portal (:8081), everything else
+Caddy splits by path: `/` → 308 redirect to `/portal`, `/portal/*` →
+portal (:8081), everything else
 (`/fax/*`, `/admin/*`, `/tenant/*`, `/health`) → gofaxserver (:8080),
 proxied through byte-for-byte. Port exposure with this setup:
 

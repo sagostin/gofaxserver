@@ -1,8 +1,9 @@
 # gofaxserver — optional Caddy reverse proxy.
 #
 # One address fronts BOTH services, split by path:
-#   /portal/*                              → fax portal   (127.0.0.1:8081)
-#   everything else (/fax/*, /admin/*, …)  → gofaxserver  (127.0.0.1:8080)
+#   /                                    → 308 redirect to /portal
+#   /portal/*                            → fax portal   (127.0.0.1:8081)
+#   everything else (/fax/*, /admin/*, …) → gofaxserver  (127.0.0.1:8080)
 #
 # TLS is optional:
 #   - Default (below): plain HTTP on :80 — no DNS or certificates needed.
@@ -20,6 +21,12 @@
 
 :80 {
 	encode gzip
+
+	# Site root: send browsers to the portal UI. `path /` is an exact
+	# match, so /health, /fax/*, /admin/* etc. still fall through to
+	# gofaxserver below.
+	@root path /
+	redir @root /portal 308
 
 	# Portal UI + portal API (path-prefixed).
 	@portal path /portal /portal/*
@@ -46,6 +53,9 @@
 #
 # fax.example.com {
 # 	encode gzip
+#
+# 	@root path /
+# 	redir @root /portal 308
 #
 # 	@portal path /portal /portal/*
 # 	handle @portal {
