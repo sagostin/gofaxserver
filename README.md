@@ -310,7 +310,7 @@ Response:
 }
 ```
 
-`notify` on the number overrides the tenant-level `notify` for faxes involving that number.
+`notify` on the number is merged with the tenant-level `notify` for faxes involving that number — both fire, deduplicated by `type->destination`.
 
 ### Endpoint
 ```json

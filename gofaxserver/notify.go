@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -180,19 +181,26 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 		parts := strings.Split(callIDFull, "-")
 		shortCallID := parts[len(parts)-1]
 
-		// Format timestamp.
-		timestamp := faxJob.Result.EndTs.Format("2006-01-02 15:04:05")
-		// Use ResultText if available, otherwise fallback to Status.
+		// Format timestamp; fall back to job status when no result exists.
+		// (Notify-only jobs — failed receptions, bridged calls — always have
+		// a result, but endpoint-less jobs must never panic here.)
+		timestamp := ""
 		resultText := faxJob.Status
-		if faxJob.Result.ResultText != "" {
-			resultText = faxJob.Result.ResultText
+		success := "failed"
+		if faxJob.Result != nil {
+			timestamp = faxJob.Result.EndTs.Format("2006-01-02 15:04:05")
+			if faxJob.Result.ResultText != "" {
+				resultText = faxJob.Result.ResultText
+			}
+			if faxJob.Result.Success {
+				success = "success"
+			}
 		}
 
-		endpointType := faxJob.Endpoints[0].EndpointType
-
-		success := "failed"
-		if faxJob.Result.Success {
-			success = "success"
+		// Endpoint type is best-effort: notify-only jobs carry no endpoints.
+		endpointType := "fax"
+		if len(faxJob.Endpoints) > 0 && faxJob.Endpoints[0] != nil {
+			endpointType = faxJob.Endpoints[0].EndpointType
 		}
 
 		// Create a row data map.
@@ -230,68 +238,142 @@ func fitText(pdf *fpdf.Fpdf, text string, width float64) string {
 	return text + ellipsis
 }
 
+// processNotifyDestinations resolves the notify destinations for a completed
+// fax job. Number-level and tenant-level notify strings are MERGED (both
+// fire) for the source side (sender receipts) and the destination side
+// (recipient receipts), with duplicates removed by type+destination. The
+// number lookup is attempted even when the tenant is unresolved, so a
+// tenant-map miss (e.g. unresolvable tenant id) can never silently suppress
+// a number's notify. Every decision is logged: a silently empty result here
+// was a recurring production failure mode with zero log trail.
 func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error) {
 	var notifyDestinations []NotifyDestination
 
-	// Helper function to parse and append notify string if not empty.
-	appendNotify := func(notifyStr string) error {
-		if notifyStr != "" {
-			destinations, err := parseNotifyString(notifyStr)
-			if err != nil {
-				return fmt.Errorf("error parsing notify string: %w", err)
-			}
+	logf := func(level logrus.Level, msg string, fields map[string]interface{}) {
+		if fields == nil {
+			fields = map[string]interface{}{}
+		}
+		fields["uuid"] = f.UUID.String()
+		q.server.LogManager.SendLog(q.server.LogManager.BuildLog("Notify.Resolve", msg, level, fields))
+	}
+
+	logf(logrus.InfoLevel, "resolving notify destinations", map[string]interface{}{
+		"caller": f.CallerIdNumber, "callee": f.CalleeNumber,
+		"src_tenant_id": f.SrcTenantID, "dst_tenant_id": f.DstTenantID,
+	})
+
+	// appendNotify parses a notify string and appends its destinations.
+	// Malformed segments are skipped (and logged) rather than failing the
+	// whole string.
+	appendNotify := func(source, notifyStr string) {
+		destinations, skipped := parseNotifyString(notifyStr)
+		for _, seg := range skipped {
+			logf(logrus.WarnLevel, "skipping malformed notify segment", map[string]interface{}{
+				"source": source, "segment": seg, "notify": notifyStr,
+			})
+		}
+		if len(destinations) > 0 {
 			notifyDestinations = append(notifyDestinations, destinations...)
-			/*for _, d := range destinations {
-				fmt.Printf("Added Destination - Type: %s, Destination: %s\n", d.Type, d.Destination)
-			}*/
-		}
-		return nil
-	}
-
-	// Process source tenant (srcT)
-	srcT := q.server.Tenants[f.SrcTenantID]
-	if srcT != nil {
-		// Try getting notify settings from the number for the caller.
-		number, err := q.server.getNumber(f.CallerIdNumber)
-		if err != nil {
-		}
-		if number != nil && number.Notify != "" {
-			if err := appendNotify(number.Notify); err != nil {
-			}
-		} else if srcT.Notify != "" {
-			// Fallback to tenant-level notify settings.
-			if err := appendNotify(srcT.Notify); err != nil {
-			}
+			logf(logrus.InfoLevel, "resolved notify destinations", map[string]interface{}{
+				"source": source, "count": len(destinations), "types": destinationTypeCounts(destinations),
+			})
+		} else {
+			logf(logrus.WarnLevel, "notify string produced no usable destinations", map[string]interface{}{
+				"source": source, "notify": notifyStr,
+			})
 		}
 	}
 
-	// Process destination tenant (dstT)
-	dstT := q.server.Tenants[f.DstTenantID]
-	if dstT != nil {
-		// Try getting notify settings from the number for the callee.
-		number, err := q.server.getNumber(f.CalleeNumber)
-		if err != nil {
+	// resolveSide resolves number-level and tenant-level notify for one side
+	// of the job ("src" or "dst") and merges both.
+	resolveSide := func(side string, tenantID uint, number string) {
+		tenant := q.server.Tenants[tenantID]
+		if tenant == nil && tenantID != 0 {
+			logf(logrus.WarnLevel, "tenant not found in map; checking number directly", map[string]interface{}{
+				"side": side, "tenant_id": tenantID,
+			})
 		}
-		if number != nil && number.Notify != "" {
-			if err := appendNotify(number.Notify); err != nil {
-			}
-		} else if dstT.Notify != "" {
-			// Fallback to tenant-level notify settings.
-			if err := appendNotify(dstT.Notify); err != nil {
-			}
+
+		found := false
+		if tn, err := q.server.getNumber(number); err != nil {
+			logf(logrus.InfoLevel, "number not found; no number-level notify for this side", map[string]interface{}{
+				"side": side, "number": number, "error": err.Error(),
+			})
+		} else if tn.Notify != "" {
+			appendNotify(fmt.Sprintf("%s number %s", side, number), tn.Notify)
+			found = true
+		}
+
+		if tenant != nil && tenant.Notify != "" {
+			appendNotify(fmt.Sprintf("%s tenant %d (%s)", side, tenant.ID, tenant.Name), tenant.Notify)
+			found = true
+		}
+
+		if !found {
+			logf(logrus.InfoLevel, "no notify configured for side", map[string]interface{}{
+				"side": side, "tenant_id": tenantID, "number": number,
+			})
 		}
 	}
 
-	return notifyDestinations, nil
+	// Source side: receipts for the sender (e.g. portal users assigned to the
+	// calling number). Destination side: receipts for the recipients.
+	resolveSide("src", f.SrcTenantID, f.CallerIdNumber)
+	resolveSide("dst", f.DstTenantID, f.CalleeNumber)
+
+	// Dedup by type+destination: on-net jobs resolve the same notify string
+	// from both the src and dst sides.
+	seen := make(map[string]struct{}, len(notifyDestinations))
+	deduped := make([]NotifyDestination, 0, len(notifyDestinations))
+	for _, d := range notifyDestinations {
+		key := d.Type + "->" + d.Destination
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		deduped = append(deduped, d)
+	}
+	if len(deduped) != len(notifyDestinations) {
+		logf(logrus.InfoLevel, "deduplicated notify destinations", map[string]interface{}{
+			"before": len(notifyDestinations), "after": len(deduped),
+		})
+	}
+
+	logf(logrus.InfoLevel, "notify destination resolution complete", map[string]interface{}{
+		"total": len(deduped), "types": destinationTypeCounts(deduped),
+	})
+	return deduped, nil
 }
 
 // format of: email->shaun.agostinho@topsoffice.ca;shaun@dec0de.xyz,webhook->https://example.org/endpoint,portal->svc_username,gateway->TODO
 
-func parseNotifyString(notify string) ([]NotifyDestination, error) {
-	var destinations []NotifyDestination
+// notifySegmentStart matches the beginning of a "type->" segment.
+var notifySegmentStart = regexp.MustCompile(`^\s*[a-zA-Z_]+\s*->`)
 
-	// Split the string by commas to get individual segments.
-	segments := strings.Split(notify, ",")
+// splitNotifySegments splits a notify string on commas — but only on commas
+// that begin a new "type->" segment, so commas inside destinations (e.g.
+// webhook URL query strings) don't corrupt the destination. (RE2 has no
+// lookahead, hence the manual scan.)
+func splitNotifySegments(notify string) []string {
+	var segments []string
+	start := 0
+	for i := 0; i < len(notify); i++ {
+		if notify[i] == ',' && notifySegmentStart.MatchString(notify[i+1:]) {
+			segments = append(segments, notify[start:i])
+			start = i + 1
+		}
+	}
+	return append(segments, notify[start:])
+}
+
+// parseNotifyString parses a notify string into destinations. It is tolerant
+// by design: malformed segments (no "->" separator, empty type/destination)
+// are returned in skipped instead of failing the whole string — historically
+// one bad segment silently discarded every destination, killing all
+// notifications for the number/tenant with no log trail. The legacy "email"
+// type (pre-email_report/email_full split) is normalized to "email_report".
+func parseNotifyString(notify string) (destinations []NotifyDestination, skipped []string) {
+	segments := splitNotifySegments(notify)
 	for _, segment := range segments {
 		segment = strings.TrimSpace(segment)
 		if segment == "" {
@@ -300,19 +382,38 @@ func parseNotifyString(notify string) ([]NotifyDestination, error) {
 		// Split each segment into type and destination using "->".
 		parts := strings.SplitN(segment, "->", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid segment format: %s", segment)
+			skipped = append(skipped, segment)
+			continue
 		}
 		destType := strings.TrimSpace(parts[0])
 		destValue := strings.TrimSpace(parts[1])
-		// Optionally, if multiple destinations are separated by semicolons, you could process them here.
-		// For now, we store the entire string in Destination.
+		if destType == "" || destValue == "" {
+			skipped = append(skipped, segment)
+			continue
+		}
+		// Legacy alias: "email->addr" predates the report/full split.
+		if destType == "email" {
+			destType = "email_report"
+		}
+		// Multiple destinations within one segment are separated by
+		// semicolons; the full string is kept in Destination (dispatchers
+		// split on ';'/',').
 		destinations = append(destinations, NotifyDestination{
 			Type:        destType,
 			Destination: destValue,
 		})
 	}
 
-	return destinations, nil
+	return destinations, skipped
+}
+
+// destinationTypeCounts summarizes destinations by type for compact logging.
+func destinationTypeCounts(destinations []NotifyDestination) map[string]int {
+	counts := make(map[string]int, len(destinations))
+	for _, d := range destinations {
+		counts[d.Type]++
+	}
+	return counts
 }
 
 // SendEmailWithAttachment sends an email with a plain text body and a file attachment via SMTP.
@@ -380,8 +481,12 @@ func SendEmailWithAttachment(subject, to, body string, attachmentPaths []string)
 	// End boundary.
 	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
 
-	// Split the "to" field by semicolon and trim spaces.
-	recipients := strings.Split(to, ";")
+	// Split the "to" field on semicolons or commas (legacy notify strings
+	// sometimes comma-separate recipients) and trim spaces. Empty tokens are
+	// dropped by FieldsFunc.
+	recipients := strings.FieldsFunc(to, func(r rune) bool {
+		return r == ';' || r == ','
+	})
 	for i, r := range recipients {
 		recipients[i] = strings.TrimSpace(r)
 	}
@@ -476,7 +581,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 			"Notify",
 			"failed to save fax result report",
 			logrus.ErrorLevel,
-			map[string]interface{}{"uuid": nFR.FaxJob.UUID.String(), "pdf_path": faxReport},
+			map[string]interface{}{"uuid": nFR.FaxJob.UUID.String(), "pdf_path": faxReport, "error": err.Error()},
 		))
 		return
 	}
@@ -490,7 +595,9 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 
 			// Process each destination based on its type.
 			switch dest.Type {
-			case "email_report":
+			case "email", "email_report":
+				// "email" is the legacy alias for email_report (normally
+				// normalized at parse time; kept here for robustness).
 				// Send an email notification with the PDF report attached.
 				// fmt.Printf("Processing email destination: %s\n", dest.Destination)
 				subject := "Fax Report"
@@ -530,17 +637,34 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				subject := "Full Fax Report"
 				body := "Please find the attached fax report & original fax."
 
+				attachments := []string{faxReport}
 				pdf, err := tiffToPdf(nFR.FaxJob.FileName)
 				if err != nil {
+					// Report-only fallback: a conversion failure (e.g. a
+					// partial TIFF from a failed reception, or a missing
+					// file for a bridged call) must not kill the
+					// notification entirely.
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-						"Queue",
-						fmt.Sprintf("failed to convert tiff to pdf: %v", err),
+						"Notify",
+						fmt.Sprintf("failed to convert tiff to pdf; sending report-only email: %v", err),
 						logrus.ErrorLevel,
-						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String(), "file": nFR.FaxJob.FileName},
 					))
+				} else {
+					attachments = append(attachments, pdf)
+					defer func(name string) {
+						if err := os.Remove(name); err != nil {
+							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+								"Notify",
+								fmt.Sprintf("failed to remove full fax file: %s", name),
+								logrus.ErrorLevel,
+								map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
+							))
+						}
+					}(pdf)
 				}
 
-				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{faxReport, pdf}); err != nil {
+				if err := SendEmailWithAttachment(subject, dest.Destination, body, attachments); err != nil {
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
@@ -559,18 +683,6 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						},
 					))
 				}
-
-				defer func(name string) {
-					err := os.Remove(name)
-					if err != nil {
-						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-							"Notify",
-							fmt.Sprintf("failed to remove full fax file: %s", pdf),
-							logrus.ErrorLevel,
-							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
-						))
-					}
-				}(pdf)
 			case "webhook":
 				// Read the fax file from disk.
 				fileBytes, err := os.ReadFile(faxReport)
@@ -848,11 +960,28 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					))
 				}
 			case "gateway":
-				// Example: process a gateway notification.
-				fmt.Printf("Processing gateway destination: %s\n", dest.Destination)
-				// q.sendGatewayNotification(dest) // replace with actual call.
+				// Gateway notifications are not implemented; log loudly
+				// instead of silently "processing" nothing.
+				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+					"Notify",
+					"gateway notify destination type is not implemented, skipping",
+					logrus.WarnLevel,
+					map[string]interface{}{
+						"uuid":        nFR.FaxJob.UUID.String(),
+						"destination": dest.Destination,
+					},
+				))
 			default:
-				fmt.Printf("Unknown destination type: %s, destination: %s\n", dest.Type, dest.Destination)
+				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+					"Notify",
+					"unknown notify destination type, skipping",
+					logrus.WarnLevel,
+					map[string]interface{}{
+						"uuid":        nFR.FaxJob.UUID.String(),
+						"type":        dest.Type,
+						"destination": dest.Destination,
+					},
+				))
 			}
 		}()
 	}

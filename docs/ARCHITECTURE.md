@@ -231,7 +231,7 @@ GORM models in `gofaxserver/`. Auto-migrated on startup (`gofaxserver/db.go:migr
 | number | string | Phone number (unique) |
 | name | string | Caller ID name |
 | header | string | Fax header displayed at top |
-| notify | string | Per-number notify (overrides tenant-level when non-empty) |
+| notify | string | Per-number notify (merged with tenant-level; both fire, deduplicated) |
 
 ### `endpoints`
 

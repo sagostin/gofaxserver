@@ -155,6 +155,33 @@ func (q *Queue) processFax(f *FaxJob) {
 		q.server.LogManager.SendLog(q.server.LogManager.BuildLog("Queue", msg, level, fields))
 	}
 
+	// ----------------- Notify-only jobs skip endpoint delivery entirely
+	// Failed inbound receptions and bridged calls are routed through the
+	// queue purely for notification dispatch: no delivery is attempted.
+	// Snapshot the existing outcome so the notify tail below treats the job
+	// like any other completed job. The router's progress tick already queued
+	// this job's result for storage, so this must NOT sendResult — that would
+	// store a duplicate row.
+	if f.NotifyOnly {
+		if f.IsBridge && f.Result != nil && !f.Result.Success && f.Result.HangupCause == "NORMAL_CLEARING" {
+			// Mirror the storeQueueFaxResult inference so portal payloads and
+			// failure-only notify types see the real bridge outcome.
+			f.Result.Success = true
+			if f.Result.ResultText == "" {
+				f.Result.ResultText = "Bridge completed"
+			}
+		}
+		f.Endpoints = nil
+		groupMap = map[string]map[uint][]*Endpoint{}
+		logAttempt(logrus.InfoLevel, "notify-only job: skipping endpoint delivery, dispatching notifications only", map[string]interface{}{
+			"uuid": f.UUID.String(), "is_bridge": f.IsBridge,
+		})
+		copyFax := *f
+		resultsMu.Lock()
+		notifyFaxResults.Results[f.CallUUID.String()] = &copyFax
+		resultsMu.Unlock()
+	}
+
 	stampAndSend := func(ff *FaxJob, start time.Time, success bool, humanStatus string) {
 		if ff.Result == nil {
 			ff.Result = &gofaxlib.FaxResult{}
@@ -722,7 +749,9 @@ func (q *Queue) processFax(f *FaxJob) {
 
 	// ----------------- Build first-page preview & notify destinations
 	defer func(path string) {
-		if err := os.Remove(path); err != nil {
+		// IsNotExist is tolerated: bridged (notify-only) jobs never produced
+		// a local fax file.
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 				"Queue", "failed to remove fax file", logrus.ErrorLevel,
 				map[string]interface{}{"uuid": f.UUID.String(), "file": path},
@@ -732,18 +761,25 @@ func (q *Queue) processFax(f *FaxJob) {
 
 	fpTiff, err := firstPageTiff(f.UUID.String(), f.FileName)
 	if err != nil {
-		// mark complete before returning on preview failure
-		complete("preview-failed")
-		return
+		// Preview generation must NEVER suppress notifications — only
+		// webhook_form delivery uses the preview file. Historically this
+		// early-returned and silently killed all notify dispatch (email,
+		// portal push, webhooks) whenever ImageMagick was unavailable or
+		// misconfigured.
+		logAttempt(logrus.ErrorLevel, "failed to build first-page preview; dispatching notifications without it", map[string]interface{}{
+			"uuid": f.UUID.String(), "file": f.FileName, "error": err.Error(),
+		})
+		fpTiff = ""
+	} else {
+		defer func(path string) {
+			if err := os.Remove(path); err != nil {
+				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+					"Queue", "failed to remove first page fax file", logrus.ErrorLevel,
+					map[string]interface{}{"uuid": f.UUID.String(), "file": path},
+				))
+			}
+		}(fpTiff)
 	}
-	defer func(path string) {
-		if err := os.Remove(path); err != nil {
-			q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
-				"Queue", "failed to remove first page fax file", logrus.ErrorLevel,
-				map[string]interface{}{"uuid": f.UUID.String(), "file": path},
-			))
-		}
-	}(fpTiff)
 
 	notifyDestinations, err := q.processNotifyDestinations(f)
 	if err != nil {

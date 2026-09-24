@@ -80,6 +80,14 @@ type FaxJob struct {
 	// Fax policy engine tracking
 	ForceT38Off      bool   `json:"force_t38_off,omitempty"`      // retry-chain escalation: force T.38 off for this attempt
 	AppliedPolicyIDs []uint `json:"applied_policy_ids,omitempty"` // fax policy rules applied to this call
+
+	// NotifyOnly marks jobs routed through the queue purely for notification
+	// dispatch (failed inbound receptions, bridged calls). The router still
+	// performs its normal number transformation / tenant resolution, but
+	// processFax skips endpoint delivery and only runs the notify tail —
+	// keeping one notify path for all job types instead of ad-hoc dispatch
+	// scattered across call sites.
+	NotifyOnly bool `json:"notify_only,omitempty"`
 }
 
 type FaxSourceInfo struct {

@@ -30,7 +30,7 @@ type TenantNumber struct {
     Number   string `gorm:"unique;not null" json:"number"` // 10 digits or whatever format matches the dialplan transforms
     Name     string `json:"name"`     // Caller ID name
     Header   string `json:"header"`   // Fax header displayed at top
-    Notify   string `json:"notify"`   // Per-number override; falls back to tenant-level if empty
+    Notify   string `json:"notify"`   // Per-number notify; merged with tenant-level (both fire)
 }
 ```
 
@@ -224,9 +224,9 @@ The `notify` field on a tenant and on each tenant number specifies destinations 
 
 Notifications fire when a queued fax job **concludes (after all retries)**, regardless of direction:
 
-- **Outbound transmissions** (e.g. `POST /fax/send`) resolve destinations from the **source side**: the *caller* number's `notify` first, falling back to the *source tenant's* `notify` (`notify.go:processNotifyDestinations`, src branch; `SrcTenantID` is stamped from the caller number in `router.go:routeFax`).
-- **Inbound receptions** resolve from the **destination side**: the *callee* number's `notify` first, falling back to the destination tenant's `notify`.
-- Both sides receive notifications for the same job when both are known tenants/numbers.
+- **Outbound transmissions** (e.g. `POST /fax/send`) resolve destinations from the **source side**: the *caller* number's `notify` **merged with** the *source tenant's* `notify` — both fire, deduplicated by `type->destination` (`notify.go:processNotifyDestinations`, src branch; `SrcTenantID` is stamped from the caller number in `router.go:routeFax`).
+- **Inbound receptions** resolve from the **destination side**: the *callee* number's `notify` merged with the destination tenant's `notify`. **Failed receptions and bridged calls** also notify: they are routed through the queue as *notify-only* jobs (no endpoint delivery) so failure types such as `email_full_failure` fire for inbound as well.
+- Both sides receive notifications for the same job when both are known tenants/numbers (identical `type->destination` entries are deduplicated).
 
 `email_report` is sent on job completion **whether the attempts succeeded or failed** — the attached report rows show per-attempt status. Only `email_full_failure` gates on failure.
 
@@ -259,11 +259,11 @@ email_report->support@customer.com,webhook_form->https://n8n.example.com/webhook
 - `webhook` sends a JSON POST with base64-encoded PDF report and fax job data.
 - `webhook_form` sends a multipart form POST with the first page of the fax as a PDF attachment (useful for n8n workflows).
 - `portal` sends a compact JSON status push to `portal.url + /portal/api/notify/<destination>`, where the destination is the portal org's service-account username (the portal manages this entry itself via its number assignments — see [PORTAL.md](PORTAL.md)). Carries no file data; requires `portal.url` (and `portal.api_key` when the portal has `inbound_api_key` set) in `config.json`.
-- Unknown types (e.g. a bare `email->` per the inline comment in `tenants.go:13`) are logged and dropped — only the documented types above are dispatched.
+- The legacy `email->` type is treated as an alias for `email_report`. Other unknown types are logged (Warn) and dropped — only the documented types above are dispatched.
 
 ### Multiple Recipients
 
-Multiple email addresses for the **same** notification type are separated by `;` — only valid for `email_*` types (the SMTP layer splits on `;` at `notify.go:304-307`):
+Multiple email addresses for the **same** notification type are separated by `;` — only valid for `email_*` types (the SMTP layer splits on `;` and `,`):
 
 ```
 email_report->addr1@customer.com;addr2@customer.com
@@ -273,7 +273,7 @@ Multiple webhooks require separate `webhook->` entries, comma-separated.
 
 ### Tenant-Level Notifications
 
-Applied to all numbers under a tenant unless overridden:
+Applied to all numbers under a tenant, merged with any number-level `notify`:
 
 ```json
 {
@@ -284,7 +284,7 @@ Applied to all numbers under a tenant unless overridden:
 
 ### Number-Level Notifications
 
-Override tenant notifications for specific numbers:
+Additional notifications for specific numbers (fired in addition to the tenant-level `notify`, not instead of it):
 
 ```bash
 curl -X PUT http://<FAX_SERVER>:8080/admin/number/<ID> \
@@ -300,7 +300,7 @@ curl -X PUT http://<FAX_SERVER>:8080/admin/number/<ID> \
 
 ### Notification Processing
 
-Notifications are processed asynchronously after fax completion. Number-level `notify` takes precedence over tenant-level; an empty number-level falls back to the tenant's `notify`.
+Notifications are processed asynchronously after fax completion. Number-level and tenant-level `notify` are **merged** — both fire, and identical `type->destination` entries are deduplicated. Every resolution step is logged under the `NOTIFY.RESOLVE` log type, so a number/tenant producing zero destinations is always visible in the logs.
 
 ```go
 // gofaxserver/notify.go:153-206

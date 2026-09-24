@@ -23,11 +23,20 @@ const router = createRouter({
     { path: '/admin/jobs', component: () => import('./views/admin/JobsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/inbound', component: () => import('./views/admin/InboundView.vue'), meta: { role: 'admin' } },
     { path: '/admin/audit', component: () => import('./views/admin/AuditView.vue'), meta: { role: 'admin' } },
-    { path: '/', redirect: '/login' },
+    // SPA root: the guard below sends users to their role home (or /login
+    // when signed out). A static `redirect: '/login'` here would resolve
+    // BEFORE the guard's fetchMe() completes, dumping signed-in users on
+    // the login page. The component is a fallback only — the guard always
+    // redirects this path first.
+    { path: '/', component: () => import('./views/LoginView.vue') },
   ],
 })
 
 let meLoaded = false
+
+function roleHome(auth: ReturnType<typeof useAuthStore>) {
+  return auth.me?.role === 'admin' ? '/admin' : '/app'
+}
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
@@ -35,11 +44,16 @@ router.beforeEach(async (to) => {
     await auth.fetchMe()
     meLoaded = true
   }
-  if (!to.path.startsWith('/login')) {
-    if (!auth.me) return '/login'
-    if (to.meta.role && to.meta.role !== auth.me.role) {
-      return auth.me.role === 'admin' ? '/admin' : '/app'
-    }
+  if (to.path === '/') {
+    return auth.me ? roleHome(auth) : '/login'
+  }
+  if (to.path.startsWith('/login')) {
+    // Already signed in: skip the login page.
+    return auth.me ? roleHome(auth) : true
+  }
+  if (!auth.me) return '/login'
+  if (to.meta.role && to.meta.role !== auth.me.role) {
+    return roleHome(auth)
   }
   return true
 })

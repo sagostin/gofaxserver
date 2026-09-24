@@ -181,6 +181,27 @@ func (r *Router) routeFax(fax *FaxJob) {
 
 	// --- Fallback: route to upstream FreeSWITCH gateways (priority 999 global batch)
 	if len(upstreams) == 0 {
+		if fax.NotifyOnly {
+			// Notify-only jobs (failed receptions, bridged calls) attempt no
+			// delivery, so missing endpoints/upstreams must not drop them:
+			// the queue's notify tail still needs to dispatch notifications
+			// and store the outcome.
+			r.server.LogManager.SendLog(
+				r.server.LogManager.BuildLog(
+					"Router",
+					"notify-only job with no endpoints/upstreams; enqueueing for notify dispatch",
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"uuid":   fax.UUID.String(),
+						"callee": dstNum,
+						"caller": srcNum,
+					},
+				),
+			)
+			fax.Endpoints = nil
+			r.server.Queue.Queue <- fax
+			return
+		}
 		// Nothing to fall back to—log and drop (or you could NACK/notify)
 		r.server.LogManager.SendLog(
 			r.server.LogManager.BuildLog(

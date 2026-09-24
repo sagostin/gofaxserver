@@ -21,7 +21,6 @@ package gofaxserver
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -573,25 +572,27 @@ EventLoop:
 
 		logf(logrus.InfoLevel, "Ended bridge", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge})
 
-		e.server.Queue.QueueFaxResult <- QueueFaxResult{Job: faxjob}
-		e.server.FaxTracker.Complete(faxjob.UUID)
+		// Route bridged calls through the queue like any other job: the
+		// router normalizes numbers/tenants, and processFax stores the
+		// outcome, completes tracking, and dispatches notify-only (no
+		// delivery) — one notify path for all job types.
+		faxjob.NotifyOnly = true
+		e.server.FaxJobRouting <- faxjob
 		return
 	}
 
-	// --- Non-bridge: deliver result + remove temp file -----------------------
+	// --- Non-bridge: route to the queue --------------------------------------
 	level := logrus.InfoLevel
 
 	if !result.Success {
-		e.server.FaxTracker.Complete(faxjob.UUID)
 		level = logrus.ErrorLevel
-
-		e.server.Queue.QueueFaxResult <- QueueFaxResult{Job: faxjob}
-		if err := os.Remove(filename); err != nil {
-			logf(logrus.ErrorLevel, "failed to remove fax file", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge, "file": filename})
-		}
-	} else {
-		e.server.FaxJobRouting <- faxjob
+		// Failed receptions go through the router + queue as notify-only
+		// jobs so failure destinations (e.g. email_full_failure) fire via
+		// the single notify path in processFax. The queue also stores the
+		// result, completes tracking, and removes the (partial) fax file.
+		faxjob.NotifyOnly = true
 	}
+	e.server.FaxJobRouting <- faxjob
 
 	logf(level, "Success: %v, Hangup Cause: %v, Result: %v",
 		map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge},
