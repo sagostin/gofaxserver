@@ -54,6 +54,24 @@ async function reconcile(o: Org) {
   try { report.value = await api(`/admin/orgs/${o.id}/reconcile`) }
   catch (e: any) { error.value = e.message }
 }
+
+async function rotateCredentials(o: Org) {
+  if (!confirm(`Rotate the gofaxserver service-account credentials for ${o.name}? A fresh password + API key are generated, pushed upstream, verified, then stored. Brief send failures are possible while in flight.`)) return
+  error.value = ''
+  try {
+    const r = await api<any>(`/admin/orgs/${o.id}/credentials/rotate`, { method: 'POST' })
+    alert(r.recreated_upstream_user
+      ? 'Service account was missing upstream — recreated with fresh credentials.'
+      : 'Service account credentials rotated and verified.')
+  } catch (e: any) { error.value = e.message }
+}
+
+async function resyncNotify(o: Org) {
+  error.value = ''
+  report.value = null
+  try { report.value = await api<any>(`/admin/orgs/${o.id}/notify/resync`, { method: 'POST' }) }
+  catch (e: any) { error.value = e.message }
+}
 </script>
 
 <template>
@@ -69,7 +87,7 @@ async function reconcile(o: Org) {
     </div>
 
     <div class="panel" v-if="report">
-      <h3>Reconciliation report</h3>
+      <h3>Report</h3>
       <pre style="background:#f3f4f6;padding:10px;border-radius:8px;overflow:auto">{{ JSON.stringify(report, null, 2) }}</pre>
       <button class="secondary" @click="report = null">Close</button>
     </div>
@@ -91,6 +109,8 @@ async function reconcile(o: Org) {
             <td class="actions-cell">
               <button class="secondary" @click="toggleActive(o)">{{ o.active ? 'Deactivate' : 'Reactivate' }}</button>
               <button class="secondary" @click="reconcile(o)">Reconcile</button>
+              <button class="secondary" @click="resyncNotify(o)">Re-sync notify</button>
+              <button class="secondary" @click="rotateCredentials(o)">Rotate credentials</button>
               <button class="danger" @click="purge(o)">Purge</button>
             </td>
           </tr>

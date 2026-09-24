@@ -43,15 +43,19 @@ type Org struct {
 }
 
 type PortalUser struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	Username     string    `gorm:"uniqueIndex;not null" json:"username"`
-	Email        string    `gorm:"not null;default:''" json:"email"`
-	PasswordHash string    `gorm:"not null" json:"-"`
-	Role         string    `gorm:"not null;default:'user'" json:"role"`
-	OrgID        *uint     `gorm:"index" json:"org_id"` // nil for admins
-	Active       bool      `gorm:"not null;default:true" json:"active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uint   `gorm:"primaryKey" json:"id"`
+	Username     string `gorm:"uniqueIndex;not null" json:"username"`
+	Email        string `gorm:"not null;default:''" json:"email"`
+	PasswordHash string `gorm:"not null" json:"-"`
+	Role         string `gorm:"not null;default:'user'" json:"role"`
+	OrgID        *uint  `gorm:"index" json:"org_id"` // nil for admins
+	Active       bool   `gorm:"not null;default:true" json:"active"`
+	// EmailNotify controls whether this user's email is included in the
+	// email_report notify list for their assigned numbers. Users with it off
+	// keep portal/inbox access but receive no fax receipt emails.
+	EmailNotify bool      `gorm:"not null;default:true" json:"email_notify"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Number mirrors one tenant_numbers row on gofaxserver for an org.

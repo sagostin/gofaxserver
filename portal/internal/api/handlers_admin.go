@@ -29,6 +29,7 @@ import (
 	"gofaxportal/internal/models"
 
 	"github.com/kataras/iris/v12"
+	"gorm.io/gorm"
 )
 
 // ---------- Orgs ----------
@@ -218,6 +219,70 @@ func (s *Server) adminDeleteOrg(ctx iris.Context) {
 	ctx.JSON(org)
 }
 
+// adminRotateSvcCredentials generates a fresh password + API key for the
+// org's gofaxserver service account, pushes them upstream (recreating the
+// upstream user if it was deleted out-of-band), verifies them, and only then
+// seals + stores the new password locally. Heals drift and leaks in one step.
+func (s *Server) adminRotateSvcCredentials(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	var org models.Org
+	if err := s.DB.First(&org, id).Error; err != nil {
+		ctx.StatusCode(404)
+		ctx.JSON(map[string]string{"error": "org not found"})
+		return
+	}
+
+	password := crypto.RandomToken(16)
+	apiKey := crypto.RandomToken(16)
+
+	liveUsers, uerr := s.FX.ListUsers(org.GofaxTenantID)
+	if uerr != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "failed to list upstream users: " + uerr.Error()})
+		return
+	}
+	recreated := true
+	for _, u := range liveUsers {
+		if u.Username == org.SvcUsername {
+			recreated = false
+			if err := s.FX.UpdateTenantUser(u.ID, org.GofaxTenantID, org.SvcUsername, password, apiKey); err != nil {
+				ctx.StatusCode(502)
+				ctx.JSON(map[string]string{"error": "upstream credential update failed: " + err.Error()})
+				return
+			}
+			break
+		}
+	}
+	if recreated {
+		if _, err := s.FX.CreateTenantUser(org.GofaxTenantID, org.SvcUsername, password, apiKey); err != nil {
+			ctx.StatusCode(502)
+			ctx.JSON(map[string]string{"error": "upstream service account recreation failed: " + err.Error()})
+			return
+		}
+	}
+	if err := s.FX.AuthenticateSvcAccount(org.SvcUsername, password); err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "rotated credential verification failed: " + err.Error()})
+		return
+	}
+	sealed, serr := crypto.SealString(s.Box, password)
+	if serr != nil {
+		ctx.StatusCode(500)
+		ctx.JSON(map[string]string{"error": "failed to seal credentials"})
+		return
+	}
+	org.SvcPasswordEnc = sealed
+	if err := s.DB.Save(&org).Error; err != nil {
+		ctx.StatusCode(500)
+		ctx.JSON(map[string]string{"error": "failed to store rotated credentials"})
+		return
+	}
+	s.audit(ctx, "ORG_SVC_ROTATE", fmt.Sprintf("org:%d", org.ID), map[string]any{
+		"svc_username": org.SvcUsername, "recreated_upstream_user": recreated,
+	})
+	ctx.JSON(map[string]any{"ok": true, "recreated_upstream_user": recreated})
+}
+
 // adminReconcileOrg compares the portal mirror against live gofaxserver state.
 func (s *Server) adminReconcileOrg(ctx iris.Context) {
 	id := ctx.Params().GetUintDefault("id", 0)
@@ -250,7 +315,8 @@ func (s *Server) adminReconcileOrg(ctx iris.Context) {
 	report := map[string]any{
 		"org_id":                   org.ID,
 		"tenant_exists":            false,
-		"svc_account_ok":           false,
+		"svc_account_ok":           false,      // user exists upstream
+		"svc_auth_ok":              false,      // stored password actually authenticates
 		"missing_upstream_numbers": []string{}, // in portal DB, not on gofaxserver
 		"missing_local_numbers":    []string{}, // on gofaxserver, not in portal DB
 		"number_field_drift":       []map[string]string{},
@@ -264,6 +330,11 @@ func (s *Server) adminReconcileOrg(ctx iris.Context) {
 	for _, u := range liveUsers {
 		if u.Username == org.SvcUsername {
 			report["svc_account_ok"] = true
+		}
+	}
+	if report["svc_account_ok"].(bool) {
+		if pass, perr := crypto.OpenString(s.Box, org.SvcPasswordEnc); perr == nil {
+			report["svc_auth_ok"] = s.FX.AuthenticateSvcAccount(org.SvcUsername, pass) == nil
 		}
 	}
 
@@ -290,6 +361,11 @@ func (s *Server) adminReconcileOrg(ctx iris.Context) {
 			report["number_field_drift"] = append(report["number_field_drift"].([]map[string]string),
 				map[string]string{"number": number, "field": "gofax_number_id",
 					"portal": fmt.Sprint(lnLocal.GofaxNumberID), "live": fmt.Sprint(ln.ID)})
+		}
+		if want := s.computeNotify(s.DB, lnLocal.ID, org.SvcUsername); ln.Notify != want {
+			report["number_field_drift"] = append(report["number_field_drift"].([]map[string]string),
+				map[string]string{"number": number, "field": "notify",
+					"portal": want, "live": ln.Notify})
 		}
 	}
 	sort.Strings(report["missing_upstream_numbers"].([]string))
@@ -403,7 +479,7 @@ func (s *Server) adminCreateNumber(ctx iris.Context) {
 	// New numbers have no user assignments yet, so the notify string is just
 	// the portal status-push destination (email_report entries are added by
 	// the assignment flow).
-	created, err := s.FX.AddNumber(org.GofaxTenantID, number, req.Name, req.Header, s.computeNotify(0, org.SvcUsername))
+	created, err := s.FX.AddNumber(org.GofaxTenantID, number, req.Name, req.Header, s.computeNotify(s.DB, 0, org.SvcUsername))
 	if err != nil {
 		ctx.StatusCode(502)
 		ctx.JSON(map[string]string{"error": "upstream add failed: " + err.Error()})
@@ -490,7 +566,7 @@ func (s *Server) adminUpdateNumber(ctx iris.Context) {
 		}
 		num.InboundEnabled = *req.InboundEnabled
 	}
-	notify := s.computeNotify(num.ID, org.SvcUsername)
+	notify := s.computeNotify(s.DB, num.ID, org.SvcUsername)
 	if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 		ctx.StatusCode(502)
 		ctx.JSON(map[string]string{"error": "upstream update failed: " + uerr.Error()})
@@ -530,12 +606,15 @@ func (s *Server) adminDeleteNumber(ctx iris.Context) {
 // status-push destination (portal->svc_username) so gofaxserver notifies the
 // portal of final job outcomes immediately. The portal destination is always
 // present for orgs with a service account, even with no assigned users.
-func (s *Server) computeNotify(numberID uint, svcUsername string) string {
+// Only active users with an email and email_notify enabled are included.
+// db is usually s.DB, or an open transaction whose uncommitted user /
+// assignment changes the computation must see.
+func (s *Server) computeNotify(db *gorm.DB, numberID uint, svcUsername string) string {
 	dests := []string{}
 	emails := []string{}
-	s.DB.Table("portal_users").
+	db.Table("portal_users").
 		Joins("JOIN user_numbers ON user_numbers.user_id = portal_users.id").
-		Where("user_numbers.number_id = ? AND portal_users.active = ? AND portal_users.email <> ''", numberID, true).
+		Where("user_numbers.number_id = ? AND portal_users.active = ? AND portal_users.email_notify = ? AND portal_users.email <> ''", numberID, true, true).
 		Distinct().Order("portal_users.email ASC").Pluck("portal_users.email", &emails)
 	if len(emails) > 0 {
 		dests = append(dests, "email_report->"+strings.Join(emails, ";"))
@@ -544,6 +623,78 @@ func (s *Server) computeNotify(numberID uint, svcUsername string) string {
 		dests = append(dests, "portal->"+svcUsername)
 	}
 	return strings.Join(dests, ",")
+}
+
+// resyncUserNotify re-pushes the derived notify string for every number
+// assigned to userID. db is usually an open transaction holding the user's
+// just-applied changes (email / active / email_notify) so the recomputation
+// sees the post-change state.
+func (s *Server) resyncUserNotify(db *gorm.DB, userID uint) []string {
+	numberIDs := []uint{}
+	db.Model(&models.UserNumber{}).Where("user_id = ?", userID).Pluck("number_id", &numberIDs)
+	return s.resyncNotifyForNumberIDs(db, numberIDs)
+}
+
+// resyncNotifyForNumberIDs re-pushes the derived notify string for the given
+// portal number IDs (best-effort across the set). db must see the assignment
+// / user state the notify strings should reflect. Returns per-number failures.
+func (s *Server) resyncNotifyForNumberIDs(db *gorm.DB, numberIDs []uint) []string {
+	failures := []string{}
+	for _, nid := range numberIDs {
+		num, org, err := s.loadNumber(nid)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("number:%d (%s)", nid, err))
+			continue
+		}
+		notify := s.computeNotify(db, num.ID, org.SvcUsername)
+		if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
+			failures = append(failures, fmt.Sprintf("%s (%s)", num.Number, uerr))
+		}
+	}
+	return failures
+}
+
+// adminResyncOrgNotify re-pushes the derived notify string for every number
+// in the org — the manual recovery action when reconcile reports notify
+// drift (e.g. after out-of-band gofaxserver edits).
+func (s *Server) adminResyncOrgNotify(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	var org models.Org
+	if err := s.DB.First(&org, id).Error; err != nil {
+		ctx.StatusCode(404)
+		ctx.JSON(map[string]string{"error": "org not found"})
+		return
+	}
+	numbers := []models.Number{}
+	s.DB.Where("org_id = ?", org.ID).Find(&numbers)
+	type result struct {
+		Number string `json:"number"`
+		Notify string `json:"notify"`
+		OK     bool   `json:"ok"`
+		Error  string `json:"error,omitempty"`
+	}
+	results := []result{}
+	failures := 0
+	for i := range numbers {
+		num := &numbers[i]
+		notify := s.computeNotify(s.DB, num.ID, org.SvcUsername)
+		r := result{Number: num.Number, Notify: notify, OK: true}
+		if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
+			r.OK = false
+			r.Error = uerr.Error()
+			failures++
+		}
+		results = append(results, r)
+	}
+	s.audit(ctx, "ORG_NOTIFY_RESYNC", fmt.Sprintf("org:%d", org.ID), map[string]any{
+		"numbers": len(results), "failures": failures,
+	})
+	status := 200
+	if failures > 0 {
+		status = 502
+	}
+	ctx.StatusCode(status)
+	ctx.JSON(map[string]any{"results": results, "failures": failures})
 }
 
 func (s *Server) adminGetAssignments(ctx iris.Context) {
@@ -593,7 +744,7 @@ func (s *Server) adminSetAssignments(ctx iris.Context) {
 			return
 		}
 	}
-	notify := s.computeNotify(num.ID, org.SvcUsername)
+	notify := s.computeNotify(tx, num.ID, org.SvcUsername)
 	if uerr := s.FX.UpdateNumber(num.GofaxNumberID, org.GofaxTenantID, num.Number, num.Name, num.Header, notify); uerr != nil {
 		tx.Rollback()
 		ctx.StatusCode(502)
@@ -619,6 +770,7 @@ type userResp struct {
 	OrgID       *uint  `json:"org_id"`
 	OrgName     string `json:"org_name,omitempty"`
 	Active      bool   `json:"active"`
+	EmailNotify bool   `json:"email_notify"`
 	CreatedAt   string `json:"-"`
 	AssignedIDs []uint `json:"assigned_number_ids"`
 }
@@ -642,7 +794,7 @@ func (s *Server) adminListUsers(ctx iris.Context) {
 	}
 	out := make([]userResp, 0, len(users))
 	for _, u := range users {
-		r := userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active, AssignedIDs: []uint{}}
+		r := userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active, EmailNotify: u.EmailNotify, AssignedIDs: []uint{}}
 		if u.OrgID != nil {
 			r.OrgName = orgNames[*u.OrgID]
 		}
@@ -653,11 +805,12 @@ func (s *Server) adminListUsers(ctx iris.Context) {
 }
 
 type createUserReq struct {
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Role     string `json:"role"`
-	OrgID    *uint  `json:"org_id"`
+	Username    string `json:"username"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	Role        string `json:"role"`
+	OrgID       *uint  `json:"org_id"`
+	EmailNotify *bool  `json:"email_notify"` // default true
 }
 
 func (s *Server) adminCreateUser(ctx iris.Context) {
@@ -697,22 +850,29 @@ func (s *Server) adminCreateUser(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "failed to hash password"})
 		return
 	}
-	u := &models.PortalUser{Username: req.Username, Email: strings.TrimSpace(req.Email), PasswordHash: hash, Role: req.Role, OrgID: req.OrgID, Active: true}
+	emailNotify := req.EmailNotify == nil || *req.EmailNotify
+	u := &models.PortalUser{Username: req.Username, Email: strings.TrimSpace(req.Email), PasswordHash: hash, Role: req.Role, OrgID: req.OrgID, Active: true, EmailNotify: emailNotify}
 	if err := s.DB.Create(u).Error; err != nil {
 		ctx.StatusCode(409)
 		ctx.JSON(map[string]string{"error": "failed to create user (duplicate username?)"})
 		return
 	}
-	s.audit(ctx, "USER_CREATE", u.Username, map[string]any{"role": u.Role, "org_id": u.OrgID})
+	s.audit(ctx, "USER_CREATE", u.Username, map[string]any{"role": u.Role, "org_id": u.OrgID, "email_notify": u.EmailNotify})
 	ctx.StatusCode(201)
-	ctx.JSON(userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active, AssignedIDs: []uint{}})
+	ctx.JSON(userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active, EmailNotify: u.EmailNotify, AssignedIDs: []uint{}})
 }
 
 type updateUserReq struct {
-	Email  *string `json:"email"`
-	Active *bool   `json:"active"`
+	Email       *string `json:"email"`
+	Active      *bool   `json:"active"`
+	EmailNotify *bool   `json:"email_notify"`
 }
 
+// adminUpdateUser applies profile changes. When a notify-relevant field
+// (email, active, email_notify) changes for a fax user, the derived notify
+// string for every assigned number is re-pushed upstream in the same
+// transaction pattern as adminSetAssignments: save in tx, recompute from the
+// tx, push, commit — upstream failure rolls the local change back.
 func (s *Server) adminUpdateUser(ctx iris.Context) {
 	id := ctx.Params().GetUintDefault("id", 0)
 	var u models.PortalUser
@@ -727,22 +887,50 @@ func (s *Server) adminUpdateUser(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "invalid payload"})
 		return
 	}
+	notifyRelevant := false
 	if req.Email != nil {
-		u.Email = strings.TrimSpace(*req.Email)
+		if e := strings.TrimSpace(*req.Email); e != u.Email {
+			u.Email = e
+			notifyRelevant = true
+		}
 	}
-	if req.Active != nil {
+	if req.Active != nil && *req.Active != u.Active {
 		u.Active = *req.Active
+		notifyRelevant = true
 		if !*req.Active {
 			_ = s.Auth.DestroyUserSessions(u.ID)
 		}
 	}
-	if err := s.DB.Save(&u).Error; err != nil {
+	if req.EmailNotify != nil && *req.EmailNotify != u.EmailNotify {
+		u.EmailNotify = *req.EmailNotify
+		notifyRelevant = true
+	}
+	if notifyRelevant && u.Role == models.RoleUser && u.OrgID != nil {
+		tx := s.DB.Begin()
+		if err := tx.Save(&u).Error; err != nil {
+			tx.Rollback()
+			ctx.StatusCode(500)
+			ctx.JSON(map[string]string{"error": "failed to update user"})
+			return
+		}
+		if failures := s.resyncUserNotify(tx, u.ID); len(failures) > 0 {
+			tx.Rollback()
+			ctx.StatusCode(502)
+			ctx.JSON(map[string]string{"error": "upstream notify sync failed for: " + strings.Join(failures, "; ")})
+			return
+		}
+		if cerr := tx.Commit().Error; cerr != nil {
+			ctx.StatusCode(500)
+			ctx.JSON(map[string]string{"error": "failed to commit user update"})
+			return
+		}
+	} else if err := s.DB.Save(&u).Error; err != nil {
 		ctx.StatusCode(500)
 		ctx.JSON(map[string]string{"error": "failed to update user"})
 		return
 	}
 	s.audit(ctx, "USER_UPDATE", u.Username, req)
-	ctx.JSON(userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active})
+	ctx.JSON(userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active, EmailNotify: u.EmailNotify})
 }
 
 type resetPasswordReq struct {
@@ -794,9 +982,31 @@ func (s *Server) adminDeleteUser(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "user not found"})
 		return
 	}
+	// Deleting the user drops their assignments, so re-push the derived
+	// notify string for the affected numbers in the same transaction — their
+	// email must not linger in upstream email_report lists. The number IDs
+	// must be collected before the tx removes the rows.
+	numberIDs := []uint{}
+	s.DB.Model(&models.UserNumber{}).Where("user_id = ?", u.ID).Pluck("number_id", &numberIDs)
+	tx := s.DB.Begin()
+	tx.Where("user_id = ?", u.ID).Delete(&models.UserNumber{})
+	tx.Delete(&u)
+	failures := []string{}
+	if u.Role == models.RoleUser && u.OrgID != nil {
+		failures = s.resyncNotifyForNumberIDs(tx, numberIDs)
+	}
+	if len(failures) > 0 {
+		tx.Rollback()
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream notify sync failed for: " + strings.Join(failures, "; ")})
+		return
+	}
+	if cerr := tx.Commit().Error; cerr != nil {
+		ctx.StatusCode(500)
+		ctx.JSON(map[string]string{"error": "failed to commit user deletion"})
+		return
+	}
 	_ = s.Auth.DestroyUserSessions(u.ID)
-	s.DB.Where("user_id = ?", u.ID).Delete(&models.UserNumber{})
-	s.DB.Delete(&u)
 	s.audit(ctx, "USER_DELETE", u.Username, nil)
 	ctx.JSON(map[string]bool{"ok": true})
 }

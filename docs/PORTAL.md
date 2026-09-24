@@ -78,12 +78,22 @@ Neither the admin API key nor service-account passwords ever reach the browser.
 - **Organization** — a portal tenant. Creating one provisions a matching
   gofaxserver `tenant` plus a single generated **service account**
   (`svc_<slug>`) whose credentials are stored AES-256-GCM encrypted in the
-  portal DB. Portal users are *not* created on gofaxserver.
+  portal DB. Portal users are *not* created on gofaxserver. Admin → Orgs →
+  **Rotate credentials** generates a fresh password + API key, pushes them
+  upstream (recreating the upstream user if it was deleted out-of-band),
+  verifies them, and only then stores the new sealed password.
 - **Numbers** — each outbound number is registered on gofaxserver under the
   org's tenant and mirrored locally. Assigning a number to portal users both
   allows them to use it as caller ID and merges their emails into the
   number's `notify` string as `email_report->a@x;b@y`, so gofaxserver itself
   emails PDF completion receipts (see "How receipts actually work" below).
+  Only assigned users who are active, have an email, **and have the
+  per-user "receipt emails" (`email_notify`) toggle on** are merged — users
+  with the toggle off keep portal/inbox access but receive no emails. The
+  notify string is re-pushed automatically whenever an assigned user's
+  email, active flag, or `email_notify` toggle changes, and on user
+  deletion; Admin → Orgs → **Re-sync notify** re-pushes every number in an
+  org on demand.
 - **Fax users** — live only in the portal DB (bcrypt). They can send faxes
   using *assigned* numbers only and see their own job history with live status.
 - **Admins** — global accounts that manage orgs, numbers, assignments, portal
@@ -181,8 +191,9 @@ derived notify string is
 email_report->user1@x;user2@y,portal-><org svc_username>
 ```
 
-(the `email_report` part only when users with emails are assigned; the
-`portal->` part always). gofaxserver's notify dispatcher understands the
+(the `email_report` part only when assigned users with emails *and* the
+`email_notify` toggle on exist; the `portal->` part always). gofaxserver's
+notify dispatcher understands the
 `portal` type: at job completion it POSTs a compact JSON payload — **no file
 data** — to `<portal.url>/portal/api/notify/<svc_username>` with the same
 `X-API-Key` pre-shared-key auth as inbound fax delivery:
@@ -210,7 +221,8 @@ Notes:
 
 - The notify string lives on the gofaxserver number, so existing numbers pick
   up `portal->…` on their next portal-side update (assignment change, number
-  edit, or re-adding the number).
+  edit, assigned-user profile change, Admin → Orgs → **Re-sync notify**, or
+  re-adding the number).
 - Requires `portal.url`/`portal.api_key` on gofaxserver and `inbound_api_key`
   on the portal — the same pair inbound delivery already uses.
 - Mid-transmission events (page-by-page progress) are not pushed; the
@@ -469,6 +481,7 @@ After deployment, walk this once against your live gofaxserver:
 8. Send a fax *to* the org's number — it should appear in the user's Inbox
    (and Admin → Inbound Faxes) and open as a PDF
 9. Admin → Orgs → **Reconcile** should report a clean diff
+   (`tenant_exists`, `svc_account_ok`, `svc_auth_ok` all true; no drift rows)
 
 ## API surface (session cookie + CSRF)
 
@@ -507,6 +520,8 @@ gateway provisioning under `/portal/api/admin/{gateways,gateway-templates}`
 (including `gateways/adopt`, `gateways/unmanaged/{name}`, `gateways/{name}/repair`),
 dialplan rules under `/portal/api/admin/dialplan`,
 `PUT /portal/api/admin/numbers/{id}/assignments`, `GET /portal/api/admin/orgs/{id}/reconcile`,
+`POST /portal/api/admin/orgs/{id}/credentials/rotate`,
+`POST /portal/api/admin/orgs/{id}/notify/resync`,
 `GET /portal/api/admin/faxes/active`, `GET /portal/api/admin/jobs[?org_id=&status=]`,
 `GET /portal/api/admin/jobs/{id}/live`, `GET /portal/api/admin/inbox[?org_id=]`,
 `GET /portal/api/admin/inbox/{id}/file`, `DELETE /portal/api/admin/inbox/{id}`,
@@ -542,7 +557,13 @@ Mutating requests require the `X-CSRF-Token` header returned by login/me.
 Because gofaxserver previously had no list APIs, drift was possible if people
 edited it out-of-band. It now exposes read-only `GET /admin/tenants|numbers|
 users|endpoints`; the portal's per-org **Reconcile** button diffs the mirror
-against live state (missing tenants/numbers/users, ID mismatches). The rule:
+against live state: missing tenants/numbers/users, ID mismatches, whether the
+service account exists (`svc_account_ok`) **and whether the stored password
+still authenticates** (`svc_auth_ok`), plus per-number `notify` drift against
+the derived-from-assignments string. Reconcile is read-only; repairs are
+explicit actions: **Rotate credentials** (fresh svc password + API key,
+recreates the upstream user if missing) and **Re-sync notify** (re-pushes the
+derived notify string for every number in the org). The rule:
 **manage gofaxserver tenants through the portal**, treat CLI/curl edits as
 exceptional, and re-run reconcile after them.
 

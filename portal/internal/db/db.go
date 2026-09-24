@@ -55,6 +55,9 @@ func Connect(cfg *config.Config) (*gorm.DB, error) {
 	if err := gdb.AutoMigrate(models.AllModels()...); err != nil {
 		return nil, fmt.Errorf("migrate portal schema: %w", err)
 	}
+	// email_notify backfill: Postgres fills NOT NULL DEFAULT true on ADD
+	// COLUMN, so pre-existing users keep receiving receipt emails. No
+	// explicit UPDATE here — one would clobber legitimately disabled rows.
 	log.Printf("[portal] database connected and schema migrated (%s/%s)", cfg.Database.Host, cfg.Database.Database)
 	return gdb, nil
 }

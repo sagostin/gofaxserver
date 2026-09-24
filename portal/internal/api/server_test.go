@@ -60,6 +60,9 @@ func TestProtectedRoutesRejectAnonymous(t *testing.T) {
 	e.GET("/portal/api/admin/gateway-templates").Expect().Status(401)
 	e.GET("/portal/api/admin/dialplan").Expect().Status(401)
 	e.POST("/portal/api/admin/dialplan/rules").Expect().Status(401)
+	// Org maintenance routes
+	e.POST("/portal/api/admin/orgs/1/credentials/rotate").Expect().Status(401)
+	e.POST("/portal/api/admin/orgs/1/notify/resync").Expect().Status(401)
 }
 
 func TestSPAServesUnderPortalPrefix(t *testing.T) {

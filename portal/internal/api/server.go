@@ -110,6 +110,8 @@ func (s *Server) BuildApp() *iris.Application {
 	orgs.Put("/{id:uint}", s.adminUpdateOrg)
 	orgs.Delete("/{id:uint}", s.adminDeleteOrg)
 	orgs.Get("/{id:uint}/reconcile", s.adminReconcileOrg)
+	orgs.Post("/{id:uint}/credentials/rotate", s.adminRotateSvcCredentials)
+	orgs.Post("/{id:uint}/notify/resync", s.adminResyncOrgNotify)
 
 	numbers := admin.Party("/numbers")
 	numbers.Get("/", s.adminListNumbers)
