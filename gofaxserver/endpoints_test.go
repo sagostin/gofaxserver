@@ -54,3 +54,22 @@ func TestEndpointGatewayDialstringTaggedEmpty(t *testing.T) {
 		t.Errorf("expected empty dialstring, got %q", got)
 	}
 }
+
+func TestEndpointGatewayDialstringOutboundTagged(t *testing.T) {
+	got := endpointGatewayDialstringOutboundTagged([]string{"carrier1", "carrier2"}, "2509550795")
+
+	// Every leg carries the gateway tag (no export_vars — the txfax channel
+	// IS the gateway leg), in failover order, with the plain sofia/gateway
+	// target intact.
+	want := "[gofax_gw=carrier1]sofia/gateway/carrier1/2509550795" +
+		",[gofax_gw=carrier2]sofia/gateway/carrier2/2509550795"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestEndpointGatewayDialstringOutboundTaggedEmpty(t *testing.T) {
+	if got := endpointGatewayDialstringOutboundTagged(nil, "2509550795"); got != "" {
+		t.Errorf("expected empty dialstring, got %q", got)
+	}
+}

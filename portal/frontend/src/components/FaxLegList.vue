@@ -5,9 +5,10 @@
 export interface FaxLeg {
   id: number
   call_uuid: string
-  result_type: string // reception | bridge | transmission | delivery
+  result_type: string // reception | bridge | transmission | delivery | submission
   attempt_number: number
   endpoint_type: string
+  gateway: string // actual FS gateway used (transmission: winning gw; reception/bridge: arrival gw)
   success: boolean
   transferred_pages: number
   total_pages: number
@@ -83,6 +84,8 @@ function summary(l: FaxLeg): string {
   const facts: string[] = []
   if (l.is_bridge) {
     facts.push(`${l.bridge_direction || 'bridge'} via ${l.bridge_gateway || '—'}`)
+  } else if (l.gateway) {
+    facts.push(`via ${l.gateway}`)
   } else if (l.endpoint_type) {
     facts.push(`endpoint ${l.endpoint_type}`)
   }
@@ -106,6 +109,10 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
     rows.push({ k: 'Bridge', v: `${l.bridge_direction || '—'} via ${l.bridge_gateway || '—'}` })
   } else if (l.endpoint_type) {
     rows.push({ k: 'Endpoint', v: l.endpoint_type })
+  }
+  if (l.gateway) {
+    const label = l.result_type === 'reception' || l.result_type === 'bridge' ? 'Arrival gateway' : 'Gateway'
+    rows.push({ k: label, v: l.gateway })
   }
   const pages = fmtPages(l)
   if (pages) rows.push({ k: 'Pages', v: pages })

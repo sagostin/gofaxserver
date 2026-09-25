@@ -48,10 +48,11 @@ type FaxJobResult struct {
 	SourceInfo     string    `json:"source_info"`
 
 	// Result classification
-	ResultType    string `json:"result_type"`    // "reception", "bridge", "transmission", "delivery"
+	ResultType    string `json:"result_type"`    // "reception", "bridge", "transmission", "delivery", "submission"
 	AttemptNumber int    `json:"attempt_number"` // retry attempt number (1 = first try)
 	EndpointID    uint   `json:"endpoint_id"`    // ID of the endpoint used
 	EndpointType  string `json:"endpoint_type"`  // Type: "gateway", "webhook", etc.
+	Gateway       string `json:"gateway"`        // Actual FreeSWITCH gateway used (transmission: winning gateway; reception/bridge: arrival gateway)
 
 	// FaxJob fields
 	NPages     int           `json:"npages"`
@@ -117,8 +118,11 @@ func timePtr(t time.Time) *time.Time {
 }
 
 // placeholderHangupCause marks the synthetic result attached to a FaxJob at
-// enqueue time (see web.go). It is not a real call outcome and must never be
-// persisted as a FaxJobResult row.
+// enqueue time (see web.go). It is not a real call outcome; it is persisted
+// as a "submission" leg (attempt_number 0) so portal/API-originated jobs show
+// their intake in the job chain, but consumers must keep ignoring it for
+// terminal-state decisions (the portal poller skips rows with this hangup
+// cause).
 const placeholderHangupCause = "WEBHOOK"
 
 // isPlaceholderResult reports whether the job carries the synthetic enqueue
@@ -127,32 +131,20 @@ func isPlaceholderResult(job *FaxJob) bool {
 	return job != nil && job.Result != nil && job.Result.HangupCause == placeholderHangupCause
 }
 
-func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
-	job := qFR.Job
-	if job == nil {
-		return fmt.Errorf("fax job is nil")
-	}
-
-	// Never persist the enqueue placeholder result (e.g. the router's
-	// progress tick). It carries no real attempt data and would show up in
-	// /fax/status as a bogus row.
-	if isPlaceholderResult(job) {
-		return nil
-	}
-
-	// Marshal endpoints to JSON.
-	var endpointsJSON string
-	if len(job.Endpoints) > 0 {
-		if data, err := json.Marshal(job.Endpoints); err == nil {
-			endpointsJSON = string(data)
-		}
-	}
-
+// classifyFaxResult infers the persisted leg classification (result type,
+// endpoint metadata, attempt number, gateway attribution) from a job. Pure
+// function so it is unit-testable without a database.
+func classifyFaxResult(job *FaxJob) (resultType string, endpointID uint, endpointType string, attemptNumber int, gateway string) {
 	// Infer result type and extract endpoint metadata
-	resultType := "reception" // default: receiving a fax
-	var endpointID uint
-	var endpointType string
-	attemptNumber := 1
+	resultType = "reception" // default: receiving a fax
+	attemptNumber = 1
+
+	if isPlaceholderResult(job) {
+		// Synthetic enqueue placeholder (webhook/API submission): record the
+		// job's intake as a "submission" leg. It is emitted exactly once per
+		// job, by the router's progress tick, before endpoints are resolved.
+		return "submission", 0, "", 0, ""
+	}
 
 	if job.IsBridge {
 		resultType = "bridge"
@@ -179,6 +171,41 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 			attemptNumber = job.TotTries
 		}
 	}
+
+	// Gateway attribution: receptions/bridges record the arrival gateway
+	// (SourceInfo.Source); transmissions record the gateway the call
+	// actually went out on (captured from channel events, see
+	// freeswitch_outbound.go), falling back to the attempted endpoint's
+	// gateway name.
+	gateway = job.Gateway
+	if gateway == "" {
+		switch resultType {
+		case "reception", "bridge":
+			gateway = job.SourceInfo.Source
+		case "transmission":
+			if len(job.Endpoints) > 0 {
+				gateway = gatewayLabel(job.Endpoints[0])
+			}
+		}
+	}
+	return resultType, endpointID, endpointType, attemptNumber, gateway
+}
+
+func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
+	job := qFR.Job
+	if job == nil {
+		return fmt.Errorf("fax job is nil")
+	}
+
+	// Marshal endpoints to JSON.
+	var endpointsJSON string
+	if len(job.Endpoints) > 0 {
+		if data, err := json.Marshal(job.Endpoints); err == nil {
+			endpointsJSON = string(data)
+		}
+	}
+
+	resultType, endpointID, endpointType, attemptNumber, gateway := classifyFaxResult(job)
 
 	// Marshal applied policy rule IDs.
 	var appliedPoliciesJSON string
@@ -208,6 +235,7 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		AttemptNumber: attemptNumber,
 		EndpointID:    endpointID,
 		EndpointType:  endpointType,
+		Gateway:       gateway,
 
 		NPages:     job.NPages,
 		DataFormat: job.DataFormat,

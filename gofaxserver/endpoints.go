@@ -422,6 +422,14 @@ func endpointGatewayDialstring(endpoints []string, dstNum string) string {
 // gateway shows up as variable_gofax_bridge_gw on the a-leg's events.
 const bridgeGatewayTagVar = "gofax_bridge_gw"
 
+// outboundGatewayTagVar is the per-leg channel variable that records which
+// gateway an outbound (txfax) call leg was dialed through. Unlike the bridge
+// case there is no b-leg: the originated channel IS the gateway leg, so the
+// winning leg's variable rides the channel directly and shows up as
+// variable_gofax_gw on its events (spandsp custom events carry channel
+// variables).
+const outboundGatewayTagVar = "gofax_gw"
+
 // endpointGatewayDialstringTagged builds the same comma-separated failover
 // dialstring as endpointGatewayDialstring, but tags every leg with
 // bridgeGatewayTagVar=<gw> and export_vars so the a-leg learns which gateway
@@ -436,6 +444,26 @@ func endpointGatewayDialstringTagged(endpoints []string, dstNum string) string {
 		}
 		dsGateways += fmt.Sprintf("[%s=%v,export_vars=%s]sofia/gateway/%v/%v",
 			bridgeGatewayTagVar, gw, bridgeGatewayTagVar, gw, dstNum)
+	}
+
+	return dsGateways
+}
+
+// endpointGatewayDialstringOutboundTagged builds the same comma-separated
+// failover dialstring as endpointGatewayDialstring, but tags every leg with
+// outboundGatewayTagVar=<gw> so the winning channel (the txfax leg itself)
+// carries variable_gofax_gw on its events and the actual gateway used can be
+// recorded on the job result. Gateway attribution only — the failover order
+// and call flow are unchanged.
+func endpointGatewayDialstringOutboundTagged(endpoints []string, dstNum string) string {
+	var dsGateways string
+
+	for n, gw := range endpoints {
+		if n > 0 {
+			dsGateways += ","
+		}
+		dsGateways += fmt.Sprintf("[%s=%v]sofia/gateway/%v/%v",
+			outboundGatewayTagVar, gw, gw, dstNum)
 	}
 
 	return dsGateways

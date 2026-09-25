@@ -48,6 +48,7 @@ var faxResultTypes = map[string]bool{
 	"bridge":       true,
 	"transmission": true,
 	"delivery":     true,
+	"submission":   true,
 }
 
 // parseTimeBound accepts RFC3339 or a bare YYYY-MM-DD date.
@@ -169,7 +170,10 @@ func (q faxResultQuery) apply(db *gorm.DB) *gorm.DB {
 // FaxResultGroup is one fax job (correlated by job_uuid) with all of its
 // call legs/attempts (each with its own call_uuid). The group-level outcome
 // (success, status, pages) is derived from the final primary leg — the latest
-// non-delivery leg, falling back to the latest leg overall.
+// non-delivery, non-submission leg, falling back to the latest leg overall.
+// Attempts counts real outbound attempts: the highest attempt_number seen on
+// transmission/delivery legs (receptions, bridges and submissions are the
+// job's source/intake, not attempts).
 type FaxResultGroup struct {
 	JobUUID          uuid.UUID      `json:"job_uuid"`
 	CallerIDNumber   string         `json:"caller_id_number"`
@@ -191,7 +195,7 @@ type FaxResultGroup struct {
 // deriveGroup builds the group summary from a job's legs, which must be
 // ordered by created_at ascending.
 func deriveGroup(id uuid.UUID, legs []FaxJobResult) FaxResultGroup {
-	g := FaxResultGroup{JobUUID: id, Legs: legs, Attempts: len(legs), LegTypes: []string{}}
+	g := FaxResultGroup{JobUUID: id, Legs: legs, LegTypes: []string{}}
 	if len(legs) == 0 {
 		return g
 	}
@@ -210,13 +214,21 @@ func deriveGroup(id uuid.UUID, legs []FaxJobResult) FaxResultGroup {
 			seen[l.ResultType] = true
 			g.LegTypes = append(g.LegTypes, l.ResultType)
 		}
+		// Attempts tracks real outbound attempts only: transmission and
+		// delivery legs carry a per-retry attempt_number, while receptions,
+		// bridges and submissions are the job's source/intake.
+		if (l.ResultType == "transmission" || l.ResultType == "delivery") &&
+			l.AttemptNumber > g.Attempts {
+			g.Attempts = l.AttemptNumber
+		}
 	}
 
-	// Final primary leg decides the outcome: latest non-delivery leg,
-	// falling back to the latest leg for delivery-only jobs.
+	// Final primary leg decides the outcome: latest leg that is not a
+	// delivery or submission, falling back to the latest leg for
+	// delivery/submission-only jobs.
 	primary := last
 	for i := len(legs) - 1; i >= 0; i-- {
-		if legs[i].ResultType != "delivery" {
+		if legs[i].ResultType != "delivery" && legs[i].ResultType != "submission" {
 			primary = legs[i]
 			break
 		}
@@ -255,11 +267,11 @@ func (s *Server) handleListFaxResults(ctx iris.Context) {
 	}
 
 	// success: job-level outcome — the success flag of the final primary leg
-	// (latest leg, deliveries ranked below primary legs).
+	// (latest leg, deliveries and submissions ranked below primary legs).
 	if q.Success != nil {
 		latest := s.DB.Model(&FaxJobResult{}).
 			Select("DISTINCT ON (job_uuid) job_uuid, success").
-			Order("job_uuid, CASE WHEN result_type = 'delivery' THEN 1 ELSE 0 END, created_at DESC")
+			Order("job_uuid, CASE WHEN result_type IN ('delivery','submission') THEN 1 ELSE 0 END, created_at DESC")
 		sub := s.DB.Table("(?) AS latest_legs", latest).
 			Select("job_uuid").Where("success = ?", *q.Success)
 		base = base.Where("job_uuid IN (?)", sub)

@@ -130,3 +130,41 @@ func TestDecidePlaceholderOnlyStaysQueued(t *testing.T) {
 		t.Fatalf("placeholder-only job stays queued, got %+v", d)
 	}
 }
+
+// submissionRow mimics the persisted intake leg (result_type "submission")
+// now stored for portal/API-originated jobs. It keeps the placeholder hangup
+// cause so terminal-state decisions keep ignoring it.
+func submissionRow() fsclient.FaxStatusRow {
+	return fsclient.FaxStatusRow{
+		JobUUID: "j-1", ResultType: "submission", AttemptNumber: 0,
+		StartTs: base, EndTs: base,
+		Success: false, ResultText: "queued", HangupCause: placeholderHangupCause,
+	}
+}
+
+func TestDecideIgnoresPersistedSubmissionRow(t *testing.T) {
+	// A persisted submission leg followed by a successful transmission must
+	// resolve to success with the transmission as the only attempt.
+	rows := []fsclient.FaxStatusRow{
+		submissionRow(),
+		row(true, 1, 3, "OK", "NORMAL_CLEARING"),
+	}
+	d := decide(rows, false, true, true, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobSuccess {
+		t.Fatalf("submission + successful transmission should be success, got %+v", d)
+	}
+	if d.attempts != 1 {
+		t.Fatalf("submission row must not count as an attempt, got %+v", d)
+	}
+
+	// Submission + failed transmission must resolve to failed (the
+	// submission row alone never finalizes the job).
+	rows = []fsclient.FaxStatusRow{
+		submissionRow(),
+		row(false, 1, 0, "", "NORMAL_UNSPECIFIED"),
+	}
+	d = decide(rows, false, true, true, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobFailed {
+		t.Fatalf("submission + failed transmission should be failed, got %+v", d)
+	}
+}

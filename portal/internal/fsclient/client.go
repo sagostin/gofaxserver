@@ -321,6 +321,7 @@ type FaxStatusRow struct {
 	Success          bool      `json:"success"`
 	ResultText       string    `json:"result_text"`
 	T38Status        string    `json:"t38_status"`
+	Gateway          string    `json:"gateway"`
 }
 
 // FaxResultRow mirrors one call leg (attempt) of gofaxserver's
@@ -338,6 +339,7 @@ type FaxResultRow struct {
 	ResultType       string     `json:"result_type"`
 	AttemptNumber    int        `json:"attempt_number"`
 	EndpointType     string     `json:"endpoint_type"`
+	Gateway          string     `json:"gateway"`
 	NPages           int        `json:"npages"`
 	SignalRate       int        `json:"signal_rate"`
 	Status           string     `json:"status"`

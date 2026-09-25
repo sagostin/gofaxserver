@@ -445,6 +445,9 @@ func (q *Queue) processFax(f *FaxJob) {
 						ff := *f
 						ff.Endpoints = []*Endpoint{ep}
 						ff.Result = &gofaxlib.FaxResult{}
+						// Single-gateway dialstring: the gateway used is known
+						// up-front (no fan-out ambiguity to resolve from events).
+						ff.Gateway = gatewayLabel(ep)
 
 						epTy, epLbl, epVal := endpointBrief(ep)
 						logAttempt(logrus.InfoLevel, "processing single gateway endpoint", map[string]interface{}{

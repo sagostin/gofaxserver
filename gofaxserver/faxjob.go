@@ -49,6 +49,11 @@ type FaxJob struct {
 	Result     *gofaxlib.FaxResult `json:"result,omitempty"`
 	SourceInfo FaxSourceInfo       `json:"fax_source_info,omitempty"` // Routing information for the fax
 
+	// Gateway is the FreeSWITCH gateway the call actually went out on. Set
+	// explicitly for per-endpoint sends; captured from the winning leg's
+	// channel variable for fan-out/failover dialstrings.
+	Gateway string `json:"gateway,omitempty"`
+
 	// These fields may be updated later in the process:
 	NPages     int           `json:"npages,omitempty"`     // number of pages sent
 	DataFormat string        `json:"dataformat,omitempty"` // encoding or data format for the fax

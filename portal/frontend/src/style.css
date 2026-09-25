@@ -67,6 +67,7 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 .badge.bridge { background: #dbeafe; color: #1e40af; }
 .badge.transmission { background: #e0e7ff; color: #3730a3; }
 .badge.delivery { background: #e5e7eb; color: #374151; }
+.badge.submission { background: #f3e8ff; color: #6b21a8; }
 
 /* Fax job legs (FaxLegList) */
 .legs { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
@@ -115,7 +116,9 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
   text-decoration: none;
 }
 .menu-item:hover { background: #f3f4f6; }
-.menu-item.danger { color: var(--danger); }
+/* Override the global button.danger fill: menu danger items stay text-red, never red-filled */
+.menu-item.danger { background: none; color: var(--danger); }
+.menu-item.danger:hover { background: #fef2f2; color: var(--danger); }
 .menu-item.router-link-active { color: var(--accent); background: #eff4ff; }
 .menu-divider { border-top: 1px solid var(--border); margin: 4px 2px; }
 

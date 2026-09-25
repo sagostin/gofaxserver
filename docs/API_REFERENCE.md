@@ -717,7 +717,7 @@ curl -X GET "http://<HOST>:8080/fax/status?uuid=550e8400-e29b-41d4-a716-44665544
   -H "Authorization: Basic $(echo -n 'tenantuser:password' | base64)"
 ```
 
-**Response:** array of `fax_job_results` rows. Multiple rows may be returned for a single job UUID when retries occurred:
+**Response:** array of `fax_job_results` rows. Multiple rows may be returned for a single job UUID when retries occurred. Portal/API-submitted jobs also include a `submission` row (attempt_number 0, hangup_cause `WEBHOOK`) recording the job's intake — it is not a real attempt and must be ignored for terminal-state decisions:
 
 ```json
 [
@@ -729,6 +729,7 @@ curl -X GET "http://<HOST>:8080/fax/status?uuid=550e8400-e29b-41d4-a716-44665544
     "result_type": "transmission",
     "attempt_number": 1,
     "endpoint_type": "gateway",
+    "gateway": "carrier_sbc1",
     "start_ts": "2025-12-23T12:50:52Z",
     "end_ts": "2025-12-23T12:52:10Z",
     "hangup_cause": "NORMAL_CLEARING",

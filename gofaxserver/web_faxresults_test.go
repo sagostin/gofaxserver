@@ -180,8 +180,43 @@ func TestDeriveGroupDeliveryDoesNotDecide(t *testing.T) {
 	if !g.Success {
 		t.Error("later failed delivery leg must not override successful reception")
 	}
+	if g.Attempts != 1 {
+		t.Errorf("reception+delivery chain should count 1 attempt (the delivery), got %d", g.Attempts)
+	}
 	if len(g.LegTypes) != 2 {
 		t.Errorf("leg types wrong: %v", g.LegTypes)
+	}
+}
+
+func TestDeriveGroupReceptionOnlyHasNoAttempts(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	g := deriveGroup(uuid.New(), []FaxJobResult{
+		leg("reception", 1, false, base),
+	})
+	if g.Success {
+		t.Error("failed reception: job should be failed")
+	}
+	if g.Attempts != 0 {
+		t.Errorf("reception-only job should have 0 attempts, got %d", g.Attempts)
+	}
+}
+
+func TestDeriveGroupSubmissionDoesNotDecide(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	sub := leg("submission", 0, false, base)
+	sub.Status = "queued"
+	g := deriveGroup(uuid.New(), []FaxJobResult{
+		sub,
+		leg("transmission", 1, true, base.Add(time.Minute)),
+	})
+	if !g.Success {
+		t.Error("submission placeholder must not override the successful transmission")
+	}
+	if g.Attempts != 1 {
+		t.Errorf("submission+transmission chain should count 1 attempt, got %d", g.Attempts)
+	}
+	if g.Status != "OK" {
+		t.Errorf("status should come from the transmission leg, got %q", g.Status)
 	}
 }
 

@@ -649,7 +649,7 @@ func (t *eventClient) start() {
 		gateways = append(gateways, strings.Split(i.Endpoint, ":")[0])
 	}
 
-	var dsGateways = endpointGatewayDialstring(gateways, t.faxjob.CalleeNumber)
+	var dsGateways = endpointGatewayDialstringOutboundTagged(gateways, t.faxjob.CalleeNumber)
 
 	for k, v := range dsVariablesMap {
 		if dsVariables.Len() > 0 {
@@ -736,6 +736,25 @@ func (t *eventClient) start() {
 		select {
 		case ev := <-es.Events():
 			result.AddEvent(ev)
+			// Gateway attribution: the winning leg of a fan-out/failover
+			// dialstring carries variable_gofax_gw (tagged per leg, see
+			// endpointGatewayDialstringOutboundTagged). Record the first
+			// non-empty value seen on the job.
+			if t.faxjob.Gateway == "" {
+				if gw := ev.Get("Variable_gofax_gw"); gw != "" {
+					t.faxjob.Gateway = gw
+					t.logManager.SendLog(t.logManager.BuildLog(
+						"EventClient",
+						"Outbound call routed via gateway %s",
+						logrus.DebugLevel,
+						map[string]interface{}{
+							"uuid":    t.faxjob.UUID.String(),
+							"gateway": gw,
+						},
+						gw,
+					))
+				}
+			}
 			if result.HangupCause != "" {
 
 				// Feed the outcome into the fax policy engine (softmodem path

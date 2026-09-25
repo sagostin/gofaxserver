@@ -260,8 +260,9 @@ GORM models in `gofaxserver/`. Auto-migrated on startup (`gofaxserver/db.go:migr
 A denormalized record of every fax attempt — one row per attempt, written from `queue.go:storeQueueFaxResult` via `QueueFaxResult`. Key fields:
 
 - `job_uuid`, `call_uuid` (correlation)
-- `result_type` — `reception`, `bridge`, `transmission`, or `delivery` (webhook/email/portal)
-- `attempt_number`, `endpoint_id`, `endpoint_type` — which endpoint and which retry
+- `result_type` — `submission` (portal/API intake), `reception`, `bridge`, `transmission`, or `delivery` (webhook/email/portal)
+- `attempt_number`, `endpoint_id`, `endpoint_type` — which endpoint and which retry (submissions use attempt 0)
+- `gateway` — actual FreeSWITCH gateway: the winning gateway for transmissions (captured from `variable_gofax_gw` on the channel), the arrival gateway (`SourceInfo.Source`) for receptions/bridges
 - `start_ts`, `end_ts`, `hangup_cause`, `transferred_pages`, `success`, `result_text`, `t38_status`, `v17_disabled` — outcome
 - `is_bridge`, `bridge_direction`, `bridge_gateway`, `bridge_t38` — bridge metadata
 - `used_t38`, `softmodem_fallback` — T.38 decision tracking

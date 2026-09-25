@@ -239,6 +239,7 @@ async function copyUuid(u: string) {
               <option value="reception">reception</option>
               <option value="bridge">bridge</option>
               <option value="delivery">delivery</option>
+              <option value="submission">submission</option>
             </select>
           </div>
           <div>
