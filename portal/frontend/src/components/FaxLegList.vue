@@ -79,6 +79,10 @@ function fmtPages(l: FaxLeg): string {
   return `${l.transferred_pages}/${l.total_pages || '?'} pages`
 }
 
+// submissionMarker is the internal placeholder value gofaxserver stamps on
+// submission (intake) legs — not a real hangup cause or outcome.
+const submissionMarker = 'WEBHOOK'
+
 // summary assembles the one-line fact list for a leg, skipping empty fields.
 function summary(l: FaxLeg): string {
   const facts: string[] = []
@@ -95,9 +99,9 @@ function summary(l: FaxLeg): string {
   if (rate) facts.push(rate)
   if (l.t38_status) facts.push(`T.38 ${l.t38_status}`)
   else if (l.used_t38) facts.push('T.38')
-  if (l.hangup_cause) facts.push(l.hangup_cause)
+  if (l.hangup_cause && l.hangup_cause !== submissionMarker) facts.push(l.hangup_cause)
   if (l.result_text && l.result_text !== l.hangup_cause) facts.push(l.result_text)
-  if (l.status && l.status !== l.result_text) facts.push(l.status)
+  if (l.status && l.status !== l.result_text && l.status !== submissionMarker) facts.push(l.status)
   return facts.join(' · ')
 }
 
@@ -124,9 +128,9 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
   else if (l.ecm_requested) rows.push({ k: 'ECM', v: 'requested' })
   if (l.v17_disabled) rows.push({ k: 'V.17', v: 'disabled' })
   if (l.remote_id) rows.push({ k: 'Remote ID', v: l.remote_id })
-  if (l.hangup_cause) rows.push({ k: 'Hangup cause', v: l.hangup_cause })
+  if (l.hangup_cause && l.hangup_cause !== submissionMarker) rows.push({ k: 'Hangup cause', v: l.hangup_cause })
   if (l.result_text) rows.push({ k: 'Result', v: l.result_text })
-  if (l.status) rows.push({ k: 'Status', v: l.status })
+  if (l.status && l.status !== submissionMarker) rows.push({ k: 'Status', v: l.status })
   if (l.start_ts) rows.push({ k: 'Started', v: fmtWhen(l.start_ts) })
   if (l.end_ts) rows.push({ k: 'Ended', v: fmtWhen(l.end_ts) })
   const d = duration(l.start_ts, l.end_ts)
@@ -142,7 +146,8 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
       <button type="button" class="leg-head" @click="toggle(leg.id)">
         <span class="chip">#{{ leg.attempt_number }}</span>
         <span class="badge" :class="leg.result_type">{{ leg.result_type }}</span>
-        <span class="badge" :class="leg.success ? 'success' : 'failed'">{{ leg.success ? 'success' : 'failed' }}</span>
+        <span v-if="leg.result_type === 'submission'" class="badge" :class="leg.success ? 'processed' : 'queued'">{{ leg.success ? 'processed' : 'queued' }}</span>
+        <span v-else class="badge" :class="leg.success ? 'success' : 'failed'">{{ leg.success ? 'success' : 'failed' }}</span>
         <span class="leg-summary">{{ summary(leg) }}</span>
         <span class="leg-when muted">
           <template v-if="duration(leg.start_ts, leg.end_ts)">{{ duration(leg.start_ts, leg.end_ts) }} · </template>{{ fmtWhen(leg.created_at) }}

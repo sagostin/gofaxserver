@@ -237,6 +237,16 @@ func deriveGroup(id uuid.UUID, legs []FaxJobResult) FaxResultGroup {
 	g.Status = primary.Status
 	g.TransferredPages = primary.TransferredPages
 	g.TotalPages = primary.TotalPages
+	if primary.ResultType == "submission" {
+		// Intake-only job (queued/in-flight): the submission lifecycle state
+		// is not a fax outcome. Present the intake state ("queued" /
+		// "processed") and never report success before a real attempt ends.
+		g.Success = false
+		g.Status = primary.ResultText
+		if g.Status == "" {
+			g.Status = "queued"
+		}
+	}
 	return g
 }
 
@@ -267,11 +277,14 @@ func (s *Server) handleListFaxResults(ctx iris.Context) {
 	}
 
 	// success: job-level outcome — the success flag of the final primary leg
-	// (latest leg, deliveries and submissions ranked below primary legs).
+	// (latest leg, deliveries ranked below primary legs). Submission legs are
+	// excluded entirely: they track intake lifecycle (queued/processed), not
+	// outcomes, so intake-only jobs match neither success filter value.
 	if q.Success != nil {
 		latest := s.DB.Model(&FaxJobResult{}).
 			Select("DISTINCT ON (job_uuid) job_uuid, success").
-			Order("job_uuid, CASE WHEN result_type IN ('delivery','submission') THEN 1 ELSE 0 END, created_at DESC")
+			Where("result_type <> ?", "submission").
+			Order("job_uuid, CASE WHEN result_type = 'delivery' THEN 1 ELSE 0 END, created_at DESC")
 		sub := s.DB.Table("(?) AS latest_legs", latest).
 			Select("job_uuid").Where("success = ?", *q.Success)
 		base = base.Where("job_uuid IN (?)", sub)

@@ -268,6 +268,8 @@ A denormalized record of every fax attempt — one row per attempt, written from
 - `used_t38`, `softmodem_fallback` — T.38 decision tracking
 - `applied_policies` — JSON array of fax policy rule IDs that applied to this call
 
+Submission legs are lifecycle rows, not call outcomes: they start as `result_text: "queued"` (`success: false`) when the job is accepted and flip to `result_text: "processed"` (`success: true`, `end_ts` set) when the queue worker picks the job up. They keep the synthetic hangup cause `WEBHOOK` so consumers (e.g. the portal poller) ignore them for terminal-state decisions.
+
 `Endpoints` and `SourceInfo` are stored as JSON strings.
 
 ### `gateway_templates`

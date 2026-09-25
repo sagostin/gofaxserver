@@ -96,6 +96,10 @@ func (q *Queue) processFax(f *FaxJob) {
 	// Ensure fax is tracked in the FaxTracker (may already be tracked from inbound)
 	q.server.FaxTracker.Begin(f)
 
+	// The job has been dequeued: flip its submission (intake) leg from
+	// "queued" to "processed". No-op for inbound/bridge jobs.
+	q.markSubmissionProcessed(f.UUID)
+
 	// Ensure the tracker is marked complete exactly once, on any exit path.
 	var completeOnce sync.Once
 	complete := func(reason string) {

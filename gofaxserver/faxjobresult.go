@@ -276,6 +276,13 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		record.CallUUID = job.UUID
 	}
 
+	if resultType == "submission" {
+		// Present the intake lifecycle state, not the internal placeholder
+		// marker. Transitions to "processed" (success=true) when the queue
+		// worker picks the job up — see markSubmissionProcessed.
+		record.Status = "queued"
+	}
+
 	sourceRoutingInformation, err := json.Marshal(job.SourceInfo)
 	if err != nil {
 		return err
@@ -322,6 +329,31 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 	}
 
 	return q.server.DB.Create(&record).Error
+}
+
+// markSubmissionProcessed transitions the job's submission (intake) leg from
+// "queued" to "processed" now that the queue worker has picked the job up.
+// Idempotent: only rows still in the queued state are touched. No-op for
+// jobs without a submission leg (inbound receptions, bridges).
+func (q *Queue) markSubmissionProcessed(jobID uuid.UUID) {
+	now := time.Now()
+	res := q.server.DB.Model(&FaxJobResult{}).
+		Where("job_uuid = ? AND result_type = ? AND result_text = ?", jobID, "submission", "queued").
+		Updates(map[string]interface{}{
+			"success":     true,
+			"status":      "processed",
+			"result_text": "processed",
+			"end_ts":      now,
+		})
+	if res.Error != nil {
+		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+			"FaxJobResult",
+			"error marking submission leg processed: %v",
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": jobID.String(), "error": res.Error.Error()},
+			res.Error,
+		))
+	}
 }
 
 // startQueueResults processes results from the QueueFaxResult channel asynchronously.

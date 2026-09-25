@@ -103,6 +103,22 @@ async function loadAllResults() {
 }
 
 function load() { view.value === 'portal' ? loadPortalJobs() : loadAllResults() }
+
+// A job whose only persisted legs are submissions is queued/in-flight — no
+// real attempt has concluded, so it must not render as failed. The group
+// status carries the intake lifecycle state ("queued" / "processed").
+function isIntakeGroup(g: ResultGroup): boolean {
+  return g.attempts === 0 && g.leg_types.length > 0 &&
+    g.leg_types.every(t => t === 'submission')
+}
+function outcomeClass(g: ResultGroup): string {
+  return g.success ? 'success' : isIntakeGroup(g) ? 'queued' : 'failed'
+}
+function outcomeLabel(g: ResultGroup): string {
+  if (g.success) return 'success'
+  if (isIntakeGroup(g)) return g.status || 'queued'
+  return 'failed'
+}
 function switchView(v: 'portal' | 'all') {
   view.value = v
   expanded.value = {}
@@ -282,7 +298,7 @@ async function copyUuid(u: string) {
                 </td>
                 <td>{{ g.caller_id_number || '—' }} → {{ g.callee_number || '—' }}</td>
                 <td>{{ tenantLabel(g.src_tenant_id) }} → {{ tenantLabel(g.dst_tenant_id) }}</td>
-                <td><span class="badge" :class="g.success ? 'success' : 'failed'">{{ g.success ? 'success' : 'failed' }}</span></td>
+                <td><span class="badge" :class="outcomeClass(g)">{{ outcomeLabel(g) }}</span></td>
                 <td>{{ g.attempts }}</td>
                 <td>{{ groupPages(g) }}</td>
                 <td><button class="secondary" @click="toggleGroup(g.job_uuid)">{{ expandedGroups[g.job_uuid] ? 'Hide' : 'Legs' }}</button></td>
@@ -293,7 +309,7 @@ async function copyUuid(u: string) {
                     <span class="copyable" :title="copied === g.job_uuid ? 'Copied!' : 'Click to copy'" @click="copyUuid(g.job_uuid)">
                       {{ copied === g.job_uuid ? '✓ copied' : 'Job ' + g.job_uuid }}
                     </span>
-                    · {{ g.attempts }} leg{{ g.attempts === 1 ? '' : 's' }}<template v-if="span(g.first_ts, g.last_ts)"> · span {{ span(g.first_ts, g.last_ts) }}</template>
+                    · {{ g.attempts }} attempt{{ g.attempts === 1 ? '' : 's' }} · {{ g.legs.length }} leg{{ g.legs.length === 1 ? '' : 's' }}<template v-if="span(g.first_ts, g.last_ts)"> · span {{ span(g.first_ts, g.last_ts) }}</template>
                     · outcome from final leg ({{ g.status || '—' }})
                   </p>
                   <FaxLegList v-if="g.legs.length" :legs="g.legs" />

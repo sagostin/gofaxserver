@@ -168,3 +168,36 @@ func TestDecideIgnoresPersistedSubmissionRow(t *testing.T) {
 		t.Fatalf("submission + failed transmission should be failed, got %+v", d)
 	}
 }
+
+// processedSubmissionRow mimics the intake leg after the queue worker picked
+// the job up (success=true, result_text "processed"). The WEBHOOK hangup
+// cause is preserved, so terminal-state decisions must still ignore it.
+func processedSubmissionRow() fsclient.FaxStatusRow {
+	r := submissionRow()
+	r.Success = true
+	r.ResultText = "processed"
+	return r
+}
+
+func TestDecideIgnoresProcessedSubmissionRow(t *testing.T) {
+	// A processed (success=true) submission row must never make the job
+	// succeed on its own...
+	d := decide([]fsclient.FaxStatusRow{processedSubmissionRow()},
+		false, true, false, base.Add(-5*time.Minute), base)
+	if d.terminal || d.status != models.JobQueued || d.attempts != 0 {
+		t.Fatalf("processed-submission-only job stays queued, got %+v", d)
+	}
+
+	// ...and must not mask a genuinely failed transmission.
+	rows := []fsclient.FaxStatusRow{
+		processedSubmissionRow(),
+		row(false, 1, 0, "", "NORMAL_UNSPECIFIED"),
+	}
+	d = decide(rows, false, true, true, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobFailed {
+		t.Fatalf("processed submission + failed transmission should be failed, got %+v", d)
+	}
+	if d.attempts != 1 {
+		t.Fatalf("processed submission row must not count as an attempt, got %+v", d)
+	}
+}

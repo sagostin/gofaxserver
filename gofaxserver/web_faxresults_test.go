@@ -220,6 +220,39 @@ func TestDeriveGroupSubmissionDoesNotDecide(t *testing.T) {
 	}
 }
 
+func TestDeriveGroupSubmissionOnlyIsQueued(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	sub := leg("submission", 0, false, base)
+	sub.Status = "queued"
+	sub.ResultText = "queued"
+	sub.HangupCause = "WEBHOOK"
+	g := deriveGroup(uuid.New(), []FaxJobResult{sub})
+	if g.Success {
+		t.Error("queued job must not report success")
+	}
+	if g.Status != "queued" {
+		t.Errorf("intake-only job should present status %q, got %q", "queued", g.Status)
+	}
+	if g.Attempts != 0 {
+		t.Errorf("intake-only job should have 0 attempts, got %d", g.Attempts)
+	}
+}
+
+func TestDeriveGroupSubmissionProcessedStillNotAnOutcome(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	sub := leg("submission", 0, true, base) // processed intake: success=true on the leg
+	sub.Status = "processed"
+	sub.ResultText = "processed"
+	sub.HangupCause = "WEBHOOK"
+	g := deriveGroup(uuid.New(), []FaxJobResult{sub})
+	if g.Success {
+		t.Error("processed intake is not a fax outcome: job must not report success")
+	}
+	if g.Status != "processed" {
+		t.Errorf("group status should reflect the intake lifecycle, got %q", g.Status)
+	}
+}
+
 func TestDeriveGroupDeliveryOnlyFallback(t *testing.T) {
 	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 	g := deriveGroup(uuid.New(), []FaxJobResult{
