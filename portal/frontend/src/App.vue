@@ -2,8 +2,10 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from './auth'
+import { useBrandingStore } from './branding'
 
 const auth = useAuthStore()
+const branding = useBrandingStore()
 const route = useRoute()
 const links = computed(() => {
   if (!auth.me) return []
@@ -22,6 +24,7 @@ const links = computed(() => {
       { to: '/admin/jobs', label: 'All Jobs' },
       { to: '/admin/inbound', label: 'Inbound Faxes' },
       { to: '/admin/audit', label: 'Audit' },
+      { to: '/admin/branding', label: 'Branding' },
     ]
   }
   return [
@@ -34,7 +37,10 @@ const links = computed(() => {
 
 <template>
   <div v-if="auth.me" class="topbar">
-    <span class="brand">Fax Portal</span>
+    <span class="brand">
+      <img v-if="branding.logoUrl" :src="branding.logoUrl" :alt="branding.name" class="brand-logo" />
+      <span v-else>{{ branding.name }}</span>
+    </span>
     <nav>
       <RouterLink v-for="l in links" :key="l.to" :to="l.to">{{ l.label }}</RouterLink>
     </nav>

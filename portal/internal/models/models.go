@@ -169,6 +169,22 @@ type PendingAuth struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// Branding is the singleton portal whitelabel row (ID is always 1). It backs
+// the public /portal/api/branding endpoints: name + accent color are returned
+// as JSON, logo/favicon blobs are streamed from their own endpoints. The blobs
+// are never serialized into JSON.
+type Branding struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	PortalName  string    `gorm:"not null;default:'Fax Portal'" json:"portal_name"`
+	AccentColor string    `gorm:"not null;default:''" json:"accent_color"` // "#rrggbb"; empty = built-in default
+	Logo        []byte    `json:"-"`
+	LogoMIME    string    `json:"logo_mime"`
+	Favicon     []byte    `json:"-"`
+	FaviconMIME string    `json:"favicon_mime"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type AuditLog struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
 	ActorID       *uint     `json:"actor_id"`
@@ -181,5 +197,5 @@ type AuditLog struct {
 }
 
 func AllModels() []any {
-	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &InboundFax{}, &Session{}, &PendingAuth{}, &AuditLog{}}
+	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &InboundFax{}, &Session{}, &PendingAuth{}, &AuditLog{}, &Branding{}}
 }

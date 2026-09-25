@@ -83,6 +83,13 @@ func (s *Server) BuildApp() *iris.Application {
 		ctx.JSON(map[string]string{"status": "ok"})
 	})
 
+	// Public whitelabel branding: the login page renders the portal name,
+	// logo and favicon before any session exists, so these must not require
+	// auth. They only expose admin-uploaded content.
+	apiParty.Get("/branding", s.handleGetBranding)
+	apiParty.Get("/branding/logo", s.handleGetBrandingLogo)
+	apiParty.Get("/branding/favicon", s.handleGetBrandingFavicon)
+
 	// Inbound fax delivery from gofaxserver. Deliberately outside the
 	// session/CSRF middleware: the caller is gofaxserver itself, authorized
 	// by the per-org service-account path + optional pre-shared X-API-Key.
@@ -201,6 +208,13 @@ func (s *Server) BuildApp() *iris.Application {
 	admin.Get("/inbox/{id:uint}/file", s.adminGetInboundFile)
 	admin.Delete("/inbox/{id:uint}", s.adminDeleteInbound)
 	admin.Get("/audit", s.adminAuditLog)
+
+	// Whitelabel branding management.
+	admin.Put("/branding", s.adminUpdateBranding)
+	admin.Post("/branding/logo", s.adminUploadBrandingLogo)
+	admin.Delete("/branding/logo", s.adminDeleteBrandingLogo)
+	admin.Post("/branding/favicon", s.adminUploadBrandingFavicon)
+	admin.Delete("/branding/favicon", s.adminDeleteBrandingFavicon)
 
 	// Unknown /portal/api paths must return JSON 404s, never the SPA shell.
 	apiParty.HandleMany("GET POST PUT PATCH DELETE", "/{p:path}", func(ctx iris.Context) {

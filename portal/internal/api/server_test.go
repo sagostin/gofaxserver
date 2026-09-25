@@ -40,6 +40,25 @@ func TestHealthIsPublic(t *testing.T) {
 		JSON().Object().ValueEqual("status", "ok")
 }
 
+func TestBrandingIsPublic(t *testing.T) {
+	// No DB in the test server: branding falls back to built-in defaults.
+	e := testServer(t)
+	e.GET("/portal/api/branding").Expect().Status(200).
+		JSON().Object().ValueEqual("name", "Fax Portal").
+		ValueEqual("has_logo", false).ValueEqual("has_favicon", false)
+	e.GET("/portal/api/branding/logo").Expect().Status(404)
+	e.GET("/portal/api/branding/favicon").Expect().Status(404)
+}
+
+func TestBrandingAdminRoutesRejectAnonymous(t *testing.T) {
+	e := testServer(t)
+	e.PUT("/portal/api/admin/branding").WithJSON(map[string]string{"name": "X"}).Expect().Status(401)
+	e.POST("/portal/api/admin/branding/logo").Expect().Status(401)
+	e.DELETE("/portal/api/admin/branding/logo").Expect().Status(401)
+	e.POST("/portal/api/admin/branding/favicon").Expect().Status(401)
+	e.DELETE("/portal/api/admin/branding/favicon").Expect().Status(401)
+}
+
 func TestUnknownApiPathReturnsJSON404NotSPA(t *testing.T) {
 	testServer(t).GET("/portal/api/definitely-not-a-route").Expect().
 		Status(404).JSON().Object().Keys().Contains("error")

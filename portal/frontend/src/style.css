@@ -19,7 +19,11 @@ body {
   display: flex; align-items: center; gap: 16px;
   padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.topbar .brand { font-weight: 700; }
+.topbar .brand { font-weight: 700; display: flex; align-items: center; }
+.brand-logo { height: 28px; width: auto; display: block; }
+.login-logo { max-height: 64px; max-width: 100%; }
+.brand-preview { max-height: 48px; max-width: 240px; border: 1px solid var(--border); border-radius: 8px; padding: 6px; background: #fff; }
+.favicon-preview { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 8px; padding: 3px; background: #fff; }
 .topbar nav { display: flex; gap: 12px; flex-wrap: wrap; }
 .topbar a { color: var(--muted); text-decoration: none; padding: 4px 8px; border-radius: 6px; }
 .topbar a.router-link-active { color: var(--accent); background: #eff4ff; }

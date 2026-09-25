@@ -544,7 +544,33 @@ dialplan rules under `/portal/api/admin/dialplan`,
 `POST /portal/api/admin/users/{id}/totp/reset` (2FA recovery),
 `GET /portal/api/admin/audit`.
 
+Branding (whitelabel): public `GET /portal/api/branding` (name, accent color,
+`has_logo`/`has_favicon`, cache-buster `v`), `GET /portal/api/branding/logo`,
+`GET /portal/api/branding/favicon`. Admin: `PUT /portal/api/admin/branding`
+(`{"name", "accent_color"}`), `POST`/`DELETE /portal/api/admin/branding/logo`
+and `/portal/api/admin/branding/favicon` (multipart `file`, raster formats +
+ICO only, max 1 MiB).
+
 Mutating requests require the `X-CSRF-Token` header returned by login/me.
+
+## Branding / whitelabelling
+
+**Admin → Branding** whitelabels the whole portal (global, not per-org):
+
+- **Portal name** — replaces "Fax Portal" in the navbar, login page heading,
+  and browser tab title.
+- **Accent color** — overrides the `--accent` CSS variable (buttons, active
+  nav links). Empty keeps the built-in default.
+- **Navbar logo** — shown in the topbar (28px height) and above the login
+  form. PNG/JPEG/GIF/WebP, max 1 MiB. SVG is deliberately not accepted: it is
+  served unauthenticated and raster formats cannot carry script.
+- **Favicon** — injected as the tab icon. PNG/JPEG/GIF/WebP/ICO, max 1 MiB.
+
+Images live in the portal database (singleton `brandings` row, auto-migrated),
+so they are covered by the normal database backup and need no extra volumes.
+The public endpoints are read-only and cache for 5 minutes; the SPA busts the
+cache with `?v=<updated_at>` after each change, so edits apply immediately.
+All changes are written to the audit log.
 
 ## Two-factor authentication (TOTP)
 

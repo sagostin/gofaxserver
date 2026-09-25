@@ -23,6 +23,7 @@ const router = createRouter({
     { path: '/admin/jobs', component: () => import('./views/admin/JobsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/inbound', component: () => import('./views/admin/InboundView.vue'), meta: { role: 'admin' } },
     { path: '/admin/audit', component: () => import('./views/admin/AuditView.vue'), meta: { role: 'admin' } },
+    { path: '/admin/branding', component: () => import('./views/admin/BrandingView.vue'), meta: { role: 'admin' } },
     // SPA root: the guard below sends users to their role home (or /login
     // when signed out). A static `redirect: '/login'` here would resolve
     // BEFORE the guard's fetchMe() completes, dumping signed-in users on

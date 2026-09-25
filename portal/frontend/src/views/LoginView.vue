@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useAuthStore } from '../auth'
+import { useBrandingStore } from '../branding'
 import router from '../router'
 
 const auth = useAuthStore()
+const branding = useBrandingStore()
 const username = ref('')
 const password = ref('')
 const error = ref('')
@@ -69,7 +71,10 @@ function restart() {
 <template>
   <div class="login-wrap">
     <div class="panel">
-      <h2>Fax Portal</h2>
+      <div v-if="branding.logoUrl" style="text-align:center;margin-bottom:12px">
+        <img :src="branding.logoUrl" :alt="branding.name" class="login-logo" />
+      </div>
+      <h2>{{ branding.name }}</h2>
 
       <form v-if="step === 'credentials'" @submit.prevent="submit">
         <div style="margin-bottom: 8px">
