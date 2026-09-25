@@ -106,7 +106,7 @@ func (s *Server) handleTOTPVerify(ctx iris.Context) {
 	}
 	req.MFAToken = strings.TrimSpace(req.MFAToken)
 
-	key := ctx.RemoteAddr() + "|totp|" + req.MFAToken
+	key := s.clientIP(ctx) + "|totp|" + req.MFAToken
 	if !s.LoginLimit.Allow(key, s.Cfg.LoginRatePerMinute) {
 		ctx.StatusCode(iris.StatusTooManyRequests)
 		ctx.JSON(map[string]string{"error": "too many attempts, try again later"})
@@ -170,7 +170,7 @@ func (s *Server) issueSession(ctx iris.Context, user *models.PortalUser) {
 // auditAs records an event attributed to a user who is not yet attached to
 // the request context (the MFA handshake happens pre-session).
 func (s *Server) auditAs(ctx iris.Context, user *models.PortalUser, action, target string, detail any) {
-	entry := models.AuditLog{Action: action, Target: target, IP: ctx.RemoteAddr()}
+	entry := models.AuditLog{Action: action, Target: target, IP: s.clientIP(ctx)}
 	if user != nil {
 		uid := user.ID
 		entry.ActorID = &uid

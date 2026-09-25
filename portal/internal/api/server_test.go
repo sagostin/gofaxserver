@@ -122,3 +122,45 @@ func TestTOTPVerifyRequiresFields(t *testing.T) {
 	e.POST("/portal/api/auth/totp/verify").WithJSON(map[string]string{"mfa_token": "x"}).
 		Expect().Status(400)
 }
+
+// iris httptest uses an in-memory listener with an empty RemoteAddr, so the
+// client-IP resolution logic is tested at the pure-function level.
+
+func TestResolveClientIPHonorsXFFFromTrustedProxy(t *testing.T) {
+	// Last XFF entry wins (the one appended by the trusted proxy); earlier
+	// entries may be client-supplied spoofs.
+	got := resolveClientIP("127.0.0.1:8081", "", "9.9.9.9, 203.0.113.7", []string{"127.0.0.1", "::1"})
+	if got != "203.0.113.7" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestResolveClientIPPrefersXRealIP(t *testing.T) {
+	got := resolveClientIP("127.0.0.1:8081", "198.51.100.23", "9.9.9.9", []string{"127.0.0.1"})
+	if got != "198.51.100.23" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestResolveClientIPIgnoresHeadersFromUntrustedPeer(t *testing.T) {
+	// Direct peer is NOT in the trusted list: forwarded headers must be
+	// ignored and the direct peer reported instead.
+	got := resolveClientIP("192.0.2.55:12345", "", "9.9.9.9", []string{"127.0.0.1"})
+	if got != "192.0.2.55" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestResolveClientIPTrustedCIDR(t *testing.T) {
+	got := resolveClientIP("10.1.2.3:9000", "", "203.0.113.9", []string{"10.0.0.0/8"})
+	if got != "203.0.113.9" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestResolveClientIPFallsBackWithoutHeaders(t *testing.T) {
+	got := resolveClientIP("203.0.113.10:4567", "", "", []string{"127.0.0.1"})
+	if got != "203.0.113.10" {
+		t.Errorf("got %q", got)
+	}
+}

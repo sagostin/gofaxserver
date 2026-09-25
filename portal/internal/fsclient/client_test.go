@@ -151,3 +151,31 @@ func TestCreateTenantUserSendsPayload(t *testing.T) {
 		t.Fatalf("payload = %+v", body)
 	}
 }
+
+func TestListFaxResultsForwardsQueryAndDecodes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/fax-results" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		q := r.URL.Query()
+		if q.Get("tenant_id") != "7" || q.Get("result_type") != "bridge" || q.Get("success") != "true" {
+			t.Errorf("query not forwarded: %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"total":1,"items":[{"id":5,"job_uuid":"j-9","src_tenant_id":7,"dst_tenant_id":2,"result_type":"bridge","success":true,"is_bridge":true,"bridge_direction":"pbx_to_upstream","transferred_pages":2}]}`))
+	}))
+	defer srv.Close()
+
+	out, err := New(srv.URL, "k").ListFaxResults(map[string][]string{
+		"tenant_id": {"7"}, "result_type": {"bridge"}, "success": {"true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 1 || len(out.Items) != 1 {
+		t.Fatalf("out = %+v", out)
+	}
+	r := out.Items[0]
+	if !r.IsBridge || r.BridgeDirection != "pbx_to_upstream" || r.SrcTenantID != 7 || r.TransferredPages != 2 {
+		t.Fatalf("row = %+v", r)
+	}
+}

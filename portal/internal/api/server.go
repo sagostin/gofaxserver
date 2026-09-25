@@ -20,7 +20,9 @@ package api
 import (
 	"encoding/json"
 	"io/fs"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"gofaxportal/internal/auth"
@@ -204,8 +206,9 @@ func (s *Server) BuildApp() *iris.Application {
 	admin.Get("/faxes/active", s.adminActiveFaxes)
 	admin.Get("/jobs", s.adminListAllJobs)
 	admin.Get("/jobs/{id:uint}/live", s.adminJobLive)
+	admin.Get("/fax-results", s.adminListFaxResults)
 	admin.Get("/inbox", s.adminListInbound)
-	admin.Get("/inbox/{id:uint}/file", s.adminGetInboundFile)
+	admin.Get("/inbox/{id:uint}/attempts", s.adminInboundAttempts)
 	admin.Delete("/inbox/{id:uint}", s.adminDeleteInbound)
 	admin.Get("/audit", s.adminAuditLog)
 
@@ -336,9 +339,77 @@ func (s *Server) requireUserRealm(ctx iris.Context) {
 	ctx.Next()
 }
 
+// clientIP resolves the real client IP from the request, delegating to
+// resolveClientIP with the configured trusted proxies.
+func (s *Server) clientIP(ctx iris.Context) string {
+	return resolveClientIP(ctx.RemoteAddr(), ctx.GetHeader("X-Real-IP"),
+		ctx.GetHeader("X-Forwarded-For"), s.Cfg.TrustedProxies)
+}
+
+// resolveClientIP resolves the real client IP. X-Forwarded-For / X-Real-IP
+// are only honored when the direct peer is in trustedProxies (the Caddy
+// reverse proxy on loopback by default); any other peer cannot spoof its
+// address.
+//
+// X-Real-IP (set by Caddy's header_up from {remote_host}) wins; otherwise the
+// LAST X-Forwarded-For entry is used — the one appended by the trusted proxy,
+// not client-supplied entries earlier in the chain.
+func resolveClientIP(remoteAddr, xRealIP, xff string, trustedProxies []string) string {
+	remote := remoteAddr
+	if ip, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		remote = ip
+	}
+	if isTrustedProxy(remote, trustedProxies) {
+		if rip := strings.TrimSpace(xRealIP); rip != "" {
+			if ip := stripPort(rip); ip != "" {
+				return ip
+			}
+		}
+		if xff != "" {
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				if ip := stripPort(strings.TrimSpace(parts[i])); ip != "" {
+					return ip
+				}
+			}
+		}
+	}
+	return remote
+}
+
+func isTrustedProxy(remote string, trustedProxies []string) bool {
+	ip := net.ParseIP(remote)
+	if ip == nil {
+		return false
+	}
+	for _, p := range trustedProxies {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if remote == p {
+			return true
+		}
+		if _, cidr, err := net.ParseCIDR(p); err == nil && cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func stripPort(addr string) string {
+	if ip, _, err := net.SplitHostPort(addr); err == nil {
+		return ip
+	}
+	if net.ParseIP(addr) != nil {
+		return addr
+	}
+	return ""
+}
+
 // audit records an auditable event; never fails the request.
 func (s *Server) audit(ctx iris.Context, action, target string, detail any) {
-	entry := models.AuditLog{Action: action, Target: target, IP: ctx.RemoteAddr()}
+	entry := models.AuditLog{Action: action, Target: target, IP: s.clientIP(ctx)}
 	if _, user, ok := currentUser(ctx); ok {
 		uid := user.ID
 		entry.ActorID = &uid

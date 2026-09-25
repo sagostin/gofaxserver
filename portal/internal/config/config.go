@@ -45,6 +45,13 @@ type Config struct {
 	// portal.api_key. Empty disables the check (loopback-only deployments).
 	InboundAPIKey string `json:"inbound_api_key"`
 
+	// TrustedProxies are the direct-peer IPs/CIDRs whose X-Forwarded-For /
+	// X-Real-IP headers are honored when resolving the client IP (audit log,
+	// rate limiters). Defaults to loopback — the Caddy reverse proxy on the
+	// same host. Requests from any other peer have those headers ignored,
+	// so they cannot spoof their IP.
+	TrustedProxies []string `json:"trusted_proxies"`
+
 	PollIntervalSeconds int            `json:"poll_interval_seconds"`
 	UploadMaxMB         int64          `json:"upload_max_mb"`
 	LoginRatePerMinute  int            `json:"login_rate_per_minute"`
@@ -81,6 +88,7 @@ func defaults() *Config {
 		UploadMaxMB:         20,
 		LoginRatePerMinute:  5,
 		SendRatePerHour:     120,
+		TrustedProxies:      []string{"127.0.0.1", "::1"},
 		BootstrapAdmin:      BootstrapAdmin{Username: "admin"},
 	}
 }
@@ -139,6 +147,12 @@ func Load(path string) (*Config, error) {
 	}
 	if v := env("PORTAL_INBOUND_API_KEY"); v != "" {
 		cfg.InboundAPIKey = v
+	}
+	if v := env("PORTAL_TRUSTED_PROXIES"); v != "" {
+		cfg.TrustedProxies = strings.Split(v, ",")
+		for i := range cfg.TrustedProxies {
+			cfg.TrustedProxies[i] = strings.TrimSpace(cfg.TrustedProxies[i])
+		}
 	}
 	if v := env("PORTAL_BOOTSTRAP_USERNAME"); v != "" {
 		cfg.BootstrapAdmin.Username = v

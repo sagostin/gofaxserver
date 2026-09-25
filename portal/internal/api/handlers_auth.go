@@ -42,7 +42,7 @@ func (s *Server) handleLogin(ctx iris.Context) {
 	}
 	req.Username = strings.TrimSpace(req.Username)
 
-	key := ctx.RemoteAddr() + "|" + strings.ToLower(req.Username)
+	key := s.clientIP(ctx) + "|" + strings.ToLower(req.Username)
 	if !s.LoginLimit.Allow(key, s.Cfg.LoginRatePerMinute) {
 		ctx.StatusCode(iris.StatusTooManyRequests)
 		ctx.JSON(map[string]string{"error": "too many login attempts, try again later"})

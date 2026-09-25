@@ -39,6 +39,7 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 	{
 		admin.Get("/reload", s.handleReloadData)
 		admin.Get("/faxes", s.handleFaxes)
+		admin.Get("/fax-results", s.handleListFaxResults)
 
 		// Read-only listing endpoints (for reconciliation by external tools).
 		admin.Get("/tenants", s.handleListTenants)

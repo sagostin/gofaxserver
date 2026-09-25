@@ -19,6 +19,7 @@ package api
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -1707,6 +1708,34 @@ func (s *Server) adminDeleteFaxPairState(ctx iris.Context) {
 
 // ---------- Faxes / jobs / audit ----------
 
+// tenantNames maps upstream gofaxserver tenant IDs to display names: portal
+// org names where the tenant is claimed by an org, upstream tenant names
+// otherwise. Best-effort — failures yield an empty map, never an error.
+func (s *Server) tenantNames() map[uint]string {
+	names := map[uint]string{}
+	if tenants, err := s.FX.ListTenants(); err == nil {
+		for _, t := range tenants {
+			names[t.ID] = t.Name
+		}
+	}
+	orgs := []models.Org{}
+	if err := s.DB.Select("gofax_tenant_id", "name").Find(&orgs).Error; err == nil {
+		for _, o := range orgs {
+			if o.GofaxTenantID > 0 {
+				names[o.GofaxTenantID] = o.Name
+			}
+		}
+	}
+	return names
+}
+
+// adminActiveRun is one in-flight job enriched with tenant display names.
+type adminActiveRun struct {
+	fsclient.FaxRunState
+	SrcTenantName string `json:"src_tenant_name"`
+	DstTenantName string `json:"dst_tenant_name"`
+}
+
 func (s *Server) adminActiveFaxes(ctx iris.Context) {
 	out, err := s.FX.ListActiveFaxes()
 	if err != nil {
@@ -1714,7 +1743,58 @@ func (s *Server) adminActiveFaxes(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "failed to read active faxes: " + err.Error()})
 		return
 	}
-	ctx.JSON(out)
+	names := s.tenantNames()
+	items := make([]adminActiveRun, 0, len(out.Items))
+	for _, r := range out.Items {
+		items = append(items, adminActiveRun{
+			FaxRunState:   r,
+			SrcTenantName: names[r.SrcTenantID],
+			DstTenantName: names[r.DstTenantID],
+		})
+	}
+	ctx.JSON(map[string]any{"active": out.Active, "items": items})
+}
+
+// adminFaxResultRow is one upstream fax_job_results row enriched with tenant
+// display names for the admin "all jobs" view.
+type adminFaxResultRow struct {
+	fsclient.FaxResultRow
+	SrcTenantName string `json:"src_tenant_name"`
+	DstTenantName string `json:"dst_tenant_name"`
+}
+
+// adminFaxResultList is the paginated envelope for /admin/fax-results.
+type adminFaxResultList struct {
+	Total int64               `json:"total"`
+	Items []adminFaxResultRow `json:"items"`
+}
+
+// adminListFaxResults proxies gofaxserver's persisted fax job results — every
+// call the server handled (bridged calls, inbound receptions, outbound
+// transmissions, deliveries), not just portal-submitted jobs.
+func (s *Server) adminListFaxResults(ctx iris.Context) {
+	q := url.Values{}
+	for _, k := range []string{"tenant_id", "result_type", "success", "number", "job_uuid", "from", "to", "limit", "offset"} {
+		if v := ctx.URLParam(k); v != "" {
+			q.Set(k, v)
+		}
+	}
+	out, err := s.FX.ListFaxResults(q)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "failed to read upstream fax results: " + err.Error()})
+		return
+	}
+	names := s.tenantNames()
+	items := make([]adminFaxResultRow, 0, len(out.Items))
+	for _, r := range out.Items {
+		items = append(items, adminFaxResultRow{
+			FaxResultRow:  r,
+			SrcTenantName: names[r.SrcTenantID],
+			DstTenantName: names[r.DstTenantID],
+		})
+	}
+	ctx.JSON(adminFaxResultList{Total: out.Total, Items: items})
 }
 
 type adminJobRow struct {

@@ -17,6 +17,7 @@
     "admin_api_key": "your-gofaxserver-web-api-key"
   },
   "inbound_api_key": "",
+  "trusted_proxies": ["127.0.0.1", "::1"],
   "poll_interval_seconds": 5,
   "upload_max_mb": 20,
   "login_rate_per_minute": 5,

@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 	"time"
 
 	"gofaxportal/internal/auth"
@@ -321,32 +323,66 @@ func (s *Server) handleGetInboundFile(ctx iris.Context) {
 
 // ---------- admin inbox ----------
 
+// adminInboxList is the paginated admin inbox envelope. Metadata only:
+// admins can list and delete received faxes (audited) but can NEVER read the
+// decrypted PDF — that surface is user-realm only (PHI minimum-necessary).
+type adminInboxList struct {
+	Total int64       `json:"total"`
+	Items []inboxResp `json:"items"`
+}
+
 func (s *Server) adminListInbound(ctx iris.Context) {
 	limit := clampLimit(ctx.URLParamIntDefault("limit", 50), 200)
 	offset := ctx.URLParamIntDefault("offset", 0)
+
+	base := s.DB.Model(&models.InboundFax{})
+	if oid := ctx.URLParamIntDefault("org_id", 0); oid > 0 {
+		base = base.Where("org_id = ?", oid)
+	}
+	if ju := strings.TrimSpace(ctx.URLParam("uuid")); ju != "" {
+		base = base.Where("job_uuid = ?", ju)
+	}
+	if n := strings.TrimSpace(ctx.URLParam("number")); n != "" {
+		like := "%" + n + "%"
+		base = base.Where("caller_number LIKE ? OR callee_number LIKE ?", like, like)
+	}
+
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		ctx.StatusCode(iris.StatusInternalServerError)
+		ctx.JSON(map[string]string{"error": "failed to count inbound faxes"})
+		return
+	}
+
 	faxes := []models.InboundFax{}
-	q := s.DB.Select("id", "job_uuid", "org_id", "number_id", "caller_number", "caller_name",
+	q := base.Select("id", "job_uuid", "org_id", "number_id", "caller_number", "caller_name",
 		"callee_number", "pages", "file_sha256", "file_bytes", "received_at", "created_at", "updated_at").
 		Order("received_at DESC").Limit(limit).Offset(offset)
-	if oid := ctx.URLParamIntDefault("org_id", 0); oid > 0 {
-		q = q.Where("org_id = ?", oid)
-	}
 	if err := q.Find(&faxes).Error; err != nil {
 		ctx.StatusCode(iris.StatusInternalServerError)
 		ctx.JSON(map[string]string{"error": "failed to load inbound faxes"})
 		return
 	}
-	ctx.JSON(s.decorateInbox(faxes))
+	ctx.JSON(adminInboxList{Total: total, Items: s.decorateInbox(faxes)})
 }
 
-func (s *Server) adminGetInboundFile(ctx iris.Context) {
+// adminInboundAttempts returns the upstream call-attempt metadata for one
+// received fax (correlated by job UUID) — result type, success, pages,
+// hangup cause, T.38 status. Metadata only; no fax content.
+func (s *Server) adminInboundAttempts(ctx iris.Context) {
 	fax := &models.InboundFax{}
-	if err := s.DB.First(fax, ctx.Params().GetUintDefault("id", 0)).Error; err != nil {
+	if err := s.DB.Select("id", "job_uuid").First(fax, ctx.Params().GetUintDefault("id", 0)).Error; err != nil {
 		ctx.StatusCode(iris.StatusNotFound)
 		ctx.JSON(map[string]string{"error": "fax not found"})
 		return
 	}
-	s.serveInboundFile(ctx, fax)
+	out, err := s.FX.ListFaxResults(url.Values{"job_uuid": {fax.JobUUID}})
+	if err != nil {
+		ctx.StatusCode(iris.StatusBadGateway)
+		ctx.JSON(map[string]string{"error": "failed to fetch upstream attempts: " + err.Error()})
+		return
+	}
+	ctx.JSON(out.Items)
 }
 
 func (s *Server) adminDeleteInbound(ctx iris.Context) {

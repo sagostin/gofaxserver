@@ -35,6 +35,12 @@
 			health_uri /portal/api/health
 			health_interval 15s
 			health_timeout 5s
+			# Pass the real client IP for the portal's audit log + rate
+			# limiters. Caddy already appends X-Forwarded-For; X-Real-IP is
+			# set explicitly from the direct peer (client-supplied values are
+			# overwritten). The portal only trusts these headers from
+			# loopback (portal trusted_proxies), so they cannot be spoofed.
+			header_up X-Real-IP {remote_host}
 		}
 	}
 

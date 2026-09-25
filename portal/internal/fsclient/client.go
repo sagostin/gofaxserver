@@ -286,14 +286,22 @@ type FaxPairStateList struct {
 
 // FaxRunState mirrors the subset of gofaxserver's FaxRunState we need.
 type FaxRunState struct {
-	JobUUID    string    `json:"job_uuid"`
-	Phase      string    `json:"phase"`
-	Caller     string    `json:"caller"`
-	Callee     string    `json:"callee"`
-	Attempt    int       `json:"attempt"`
-	ResultText string    `json:"last_result"`
-	Success    bool      `json:"result_success"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	JobUUID       string    `json:"job_uuid"`
+	Phase         string    `json:"phase"`
+	SrcTenantID   uint      `json:"src_tenant_id"`
+	DstTenantID   uint      `json:"dst_tenant_id"`
+	Caller        string    `json:"caller"`
+	Callee        string    `json:"callee"`
+	Attempt       int       `json:"attempt"`
+	MaxAttempts   int       `json:"max_attempts"`
+	EndpointType  string    `json:"endpoint_type"`
+	EndpointLabel string    `json:"endpoint_label"`
+	EndpointValue string    `json:"endpoint_value"`
+	ResultText    string    `json:"last_result"`
+	Success       bool      `json:"result_success"`
+	EnqueuedAt    time.Time `json:"enqueued_at"`
+	StartedAt     time.Time `json:"started_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type ActiveFaxes struct {
@@ -313,6 +321,46 @@ type FaxStatusRow struct {
 	Success          bool      `json:"success"`
 	ResultText       string    `json:"result_text"`
 	T38Status        string    `json:"t38_status"`
+}
+
+// FaxResultRow mirrors one row of gofaxserver's /admin/fax-results listing.
+type FaxResultRow struct {
+	ID               uint       `json:"id"`
+	SrcTenantID      uint       `json:"src_tenant_id"`
+	DstTenantID      uint       `json:"dst_tenant_id"`
+	JobUUID          string     `json:"job_uuid"`
+	CallUUID         string     `json:"call_uuid"`
+	CalleeNumber     string     `json:"callee_number"`
+	CallerIdNumber   string     `json:"caller_id_number"`
+	CallerIdName     string     `json:"caller_id_name"`
+	ResultType       string     `json:"result_type"`
+	AttemptNumber    int        `json:"attempt_number"`
+	EndpointType     string     `json:"endpoint_type"`
+	NPages           int        `json:"npages"`
+	SignalRate       int        `json:"signal_rate"`
+	Status           string     `json:"status"`
+	StartTs          *time.Time `json:"start_ts"`
+	EndTs            *time.Time `json:"end_ts"`
+	HangupCause      string     `json:"hangup_cause"`
+	TotalPages       uint       `json:"total_pages"`
+	TransferredPages uint       `json:"transferred_pages"`
+	RemoteID         string     `json:"remote_id"`
+	ResultText       string     `json:"result_text"`
+	Success          bool       `json:"success"`
+	TransferRate     uint       `json:"transfer_rate"`
+	T38Status        string     `json:"t38_status"`
+	IsBridge         bool       `json:"is_bridge"`
+	BridgeDirection  string     `json:"bridge_direction"`
+	BridgeGateway    string     `json:"bridge_gateway"`
+	BridgeT38        bool       `json:"bridge_t38"`
+	UsedT38          bool       `json:"used_t38"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
+// FaxResultList is the paginated envelope from /admin/fax-results.
+type FaxResultList struct {
+	Total int64          `json:"total"`
+	Items []FaxResultRow `json:"items"`
 }
 
 // --- admin API ---
@@ -611,6 +659,18 @@ func (c *Client) ListEndpoints(typeFilter string, typeID uint) ([]Endpoint, erro
 func (c *Client) ListActiveFaxes() (*ActiveFaxes, error) {
 	out := &ActiveFaxes{}
 	err := c.doAdmin(http.MethodGet, "/admin/faxes", nil, out)
+	return out, err
+}
+
+// ListFaxResults queries gofaxserver's persisted fax_job_results (all call
+// types, all tenants). query is forwarded verbatim as the query string.
+func (c *Client) ListFaxResults(query url.Values) (*FaxResultList, error) {
+	path := "/admin/fax-results"
+	if enc := query.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	out := &FaxResultList{}
+	err := c.doAdmin(http.MethodGet, path, nil, out)
 	return out, err
 }
 
