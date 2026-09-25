@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../../api'
+import FaxLegList, { type FaxLeg } from '../../components/FaxLegList.vue'
 
 interface Org { id: number; name: string; gofax_tenant_id: number }
 interface Tenant { id: number; name: string }
@@ -19,30 +20,6 @@ interface Job {
   last_error: string
   submitted_at: string
 }
-interface ResultRow {
-  id: number
-  job_uuid: string
-  call_uuid: string
-  result_type: string
-  attempt_number: number
-  endpoint_type: string
-  success: boolean
-  transferred_pages: number
-  total_pages: number
-  hangup_cause: string
-  result_text: string
-  t38_status: string
-  used_t38: boolean
-  is_bridge: boolean
-  bridge_direction: string
-  bridge_gateway: string
-  signal_rate: number
-  remote_id: string
-  status: string
-  start_ts: string | null
-  end_ts: string | null
-  created_at: string
-}
 interface ResultGroup {
   job_uuid: string
   caller_id_number: string
@@ -60,7 +37,7 @@ interface ResultGroup {
   total_pages: number
   first_ts: string
   last_ts: string
-  legs: ResultRow[]
+  legs: FaxLeg[]
 }
 interface ResultList { total: number; items: ResultGroup[] }
 
@@ -88,8 +65,9 @@ const fromDate = ref('')
 const toDate = ref('')
 
 // Portal-jobs expand fetches attempts; all-results groups carry legs inline.
-const expanded = ref<Record<string, ResultRow[]>>({})
+const expanded = ref<Record<string, FaxLeg[]>>({})
 const expandedGroups = ref<Record<string, boolean>>({})
+const copied = ref('')
 
 async function loadOrgsTenants() {
   try { orgs.value = await api<Org[]>('/admin/orgs') } catch { /* non-fatal */ }
@@ -165,15 +143,28 @@ function fmt(ts: string | null): string {
   return ts ? new Date(ts).toLocaleString() : '—'
 }
 
-function shortUUID(u: string): string {
-  return u ? u.slice(0, 8) : '—'
+function span(first: string, last: string): string {
+  const ms = new Date(last).getTime() - new Date(first).getTime()
+  if (isNaN(ms) || ms <= 0) return ''
+  const s = ms / 1000
+  if (s < 1) return `${ms} ms`
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s`
+  const m = Math.floor(s / 60)
+  return `${m} m ${Math.round(s % 60)} s`
 }
 
-function legBadge(t: string): string {
-  if (t === 'bridge') return 'sending'
-  if (t === 'reception') return 'queued'
-  if (t === 'delivery') return 'active'
-  return 'active'
+function groupPages(g: ResultGroup): string {
+  if (!g.transferred_pages && !g.total_pages) return '—'
+  return `${g.transferred_pages}/${g.total_pages || '—'}`
+}
+
+async function copyUuid(u: string) {
+  if (!u) return
+  try {
+    await navigator.clipboard.writeText(u)
+    copied.value = u
+    setTimeout(() => { if (copied.value === u) copied.value = '' }, 1500)
+  } catch { /* clipboard unavailable */ }
 }
 </script>
 
@@ -221,22 +212,7 @@ function legBadge(t: string): string {
               </tr>
               <tr v-if="j.job_uuid in expanded">
                 <td colspan="9">
-                  <table v-if="expanded[j.job_uuid].length" style="margin:6px 0">
-                    <thead>
-                      <tr><th>#</th><th>Type</th><th>Success</th><th>Pages</th><th>T.38</th><th>Cause</th><th>Result</th></tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="r in expanded[j.job_uuid]" :key="r.id">
-                        <td>{{ r.attempt_number }}</td>
-                        <td><span class="badge" :class="legBadge(r.result_type)">{{ r.result_type }}</span></td>
-                        <td><span class="badge" :class="r.success ? 'success' : 'failed'">{{ r.success ? 'yes' : 'no' }}</span></td>
-                        <td>{{ r.transferred_pages }}/{{ r.total_pages || '—' }}</td>
-                        <td>{{ r.t38_status || '—' }}</td>
-                        <td>{{ r.hangup_cause || '—' }}</td>
-                        <td>{{ r.result_text || '—' }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  <FaxLegList v-if="expanded[j.job_uuid].length" :legs="expanded[j.job_uuid]" />
                   <p v-else class="muted">No upstream attempts recorded yet.</p>
                 </td>
               </tr>
@@ -301,42 +277,25 @@ function legBadge(t: string): string {
               <tr>
                 <td>{{ fmt(g.last_ts) }}</td>
                 <td>
-                  <span v-for="t in g.leg_types" :key="t" class="badge" :class="legBadge(t)" style="margin-right:4px">{{ t }}</span>
+                  <span v-for="t in g.leg_types" :key="t" class="badge" :class="t" style="margin-right:4px">{{ t }}</span>
                 </td>
                 <td>{{ g.caller_id_number || '—' }} → {{ g.callee_number || '—' }}</td>
                 <td>{{ tenantLabel(g.src_tenant_id) }} → {{ tenantLabel(g.dst_tenant_id) }}</td>
                 <td><span class="badge" :class="g.success ? 'success' : 'failed'">{{ g.success ? 'success' : 'failed' }}</span></td>
                 <td>{{ g.attempts }}</td>
-                <td>{{ g.transferred_pages }}/{{ g.total_pages || '—' }}</td>
+                <td>{{ groupPages(g) }}</td>
                 <td><button class="secondary" @click="toggleGroup(g.job_uuid)">{{ expandedGroups[g.job_uuid] ? 'Hide' : 'Legs' }}</button></td>
               </tr>
               <tr v-if="expandedGroups[g.job_uuid]">
                 <td colspan="8">
-                  <p class="muted" style="font-size:12px; margin:4px 0">
-                    Job: {{ g.job_uuid }} · first activity {{ fmt(g.first_ts) }} · outcome from final leg ({{ g.status || '—' }})
+                  <p class="muted" style="font-size:12px; margin:4px 0 6px">
+                    <span class="copyable" :title="copied === g.job_uuid ? 'Copied!' : 'Click to copy'" @click="copyUuid(g.job_uuid)">
+                      {{ copied === g.job_uuid ? '✓ copied' : 'Job ' + g.job_uuid }}
+                    </span>
+                    · {{ g.attempts }} leg{{ g.attempts === 1 ? '' : 's' }}<template v-if="span(g.first_ts, g.last_ts)"> · span {{ span(g.first_ts, g.last_ts) }}</template>
+                    · outcome from final leg ({{ g.status || '—' }})
                   </p>
-                  <table v-if="g.legs.length" style="margin:6px 0">
-                    <thead>
-                      <tr><th>#</th><th>Type</th><th>Success</th><th>Pages</th><th>T.38</th><th>Rate</th><th>Endpoint / Bridge</th><th>Cause / Result</th><th>Start → End</th><th>Call</th></tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="r in g.legs" :key="r.id">
-                        <td>{{ r.attempt_number }}</td>
-                        <td><span class="badge" :class="legBadge(r.result_type)">{{ r.result_type }}</span></td>
-                        <td><span class="badge" :class="r.success ? 'success' : 'failed'">{{ r.success ? 'yes' : 'no' }}</span></td>
-                        <td>{{ r.transferred_pages }}/{{ r.total_pages || '—' }}</td>
-                        <td>{{ r.t38_status || (r.used_t38 ? 'used' : '—') }}</td>
-                        <td>{{ r.signal_rate || '—' }}</td>
-                        <td>
-                          <template v-if="r.is_bridge">{{ r.bridge_direction || 'bridge' }} via {{ r.bridge_gateway || '—' }}</template>
-                          <template v-else>{{ r.endpoint_type || '—' }}</template>
-                        </td>
-                        <td>{{ r.hangup_cause || r.result_text || '—' }}</td>
-                        <td style="white-space:nowrap">{{ fmt(r.start_ts) }} → {{ fmt(r.end_ts) }}</td>
-                        <td class="muted" :title="r.call_uuid">{{ shortUUID(r.call_uuid) }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  <FaxLegList v-if="g.legs.length" :legs="g.legs" />
                   <p v-else class="muted">No call legs recorded for this job.</p>
                 </td>
               </tr>

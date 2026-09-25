@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../../api'
+import FaxLegList, { type FaxLeg } from '../../components/FaxLegList.vue'
 
 interface Org { id: number; name: string }
 interface InboundItem {
@@ -18,20 +19,6 @@ interface InboundItem {
   received_at: string
 }
 interface InboxList { total: number; items: InboundItem[] }
-interface Attempt {
-  id: number
-  result_type: string
-  attempt_number: number
-  success: boolean
-  transferred_pages: number
-  total_pages: number
-  hangup_cause: string
-  result_text: string
-  t38_status: string
-  signal_rate: number
-  start_ts: string | null
-  end_ts: string | null
-}
 
 const faxes = ref<InboundItem[]>([])
 const total = ref(0)
@@ -43,7 +30,7 @@ const page = ref(0)
 const pageSize = 50
 const error = ref('')
 // Expanded attempt rows, keyed by inbox fax id. null = expanded but failed.
-const attempts = ref<Record<number, Attempt[] | null>>({})
+const attempts = ref<Record<number, FaxLeg[] | null>>({})
 
 async function load() {
   try {
@@ -74,7 +61,7 @@ async function toggleAttempts(f: InboundItem) {
   }
   attempts.value[f.id] = null
   try {
-    attempts.value[f.id] = await api<Attempt[]>(`/admin/inbox/${f.id}/attempts`)
+    attempts.value[f.id] = await api<FaxLeg[]>(`/admin/inbox/${f.id}/attempts`)
   } catch (e: any) {
     delete attempts.value[f.id]
     error.value = e.message
@@ -156,25 +143,7 @@ function fmtSize(bytes: number): string {
             </tr>
             <tr v-if="f.id in attempts">
               <td colspan="8">
-                <table v-if="attempts[f.id]?.length" style="margin:6px 0">
-                  <thead>
-                    <tr><th>#</th><th>Type</th><th>Success</th><th>Pages</th><th>Rate</th><th>T.38</th><th>Started</th><th>Ended</th><th>Cause</th><th>Result</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="a in attempts[f.id]!" :key="a.id">
-                      <td>{{ a.attempt_number }}</td>
-                      <td><span class="badge" :class="a.result_type === 'bridge' ? 'sending' : 'queued'">{{ a.result_type }}</span></td>
-                      <td><span class="badge" :class="a.success ? 'success' : 'failed'">{{ a.success ? 'yes' : 'no' }}</span></td>
-                      <td>{{ a.transferred_pages }}/{{ a.total_pages || '—' }}</td>
-                      <td>{{ a.signal_rate || '—' }}</td>
-                      <td>{{ a.t38_status || '—' }}</td>
-                      <td>{{ fmt(a.start_ts) }}</td>
-                      <td>{{ fmt(a.end_ts) }}</td>
-                      <td>{{ a.hangup_cause || '—' }}</td>
-                      <td>{{ a.result_text || '—' }}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <FaxLegList v-if="attempts[f.id]?.length" :legs="attempts[f.id]!" />
                 <p v-else class="muted">No upstream attempts recorded for this job.</p>
               </td>
             </tr>
