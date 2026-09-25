@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../../api'
+import Modal from '../../components/Modal.vue'
+import NotifyRulesEditor from '../../components/NotifyRulesEditor.vue'
 
 interface Org { id: number; name: string; active: boolean }
 interface NumberRow {
@@ -48,18 +50,19 @@ async function create() {
 }
 
 async function edit(n: NumberRow) {
-  const name = prompt('Caller ID name', n.name)
-  if (name === null) return
-  const header = prompt('Fax header text', n.header)
-  if (header === null) return
-  const custom = prompt(
-    'Custom notify rules (email_full->ops@acme.tld,webhook->https://…). Appended to the derived rules on every re-sync; leave empty for none.',
-    n.custom_notify,
-  )
-  if (custom === null) return
+  editFor.value = n
+  editForm.value = { name: n.name, header: n.header, custom_notify: n.custom_notify }
+}
+
+const editFor = ref<NumberRow | null>(null)
+const editForm = ref({ name: '', header: '', custom_notify: '' })
+
+async function saveEdit() {
+  if (!editFor.value) return
   error.value = ''
   try {
-    await api(`/admin/numbers/${n.id}`, { method: 'PUT', json: { name, header, custom_notify: custom } })
+    await api(`/admin/numbers/${editFor.value.id}`, { method: 'PUT', json: { ...editForm.value } })
+    editFor.value = null
     await load()
   } catch (e: any) { error.value = e.message }
 }
@@ -180,5 +183,24 @@ function orgUsers(orgId: number) {
         <button class="secondary" @click="assignFor = null">Cancel</button>
       </div>
     </div>
+
+    <Modal v-if="editFor" :title="`Edit ${editFor.number}`" @close="editFor = null">
+      <div class="field">
+        <label>Caller ID name</label>
+        <input v-model="editForm.name" placeholder="Acme Corp" />
+      </div>
+      <div class="field">
+        <label>Fax header text</label>
+        <input v-model="editForm.header" placeholder="Acme Corp Fax" />
+      </div>
+      <div class="field">
+        <label>Custom notify rules <span class="muted">(appended to the derived rules on every re-sync — they survive assignment changes)</span></label>
+        <NotifyRulesEditor v-model="editForm.custom_notify" />
+      </div>
+      <template #footer>
+        <button class="secondary" @click="editFor = null">Cancel</button>
+        <button @click="saveEdit">Save</button>
+      </template>
+    </Modal>
   </main>
 </template>

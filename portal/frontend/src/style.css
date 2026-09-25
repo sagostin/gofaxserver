@@ -63,3 +63,35 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 .okmsg { color: var(--ok); margin-top: 8px; }
 .actions-cell button { margin-right: 6px; margin-top: 3px; }
 .login-wrap { max-width: 360px; margin: 15vh auto 0; }
+
+/* Modal dialog */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(15, 23, 42, .45); z-index: 100;
+  display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px;
+}
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  width: 100%; max-width: 560px; max-height: 84vh; overflow: auto;
+  padding: 18px 20px; box-shadow: 0 20px 50px rgba(0, 0, 0, .25);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.modal-head h3 { margin: 0; }
+.modal-head button { padding: 4px 10px; }
+.modal-body .field { margin-bottom: 12px; }
+.modal-body .field input, .modal-body .field select { width: 100%; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+/* Notify rules editor */
+.notify-rules { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.notify-rule {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px;
+}
+.notify-rule .type {
+  font-weight: 600; font-size: 12px; white-space: nowrap;
+  background: #eff4ff; color: var(--accent); padding: 2px 8px; border-radius: 999px;
+}
+.notify-rule .type.raw { background: #fef3c7; color: #92400e; }
+.notify-rule .dest { flex: 1; word-break: break-all; font-size: 13px; }
+.notify-rule button { padding: 2px 9px; }
+.notify-add { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-top: 8px; }

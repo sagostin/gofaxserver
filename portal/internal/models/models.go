@@ -41,7 +41,11 @@ type Org struct {
 	// gofaxserver verbatim (e.g. "email_full->ops@acme.tld"). Empty means the
 	// portal does not manage the tenant notify field and preserves whatever
 	// is set upstream.
-	TenantNotify string    `json:"tenant_notify"`
+	TenantNotify string `json:"tenant_notify"`
+	// TOTPRequired forces every portal user of this org to enroll in TOTP
+	// 2FA before a session is issued. When off, TOTP is fully bypassed for
+	// the org's users (secrets stay stored, so re-enabling re-enforces).
+	TOTPRequired bool      `gorm:"not null;default:false" json:"totp_required"`
 	Active       bool      `gorm:"not null;default:true" json:"active"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -58,9 +62,15 @@ type PortalUser struct {
 	// EmailNotify controls whether this user's email is included in the
 	// email_report notify list for their assigned numbers. Users with it off
 	// keep portal/inbox access but receive no fax receipt emails.
-	EmailNotify bool      `gorm:"not null;default:true" json:"email_notify"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	EmailNotify bool `gorm:"not null;default:true" json:"email_notify"`
+	// TOTPSecretEnc is the sealed (AES-256-GCM, domain-separated key) TOTP
+	// shared secret; never serialized. TOTPEnabled flips true only after the
+	// user confirms enrollment with a valid code. Both are portal-local —
+	// gofaxserver never sees them.
+	TOTPSecretEnc []byte    `json:"-"`
+	TOTPEnabled   bool      `gorm:"not null;default:false" json:"totp_enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Number mirrors one tenant_numbers row on gofaxserver for an org.
@@ -142,6 +152,23 @@ type Session struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+const (
+	PendingAuthPurposeLogin  = "login"  // password OK, TOTP code still owed
+	PendingAuthPurposeEnroll = "enroll" // password OK, TOTP enrollment still owed
+)
+
+// PendingAuth bridges password verification and TOTP verification during
+// login. Only the SHA-256 of the token is stored; rows are single-use and
+// expire after a few minutes.
+type PendingAuth struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	TokenHash string    `gorm:"uniqueIndex;not null" json:"-"`
+	UserID    uint      `gorm:"index;not null" json:"user_id"`
+	Purpose   string    `gorm:"not null" json:"purpose"`
+	ExpiresAt time.Time `gorm:"index;not null" json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type AuditLog struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
 	ActorID       *uint     `json:"actor_id"`
@@ -154,5 +181,5 @@ type AuditLog struct {
 }
 
 func AllModels() []any {
-	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &InboundFax{}, &Session{}, &AuditLog{}}
+	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &InboundFax{}, &Session{}, &PendingAuth{}, &AuditLog{}}
 }

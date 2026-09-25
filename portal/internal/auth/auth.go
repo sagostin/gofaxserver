@@ -31,9 +31,10 @@ import (
 )
 
 const (
-	SessionCookie = "gofaxportal_session"
-	sessionTTL    = 24 * time.Hour
-	bcryptCost    = 12
+	SessionCookie  = "gofaxportal_session"
+	sessionTTL     = 24 * time.Hour
+	pendingAuthTTL = 10 * time.Minute
+	bcryptCost     = 12
 )
 
 type Service struct {
@@ -101,6 +102,45 @@ func (s *Service) Destroy(token string) error {
 	return s.DB.Where("token_hash = ?", crypto.HashToken(token)).Delete(&models.Session{}).Error
 }
 
+// CreatePendingAuth mints a short-lived bridge token between password
+// verification and TOTP verification during login. Only the SHA-256 of the
+// token is stored.
+func (s *Service) CreatePendingAuth(userID uint, purpose string) (token string, err error) {
+	token = crypto.RandomToken(32)
+	pa := &models.PendingAuth{
+		TokenHash: crypto.HashToken(token),
+		UserID:    userID,
+		Purpose:   purpose,
+		ExpiresAt: time.Now().Add(pendingAuthTTL),
+	}
+	if err = s.DB.Create(pa).Error; err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// LookupPendingAuth validates a raw pending-auth token; the caller checks
+// Purpose. Expired tokens are treated as missing and deleted.
+func (s *Service) LookupPendingAuth(token string) (*models.PendingAuth, error) {
+	if token == "" {
+		return nil, fmt.Errorf("empty token")
+	}
+	var pa models.PendingAuth
+	if err := s.DB.Where("token_hash = ?", crypto.HashToken(token)).First(&pa).Error; err != nil {
+		return nil, fmt.Errorf("pending auth not found")
+	}
+	if time.Now().After(pa.ExpiresAt) {
+		_ = s.DB.Delete(&pa).Error
+		return nil, fmt.Errorf("pending auth expired")
+	}
+	return &pa, nil
+}
+
+// ConsumePendingAuth deletes a pending-auth token, making it single-use.
+func (s *Service) ConsumePendingAuth(pa *models.PendingAuth) {
+	_ = s.DB.Delete(pa).Error
+}
+
 // DestroyUserSessions revokes every active session of a user.
 func (s *Service) DestroyUserSessions(userID uint) error {
 	return s.DB.Where("user_id = ?", userID).Delete(&models.Session{}).Error
@@ -111,9 +151,11 @@ func SecureEquals(a, b string) bool {
 	return len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// PurgeExpired removes expired sessions; run periodically.
+// PurgeExpired removes expired sessions and pending-auth tokens; run periodically.
 func (s *Service) PurgeExpired() {
-	s.DB.Where("expires_at < ?", time.Now()).Delete(&models.Session{})
+	now := time.Now()
+	s.DB.Where("expires_at < ?", now).Delete(&models.Session{})
+	s.DB.Where("expires_at < ?", now).Delete(&models.PendingAuth{})
 }
 
 // StartJanitor purges expired sessions hourly until stop is closed.

@@ -79,6 +79,13 @@ func NewFaxBox(secret string) (*Box, error) {
 	return NewBox("gofaxportal-fax-storage-v1:" + secret)
 }
 
+// NewTOTPBox derives the domain-separated box used to seal portal-user TOTP
+// shared secrets at rest, so they sit under a different key than both fax
+// blobs and service-account passwords.
+func NewTOTPBox(secret string) (*Box, error) {
+	return NewBox("gofaxportal-totp-v1:" + secret)
+}
+
 // RandomToken returns n random bytes hex-encoded.
 func RandomToken(n int) string {
 	buf := make([]byte, n)

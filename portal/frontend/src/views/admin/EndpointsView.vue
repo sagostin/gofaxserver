@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../../api'
 import { useScopeTargets } from '../../scope'
+import Modal from '../../components/Modal.vue'
 
 interface Ep {
   id: number
@@ -61,11 +62,23 @@ async function remove(ep: Ep) {
   catch (e: any) { error.value = e.message }
 }
 
-async function editPriority(ep: Ep) {
-  const p = prompt('Priority (lower = preferred; 666=no inbound)', String(ep.priority))
-  if (p === null) return
+const editFor = ref<Ep | null>(null)
+const epForm = ref({ endpoint: '', priority: 0, bridge: false })
+
+function openEdit(ep: Ep) {
+  editFor.value = ep
+  epForm.value = { endpoint: ep.endpoint, priority: ep.priority, bridge: ep.bridge }
+}
+
+async function saveEdit() {
+  if (!editFor.value) return
+  error.value = ''
   try {
-    await api(`/admin/endpoints/${ep.id}`, { method: 'PUT', json: { ...ep, priority: Number(p) || 0 } })
+    await api(`/admin/endpoints/${editFor.value.id}`, {
+      method: 'PUT',
+      json: { ...editFor.value, ...epForm.value },
+    })
+    editFor.value = null
     await load()
   } catch (e: any) { error.value = e.message }
 }
@@ -126,7 +139,7 @@ async function editPriority(ep: Ep) {
             <td>{{ ep.bridge ? 'yes' : '' }}</td>
             <td class="actions-cell">
               <template v-if="!managedBy[ep.id]">
-                <button class="secondary" @click="editPriority(ep)">Edit priority</button>
+                <button class="secondary" @click="openEdit(ep)">Edit</button>
                 <button class="danger" @click="remove(ep)">Delete</button>
               </template>
               <span v-else class="muted">via Gateways</span>
@@ -135,5 +148,27 @@ async function editPriority(ep: Ep) {
         </tbody>
       </table>
     </div>
+
+    <Modal v-if="editFor" :title="`Edit endpoint #${editFor.id}`" @close="editFor = null">
+      <p class="muted" style="margin-top:0">
+        Scope <strong>{{ editFor.type }}<template v-if="editFor.type !== 'global'"> / #{{ editFor.type_id }}</template></strong> ·
+        kind <strong>{{ editFor.endpoint_type }}</strong> — to change scope or kind, delete and re-add the endpoint.
+      </p>
+      <div class="field">
+        <label>Value <span class="muted">(gw_name:IP · https://… · a@b.c)</span></label>
+        <input v-model="epForm.endpoint" required />
+      </div>
+      <div class="field">
+        <label>Priority <span class="muted">(lower = preferred; 666 = no inbound)</span></label>
+        <input v-model.number="epForm.priority" type="number" />
+      </div>
+      <div class="field">
+        <label style="font-size:13px; color:var(--text)"><input type="checkbox" v-model="epForm.bridge" /> bridge calls to this endpoint</label>
+      </div>
+      <template #footer>
+        <button class="secondary" @click="editFor = null">Cancel</button>
+        <button :disabled="!epForm.endpoint" @click="saveEdit">Save</button>
+      </template>
+    </Modal>
   </main>
 </template>

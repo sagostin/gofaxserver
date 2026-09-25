@@ -40,18 +40,24 @@ type Server struct {
 	Auth       *auth.Service
 	Box        *crypto.Box
 	FaxBox     *crypto.Box // domain-separated box sealing received fax PDFs at rest
+	TOTPBox    *crypto.Box // domain-separated box sealing user TOTP secrets at rest
 	FX         *fsclient.Client
 	LoginLimit *auth.RateLimiter
 	SendLimit  *auth.RateLimiter
 }
 
 func New(cfg *config.Config, db *gorm.DB, authSvc *auth.Service, box, faxBox *crypto.Box, fx *fsclient.Client) *Server {
+	totpBox, err := crypto.NewTOTPBox(cfg.EncryptionKey)
+	if err != nil {
+		panic("totp encryption key: " + err.Error())
+	}
 	return &Server{
 		Cfg:        cfg,
 		DB:         db,
 		Auth:       authSvc,
 		Box:        box,
 		FaxBox:     faxBox,
+		TOTPBox:    totpBox,
 		FX:         fx,
 		LoginLimit: auth.NewRateLimiter(time.Minute),
 		SendLimit:  auth.NewRateLimiter(time.Hour),
@@ -69,6 +75,10 @@ func (s *Server) BuildApp() *iris.Application {
 	// Existing gofaxserver API clients are unaffected either way.
 	apiParty := app.Party("/portal/api")
 	apiParty.Post("/auth/login", s.handleLogin)
+	// TOTP handshake: gated by the short-lived pending token minted after
+	// password verification, not by a session.
+	apiParty.Post("/auth/totp/setup", s.handleTOTPSetup)
+	apiParty.Post("/auth/totp/verify", s.handleTOTPVerify)
 	apiParty.Get("/health", func(ctx iris.Context) {
 		ctx.JSON(map[string]string{"status": "ok"})
 	})
@@ -102,6 +112,7 @@ func (s *Server) BuildApp() *iris.Application {
 	admin.Post("/users", s.adminCreateUser)
 	admin.Put("/users/{id:uint}", s.adminUpdateUser)
 	admin.Post("/users/{id:uint}/password", s.adminResetPassword)
+	admin.Post("/users/{id:uint}/totp/reset", s.adminResetUserTOTP)
 	admin.Delete("/users/{id:uint}", s.adminDeleteUser)
 
 	orgs := admin.Party("/orgs")
@@ -298,6 +309,14 @@ func (s *Server) requireUserRealm(ctx iris.Context) {
 	if err := s.DB.First(&org, user.OrgID).Error; err != nil || !org.Active {
 		ctx.StatusCode(iris.StatusForbidden)
 		ctx.JSON(map[string]string{"error": "organization is inactive"})
+		return
+	}
+	// Defense in depth for sessions minted before the org required 2FA:
+	// they cannot act in the user realm until the user re-logs in and
+	// completes enrollment.
+	if org.TOTPRequired && !user.TOTPEnabled {
+		ctx.StatusCode(iris.StatusForbidden)
+		ctx.JSON(map[string]string{"error": "totp_enrollment_required"})
 		return
 	}
 	ctx.Next()

@@ -517,6 +517,9 @@ Health: `GET /portal/api/health` (unauthenticated, for monitoring/compose/Caddy
 healthchecks).
 
 Auth: `POST /portal/api/auth/login`, `POST /portal/api/auth/logout`, `GET /portal/api/auth/me`.
+TOTP handshake (no session; gated by the pending token returned from login
+when the org requires 2FA): `POST /portal/api/auth/totp/setup`,
+`POST /portal/api/auth/totp/verify`.
 
 Fax users: `GET /portal/api/me/numbers`, `POST /portal/api/faxes` (multipart:
 `file`,`caller_number`,`callee_number`), `GET /portal/api/faxes[?status=]`,
@@ -538,9 +541,39 @@ dialplan rules under `/portal/api/admin/dialplan`,
 `GET /portal/api/admin/faxes/active`, `GET /portal/api/admin/jobs[?org_id=&status=]`,
 `GET /portal/api/admin/jobs/{id}/live`, `GET /portal/api/admin/inbox[?org_id=]`,
 `GET /portal/api/admin/inbox/{id}/file`, `DELETE /portal/api/admin/inbox/{id}`,
+`POST /portal/api/admin/users/{id}/totp/reset` (2FA recovery),
 `GET /portal/api/admin/audit`.
 
 Mutating requests require the `X-CSRF-Token` header returned by login/me.
+
+## Two-factor authentication (TOTP)
+
+2FA is opt-in per organization: **Admin → Orgs → Require 2FA** sets
+`totp_required` on the org. From then on, every fax user in that org must
+complete TOTP before a session is issued:
+
+- **Not enrolled yet** — after password verification the login API returns
+  `{"mfa": "enroll_required", "mfa_token"}`; the SPA shows a QR code
+  (scannable by Google Authenticator, 1Password, Authy, …) plus the base32
+  secret for manual entry, and the first valid code both confirms enrollment
+  and completes login.
+- **Already enrolled** — login returns `{"mfa": "totp_required",
+  "mfa_token"}` and a 6-digit code completes it.
+
+The `mfa_token` is a short-lived (10 min), single-use, rate-limited bridge
+stored only as SHA-256; no session cookie is set until the code verifies.
+Secrets are AES-256-GCM sealed at rest under a domain-separated key derived
+from `encryption_key` (`NewTOTPBox`), live only in the portal database, and
+are never exposed to gofaxserver. Codes are standard RFC 6238 (SHA-1, 6
+digits, 30 s period, ±1 period skew). Sessions minted before the toggle was
+flipped are blocked from the user realm (`403 totp_enrollment_required`)
+until the user re-logs in and enrolls.
+
+Toggling **Disable 2FA** fully bypasses TOTP for the org's users — enrolled
+secrets stay stored, so re-enabling re-enforces them. Recovery when a user
+loses their authenticator: **Admin → Users → Reset 2FA** erases the secret,
+revokes sessions, and forces re-enrollment at next login. Admin accounts
+(`role=admin`) are not covered by org 2FA.
 
 ## Security notes
 
@@ -550,6 +583,9 @@ Mutating requests require the `X-CSRF-Token` header returned by login/me.
   gofaxserver independently enforces tenant-level ownership of caller numbers.
 - Upload validation mirrors gofaxserver (extension + magic-byte sniffing + size cap).
 - Login/send rate limiting; full admin audit trail.
+- Optional org-enforced TOTP 2FA (see below); pending-auth tokens are
+  single-use, hashed at rest, rate-limited, and expire after 10 minutes;
+  TOTP secrets are sealed with a domain-separated AES-256-GCM key.
 - Sessions slide: renewed past the halfway point of their 24 h lifetime; all
   of a user's sessions are revoked on password reset or deactivation.
 - Jobs that never reach a terminal state (e.g. gofaxserver restarted before

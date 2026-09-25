@@ -12,6 +12,7 @@ interface User {
   org_name?: string
   active: boolean
   email_notify: boolean
+  totp_enabled: boolean
   assigned_number_ids: number[]
 }
 
@@ -63,6 +64,12 @@ async function resetPw(u: User) {
   catch (e: any) { error.value = e.message }
 }
 
+async function resetTOTP(u: User) {
+  if (!confirm(`Reset 2FA for ${u.username}? Their authenticator link is erased and sessions revoked. If their org requires 2FA they will re-enroll at next login.`)) return
+  try { await api(`/admin/users/${u.id}/totp/reset`, { method: 'POST' }); await load() }
+  catch (e: any) { error.value = e.message }
+}
+
 async function remove(u: User) {
   if (!confirm(`Delete user ${u.username}?`)) return
   try { await api(`/admin/users/${u.id}`, { method: 'DELETE' }); await load() }
@@ -100,7 +107,7 @@ async function remove(u: User) {
     <div class="panel">
       <table>
         <thead>
-          <tr><th>Username</th><th>Email</th><th>Role</th><th>Org</th><th>Numbers</th><th>Receipts</th><th>Status</th><th></th></tr>
+          <tr><th>Username</th><th>Email</th><th>Role</th><th>Org</th><th>Numbers</th><th>Receipts</th><th>2FA</th><th>Status</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="u in users" :key="u.id">
@@ -110,11 +117,13 @@ async function remove(u: User) {
             <td>{{ u.org_name || '—' }}</td>
             <td>{{ u.assigned_number_ids?.length || 0 }}</td>
             <td><span v-if="u.role === 'user'" class="badge" :class="u.email_notify ? 'active' : 'inactive'">{{ u.email_notify ? 'on' : 'off' }}</span><span v-else class="muted">—</span></td>
+            <td><span v-if="u.role === 'user'" class="badge" :class="u.totp_enabled ? 'active' : 'inactive'">{{ u.totp_enabled ? 'enrolled' : 'not enrolled' }}</span><span v-else class="muted">—</span></td>
             <td><span class="badge" :class="u.active ? 'active' : 'inactive'">{{ u.active ? 'active' : 'inactive' }}</span></td>
             <td class="actions-cell">
               <button class="secondary" @click="editEmail(u)">Edit email</button>
               <button v-if="u.role === 'user'" class="secondary" @click="toggleEmailNotify(u)">Receipts {{ u.email_notify ? 'off' : 'on' }}</button>
               <button class="secondary" @click="resetPw(u)">Reset PW</button>
+              <button v-if="u.totp_enabled" class="secondary" @click="resetTOTP(u)">Reset 2FA</button>
               <button class="secondary" @click="toggleActive(u)">{{ u.active ? 'Deactivate' : 'Activate' }}</button>
               <button class="danger" @click="remove(u)">Delete</button>
             </td>

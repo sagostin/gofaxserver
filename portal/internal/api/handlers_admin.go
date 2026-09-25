@@ -135,6 +135,10 @@ type updateOrgReq struct {
 	// pushed via UpdateTenant (empty string clears the upstream rules). When
 	// absent the upstream tenant notify is left untouched.
 	TenantNotify *string `json:"tenant_notify"`
+	// TOTPRequired toggles org-enforced 2FA. Purely portal-local: nothing is
+	// pushed upstream. Toggling off bypasses TOTP for the org's users; their
+	// secrets stay stored so toggling back on re-enforces them.
+	TOTPRequired *bool `json:"totp_required"`
 }
 
 func (s *Server) adminUpdateOrg(ctx iris.Context) {
@@ -195,6 +199,9 @@ func (s *Server) adminUpdateOrg(ctx iris.Context) {
 	}
 	if req.Active != nil {
 		org.Active = *req.Active
+	}
+	if req.TOTPRequired != nil {
+		org.TOTPRequired = *req.TOTPRequired
 	}
 	if err := s.DB.Save(&org).Error; err != nil {
 		ctx.StatusCode(500)
@@ -873,6 +880,7 @@ type userResp struct {
 	OrgName     string `json:"org_name,omitempty"`
 	Active      bool   `json:"active"`
 	EmailNotify bool   `json:"email_notify"`
+	TOTPEnabled bool   `json:"totp_enabled"`
 	CreatedAt   string `json:"-"`
 	AssignedIDs []uint `json:"assigned_number_ids"`
 }
@@ -896,7 +904,7 @@ func (s *Server) adminListUsers(ctx iris.Context) {
 	}
 	out := make([]userResp, 0, len(users))
 	for _, u := range users {
-		r := userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active, EmailNotify: u.EmailNotify, AssignedIDs: []uint{}}
+		r := userResp{ID: u.ID, Username: u.Username, Email: u.Email, Role: u.Role, OrgID: u.OrgID, Active: u.Active, EmailNotify: u.EmailNotify, TOTPEnabled: u.TOTPEnabled, AssignedIDs: []uint{}}
 		if u.OrgID != nil {
 			r.OrgName = orgNames[*u.OrgID]
 		}
@@ -1067,6 +1075,36 @@ func (s *Server) adminResetPassword(ctx iris.Context) {
 	}
 	_ = s.Auth.DestroyUserSessions(u.ID)
 	s.audit(ctx, "USER_PASSWORD_RESET", u.Username, nil)
+	ctx.JSON(map[string]bool{"ok": true})
+}
+
+// adminResetUserTOTP clears a user's TOTP enrollment (recovery path when an
+// authenticator is lost). The user is forced to re-enroll at next login if
+// their org still requires 2FA.
+func (s *Server) adminResetUserTOTP(ctx iris.Context) {
+	id := ctx.Params().GetUintDefault("id", 0)
+	var u models.PortalUser
+	if err := s.DB.First(&u, id).Error; err != nil {
+		ctx.StatusCode(404)
+		ctx.JSON(map[string]string{"error": "user not found"})
+		return
+	}
+	if !u.TOTPEnabled && len(u.TOTPSecretEnc) == 0 {
+		ctx.JSON(map[string]bool{"ok": true})
+		return
+	}
+	if err := s.DB.Model(&u).Updates(map[string]any{
+		"totp_secret_enc": nil,
+		"totp_enabled":    false,
+	}).Error; err != nil {
+		ctx.StatusCode(500)
+		ctx.JSON(map[string]string{"error": "failed to reset 2FA"})
+		return
+	}
+	_ = s.Auth.DestroyUserSessions(u.ID)
+	// Any in-flight MFA handshakes are stale too.
+	s.DB.Where("user_id = ?", u.ID).Delete(&models.PendingAuth{})
+	s.audit(ctx, "USER_TOTP_RESET", u.Username, nil)
 	ctx.JSON(map[string]bool{"ok": true})
 }
 

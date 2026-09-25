@@ -20,6 +20,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"gofaxportal/internal/auth"
 	"gofaxportal/internal/models"
@@ -64,31 +65,58 @@ func (s *Server) handleLogin(ctx iris.Context) {
 	}
 	if user.OrgID != nil {
 		var org models.Org
-		if s.DB.Select("active").First(&org, *user.OrgID).Error != nil || !org.Active {
+		if s.DB.Select("active", "totp_required").First(&org, *user.OrgID).Error != nil || !org.Active {
 			s.audit(ctx, "AUTH_LOGIN_BLOCKED", req.Username, map[string]bool{"inactive_org": true})
 			ctx.StatusCode(iris.StatusForbidden)
 			ctx.JSON(map[string]string{"error": "organization is inactive"})
 			return
 		}
+		// Org-enforced TOTP: no session is issued until the second factor is
+		// satisfied. Unenrolled users are forced through enrollment first.
+		// When the org toggle is off, TOTP is fully bypassed for its users.
+		if user.Role == models.RoleUser && org.TOTPRequired {
+			if !user.TOTPEnabled {
+				if err := s.prepareEnrollment(&user); err != nil {
+					ctx.StatusCode(iris.StatusInternalServerError)
+					ctx.JSON(map[string]string{"error": "failed to start 2FA enrollment"})
+					return
+				}
+				pending, perr := s.Auth.CreatePendingAuth(user.ID, models.PendingAuthPurposeEnroll)
+				if perr != nil {
+					ctx.StatusCode(iris.StatusInternalServerError)
+					ctx.JSON(map[string]string{"error": "failed to start 2FA enrollment"})
+					return
+				}
+				s.audit(ctx, "AUTH_MFA_ENROLL_PENDING", user.Username, nil)
+				ctx.JSON(map[string]string{"mfa": "enroll_required", "mfa_token": pending})
+				return
+			}
+			pending, perr := s.Auth.CreatePendingAuth(user.ID, models.PendingAuthPurposeLogin)
+			if perr != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(map[string]string{"error": "failed to start 2FA challenge"})
+				return
+			}
+			s.audit(ctx, "AUTH_MFA_PENDING", user.Username, nil)
+			ctx.JSON(map[string]string{"mfa": "totp_required", "mfa_token": pending})
+			return
+		}
 	}
 
-	token, csrf, expires, err := s.Auth.CreateSession(user.ID)
-	if err != nil {
-		ctx.StatusCode(iris.StatusInternalServerError)
-		ctx.JSON(map[string]string{"error": "failed to create session"})
-		return
-	}
+	s.issueSession(ctx, &user)
+}
+
+// setSessionCookie writes the session cookie scoped to the /portal prefix.
+func setSessionCookie(ctx iris.Context, secure bool, token string, expires time.Time) {
 	http.SetCookie(ctx.ResponseWriter(), &http.Cookie{
 		Name:     auth.SessionCookie,
 		Value:    token,
 		Path:     "/portal", // scoped: the portal lives under the /portal prefix
 		HttpOnly: true,
-		Secure:   s.Cfg.CookieSecure,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expires,
 	})
-	s.audit(ctx, "AUTH_LOGIN", user.Username, nil)
-	s.writeMePayload(ctx, &user, csrf)
 }
 
 func (s *Server) handleLogout(ctx iris.Context) {
@@ -106,11 +134,12 @@ func (s *Server) handleLogout(ctx iris.Context) {
 // meResponse is the shape returned by /auth/login and /auth/me.
 func (s *Server) writeMePayload(ctx iris.Context, user *models.PortalUser, csrf string) {
 	resp := map[string]any{
-		"id":       user.ID,
-		"username": user.Username,
-		"email":    user.Email,
-		"role":     user.Role,
-		"org_id":   user.OrgID,
+		"id":           user.ID,
+		"username":     user.Username,
+		"email":        user.Email,
+		"role":         user.Role,
+		"org_id":       user.OrgID,
+		"totp_enabled": user.TOTPEnabled,
 	}
 	if csrf != "" {
 		resp["csrf_token"] = csrf

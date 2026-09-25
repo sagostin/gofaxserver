@@ -30,6 +30,12 @@ export async function api<T = any>(path: string, opts: any = {}): Promise<T> {
     throw new ApiError('session expired', 401)
   }
   const data = res.status === 204 ? null : await res.json().catch(() => null)
+  // Org flipped on 2FA after this session was minted: force re-login so the
+  // user lands in the enrollment flow.
+  if (res.status === 403 && data && data.error === 'totp_enrollment_required') {
+    window.location.href = '/portal/login'
+    throw new ApiError('two-factor setup required — log in again', 403)
+  }
   if (!res.ok) {
     throw new ApiError((data && data.error) || `HTTP ${res.status}`, res.status)
   }

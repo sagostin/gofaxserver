@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../../api'
+import Modal from '../../components/Modal.vue'
+import NotifyRulesEditor from '../../components/NotifyRulesEditor.vue'
 
 interface Org {
   id: number
@@ -8,6 +10,7 @@ interface Org {
   gofax_tenant_id: number
   svc_username: string
   tenant_notify: string
+  totp_required: boolean
   active: boolean
   user_count: number
   number_count: number
@@ -37,6 +40,13 @@ async function create() {
 async function toggleActive(o: Org) {
   error.value = ''
   try { await api(`/admin/orgs/${o.id}`, { method: 'PUT', json: { active: !o.active } }); await load() }
+  catch (e: any) { error.value = e.message }
+}
+
+async function toggleTOTP(o: Org) {
+  if (!o.totp_required && !confirm(`Require 2FA for ${o.name}? Every portal user in this org will be forced to set up an authenticator app at their next login.`)) return
+  error.value = ''
+  try { await api(`/admin/orgs/${o.id}`, { method: 'PUT', json: { totp_required: !o.totp_required } }); await load() }
   catch (e: any) { error.value = e.message }
 }
 
@@ -75,14 +85,19 @@ async function resyncNotify(o: Org) {
 }
 
 async function editTenantNotify(o: Org) {
-  const notify = prompt(
-    'Tenant-level notify rules (email_full->ops@acme.tld,webhook->https://…). Applies to all of this org\'s numbers. Empty clears the upstream rules and hands control back to out-of-band edits.',
-    o.tenant_notify,
-  )
-  if (notify === null) return
+  tnFor.value = o
+  tnValue.value = o.tenant_notify
+}
+
+const tnFor = ref<Org | null>(null)
+const tnValue = ref('')
+
+async function saveTenantNotify() {
+  if (!tnFor.value) return
   error.value = ''
   try {
-    await api(`/admin/orgs/${o.id}`, { method: 'PUT', json: { tenant_notify: notify } })
+    await api(`/admin/orgs/${tnFor.value.id}`, { method: 'PUT', json: { tenant_notify: tnValue.value } })
+    tnFor.value = null
     await load()
   } catch (e: any) { error.value = e.message }
 }
@@ -109,7 +124,7 @@ async function editTenantNotify(o: Org) {
     <div class="panel">
       <table>
         <thead>
-          <tr><th>ID</th><th>Name</th><th>Tenant</th><th>Service acct</th><th>Users</th><th>Numbers</th><th>Status</th><th></th></tr>
+          <tr><th>ID</th><th>Name</th><th>Tenant</th><th>Service acct</th><th>Users</th><th>Numbers</th><th>2FA</th><th>Status</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="o in orgs" :key="o.id">
@@ -121,9 +136,11 @@ async function editTenantNotify(o: Org) {
             </td>
             <td>{{ o.user_count }}</td>
             <td>{{ o.number_count }}</td>
+            <td><span class="badge" :class="o.totp_required ? 'active' : 'inactive'">{{ o.totp_required ? 'required' : 'off' }}</span></td>
             <td><span class="badge" :class="o.active ? 'active' : 'inactive'">{{ o.active ? 'active' : 'inactive' }}</span></td>
             <td class="actions-cell">
               <button class="secondary" @click="toggleActive(o)">{{ o.active ? 'Deactivate' : 'Reactivate' }}</button>
+              <button class="secondary" @click="toggleTOTP(o)">{{ o.totp_required ? 'Disable 2FA' : 'Require 2FA' }}</button>
               <button class="secondary" @click="reconcile(o)">Reconcile</button>
               <button class="secondary" @click="resyncNotify(o)">Re-sync notify</button>
               <button class="secondary" @click="editTenantNotify(o)">Tenant notify</button>
@@ -134,5 +151,17 @@ async function editTenantNotify(o: Org) {
         </tbody>
       </table>
     </div>
+
+    <Modal v-if="tnFor" :title="`Tenant notify — ${tnFor.name}`" @close="tnFor = null">
+      <p class="muted" style="margin-top:0">
+        These rules apply to <strong>all</strong> of this org's numbers and are pushed to the gofaxserver tenant.
+        Saving with no rules clears the upstream tenant notify and hands control back to out-of-band edits.
+      </p>
+      <NotifyRulesEditor v-model="tnValue" />
+      <template #footer>
+        <button class="secondary" @click="tnFor = null">Cancel</button>
+        <button @click="saveTenantNotify">Save &amp; push upstream</button>
+      </template>
+    </Modal>
   </main>
 </template>

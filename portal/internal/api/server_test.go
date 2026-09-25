@@ -85,3 +85,21 @@ func TestLoginRequiresFields(t *testing.T) {
 	testServer(t).POST("/portal/api/auth/login").WithJSON(map[string]string{}).
 		Expect().Status(400)
 }
+
+func TestTOTPResetIsAdminOnly(t *testing.T) {
+	testServer(t).POST("/portal/api/admin/users/1/totp/reset").Expect().Status(401)
+}
+
+func TestTOTPSetupRequiresToken(t *testing.T) {
+	// Missing token is rejected before any DB access.
+	testServer(t).POST("/portal/api/auth/totp/setup").WithJSON(map[string]string{}).
+		Expect().Status(400)
+}
+
+func TestTOTPVerifyRequiresFields(t *testing.T) {
+	e := testServer(t)
+	e.POST("/portal/api/auth/totp/verify").WithJSON(map[string]string{}).
+		Expect().Status(400)
+	e.POST("/portal/api/auth/totp/verify").WithJSON(map[string]string{"mfa_token": "x"}).
+		Expect().Status(400)
+}

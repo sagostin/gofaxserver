@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api } from '../../api'
+import Modal from '../../components/Modal.vue'
+import NotifyRulesEditor from '../../components/NotifyRulesEditor.vue'
 
 interface TenantNumber {
   id: number
@@ -95,9 +97,7 @@ async function saveTenant() {
     tEdit.value = null
     await load()
   } catch (e: any) { error.value = e.message }
-}
-
-async function removeTenant(t: Tenant) {
+}async function removeTenant(t: Tenant) {
   if (!confirm(`Delete tenant "${t.name}" (#${t.id})? Its numbers and users are NOT automatically removed upstream.`)) return
   error.value = ''
   try {
@@ -151,19 +151,24 @@ async function addNumber(t: Tenant) {
   } catch (e: any) { error.value = e.message } finally { busy.value = false }
 }
 
-async function editNumber(n: TenantNumber) {
-  const name = prompt('Caller ID name', n.name)
-  if (name === null) return
-  const header = prompt('Fax header', n.header)
-  if (header === null) return
-  const notify = prompt('Notify list (email->a@b.c;…,webhook->…,portal->…)', n.notify)
-  if (notify === null) return
+// Edit number state
+const nEdit = ref<TenantNumber | null>(null)
+const nEditForm = ref({ name: '', header: '', notify: '' })
+
+function editNumber(n: TenantNumber) {
+  nEdit.value = n
+  nEditForm.value = { name: n.name, header: n.header, notify: n.notify }
+}
+
+async function saveNumber() {
+  if (!nEdit.value) return
   error.value = ''
   try {
-    await api(`/admin/tenant-numbers/${n.id}`, {
+    await api(`/admin/tenant-numbers/${nEdit.value.id}`, {
       method: 'PUT',
-      json: { tenant_id: n.tenant_id, number: n.number, name, header, notify },
+      json: { tenant_id: nEdit.value.tenant_id, number: nEdit.value.number, ...nEditForm.value },
     })
+    nEdit.value = null
     await load()
   } catch (e: any) { error.value = e.message }
 }
@@ -205,34 +210,15 @@ async function removeNumber(n: TenantNumber) {
             <tr>
               <td>{{ t.id }}</td>
               <td>
-                <template v-if="tEdit?.id === t.id">
-                  <input v-model="tEditForm.name" style="width:160px" />
-                </template>
-                <template v-else>
-                  {{ t.name }}
-                  <span v-if="orgManaged(t.id)" class="badge active" title="Claimed by a portal organization">portal org</span>
-                </template>
+                {{ t.name }}
+                <span v-if="orgManaged(t.id)" class="badge active" title="Claimed by a portal organization">portal org</span>
               </td>
-              <td>
-                <template v-if="tEdit?.id === t.id">
-                  <input v-model="tEditForm.notify" style="width:220px" />
-                  <div v-if="orgManaged(t.id)" class="muted" style="font-size:11px;max-width:260px">
-                    Portal-managed tenant: org-level rules are set via Organizations → Tenant notify. Edits here may be overwritten by the portal.
-                  </div>
-                </template>
-                <template v-else>{{ t.notify || '—' }}</template>
-              </td>
+              <td>{{ t.notify || '—' }}</td>
               <td>{{ t.numbers?.length || 0 }}</td>
               <td class="actions-cell">
-                <template v-if="tEdit?.id === t.id">
-                  <button class="secondary" @click="saveTenant">Save</button>
-                  <button class="secondary" @click="tEdit = null">Cancel</button>
-                </template>
-                <template v-else>
-                  <button class="secondary" @click="expand(t)">{{ expanded === t.id ? 'Close' : 'Manage' }}</button>
-                  <button class="secondary" @click="startEditTenant(t)">Edit</button>
-                  <button class="danger" @click="removeTenant(t)">Delete</button>
-                </template>
+                <button class="secondary" @click="expand(t)">{{ expanded === t.id ? 'Close' : 'Manage' }}</button>
+                <button class="secondary" @click="startEditTenant(t)">Edit</button>
+                <button class="danger" @click="removeTenant(t)">Delete</button>
               </td>
             </tr>
             <tr v-if="expanded === t.id">
@@ -306,5 +292,47 @@ async function removeNumber(n: TenantNumber) {
         </tbody>
       </table>
     </div>
+
+    <Modal v-if="tEdit" :title="`Edit tenant #${tEdit.id}`" @close="tEdit = null">
+      <div class="field">
+        <label>Name</label>
+        <input v-model="tEditForm.name" required />
+      </div>
+      <div class="field">
+        <label>Notify rules</label>
+        <NotifyRulesEditor v-model="tEditForm.notify" />
+        <p v-if="orgManaged(tEdit.id)" class="muted" style="margin:6px 0 0">
+          Portal-managed tenant: org-level rules are set via Organizations → Tenant notify. Edits here may be overwritten by the portal.
+        </p>
+      </div>
+      <template #footer>
+        <button class="secondary" @click="tEdit = null">Cancel</button>
+        <button :disabled="!tEditForm.name" @click="saveTenant">Save</button>
+      </template>
+    </Modal>
+
+    <Modal v-if="nEdit" :title="`Edit number ${nEdit.number}`" @close="nEdit = null">
+      <div class="field">
+        <label>Caller ID name</label>
+        <input v-model="nEditForm.name" placeholder="Acme Corp" />
+      </div>
+      <div class="field">
+        <label>Fax header</label>
+        <input v-model="nEditForm.header" placeholder="Acme Corp Fax" />
+      </div>
+      <div class="field">
+        <label>Notify rules</label>
+        <NotifyRulesEditor v-model="nEditForm.notify" />
+        <p v-if="orgManaged(nEdit.tenant_id)" class="muted" style="margin:6px 0 0">
+          This tenant is claimed by a portal organization — number notify is re-synced from portal state
+          (assigned users + portal status push + per-number custom rules). Direct edits here will be overwritten;
+          set custom rules via the Numbers page instead.
+        </p>
+      </div>
+      <template #footer>
+        <button class="secondary" @click="nEdit = null">Cancel</button>
+        <button @click="saveNumber">Save</button>
+      </template>
+    </Modal>
   </main>
 </template>
