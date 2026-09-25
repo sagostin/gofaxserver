@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"gofaxportal/internal/auth"
+	"gofaxportal/internal/fsclient"
 	"gofaxportal/internal/models"
 
 	"github.com/kataras/iris/v12"
@@ -382,7 +383,13 @@ func (s *Server) adminInboundAttempts(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "failed to fetch upstream attempts: " + err.Error()})
 		return
 	}
-	ctx.JSON(out.Items)
+	// Upstream returns jobs grouped by job UUID; the UI wants the flat leg
+	// (attempt) list of this one job.
+	legs := []fsclient.FaxResultRow{}
+	if len(out.Items) > 0 {
+		legs = out.Items[0].Legs
+	}
+	ctx.JSON(legs)
 }
 
 func (s *Server) adminDeleteInbound(ctx iris.Context) {

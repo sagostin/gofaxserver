@@ -114,3 +114,84 @@ func TestParseTimeBoundDateOnly(t *testing.T) {
 		t.Errorf("RFC3339 should parse: %v", err)
 	}
 }
+
+func leg(resultType string, attempt int, success bool, at time.Time) FaxJobResult {
+	return FaxJobResult{
+		ResultType:    resultType,
+		AttemptNumber: attempt,
+		Success:       success,
+		Status:        map[bool]string{true: "OK", false: "FAILED"}[success],
+		CreatedAt:     at,
+	}
+}
+
+func TestDeriveGroupEmpty(t *testing.T) {
+	id := uuid.New()
+	g := deriveGroup(id, nil)
+	if g.JobUUID != id || g.Attempts != 0 || len(g.Legs) != 0 || g.Success {
+		t.Errorf("empty group wrong: %+v", g)
+	}
+}
+
+func TestDeriveGroupRetryThenSuccess(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	id := uuid.New()
+	legs := []FaxJobResult{
+		leg("transmission", 1, false, base),
+		leg("transmission", 2, false, base.Add(time.Minute)),
+		leg("transmission", 3, true, base.Add(2*time.Minute)),
+	}
+	legs[2].TransferredPages, legs[2].TotalPages = 5, 5
+	g := deriveGroup(id, legs)
+	if !g.Success {
+		t.Error("final attempt succeeded: job should be success")
+	}
+	if g.Attempts != 3 || len(g.Legs) != 3 {
+		t.Errorf("attempts wrong: %+v", g)
+	}
+	if g.TransferredPages != 5 || g.TotalPages != 5 {
+		t.Errorf("pages should come from final leg: %+v", g)
+	}
+	if !g.FirstTs.Equal(base) || !g.LastTs.Equal(base.Add(2*time.Minute)) {
+		t.Errorf("time bounds wrong: %v → %v", g.FirstTs, g.LastTs)
+	}
+	if len(g.LegTypes) != 1 || g.LegTypes[0] != "transmission" {
+		t.Errorf("leg types wrong: %v", g.LegTypes)
+	}
+}
+
+func TestDeriveGroupAllFailed(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	g := deriveGroup(uuid.New(), []FaxJobResult{
+		leg("transmission", 1, false, base),
+		leg("transmission", 2, false, base.Add(time.Minute)),
+	})
+	if g.Success {
+		t.Error("all attempts failed: job should be failed")
+	}
+}
+
+func TestDeriveGroupDeliveryDoesNotDecide(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	g := deriveGroup(uuid.New(), []FaxJobResult{
+		leg("reception", 1, true, base),
+		leg("delivery", 1, false, base.Add(time.Minute)),
+	})
+	if !g.Success {
+		t.Error("later failed delivery leg must not override successful reception")
+	}
+	if len(g.LegTypes) != 2 {
+		t.Errorf("leg types wrong: %v", g.LegTypes)
+	}
+}
+
+func TestDeriveGroupDeliveryOnlyFallback(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	g := deriveGroup(uuid.New(), []FaxJobResult{
+		leg("delivery", 1, true, base),
+		leg("delivery", 2, true, base.Add(time.Minute)),
+	})
+	if !g.Success {
+		t.Error("delivery-only job should fall back to latest leg")
+	}
+}

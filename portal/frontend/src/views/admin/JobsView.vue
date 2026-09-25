@@ -22,13 +22,7 @@ interface Job {
 interface ResultRow {
   id: number
   job_uuid: string
-  src_tenant_id: number
-  dst_tenant_id: number
-  src_tenant_name: string
-  dst_tenant_name: string
-  caller_id_number: string
-  caller_id_name: string
-  callee_number: string
+  call_uuid: string
   result_type: string
   attempt_number: number
   endpoint_type: string
@@ -49,7 +43,26 @@ interface ResultRow {
   end_ts: string | null
   created_at: string
 }
-interface ResultList { total: number; items: ResultRow[] }
+interface ResultGroup {
+  job_uuid: string
+  caller_id_number: string
+  caller_id_name: string
+  callee_number: string
+  src_tenant_id: number
+  dst_tenant_id: number
+  src_tenant_name: string
+  dst_tenant_name: string
+  attempts: number
+  leg_types: string[]
+  success: boolean
+  status: string
+  transferred_pages: number
+  total_pages: number
+  first_ts: string
+  last_ts: string
+  legs: ResultRow[]
+}
+interface ResultList { total: number; items: ResultGroup[] }
 
 const view = ref<'portal' | 'all'>('portal')
 const error = ref('')
@@ -60,8 +73,8 @@ const orgs = ref<Org[]>([])
 const orgFilter = ref(0)
 const statusFilter = ref('')
 
-// --- all fax results state ---
-const rows = ref<ResultRow[]>([])
+// --- all fax results state (grouped by job UUID) ---
+const groups = ref<ResultGroup[]>([])
 const total = ref(0)
 const page = ref(0)
 const pageSize = 50
@@ -74,9 +87,9 @@ const uuidSearch = ref('')
 const fromDate = ref('')
 const toDate = ref('')
 
-// Expanded detail/attempt rows (per view), keyed by row id / job uuid.
+// Portal-jobs expand fetches attempts; all-results groups carry legs inline.
 const expanded = ref<Record<string, ResultRow[]>>({})
-const expandedMeta = ref<Record<number, boolean>>({})
+const expandedGroups = ref<Record<string, boolean>>({})
 
 async function loadOrgsTenants() {
   try { orgs.value = await api<Org[]>('/admin/orgs') } catch { /* non-fatal */ }
@@ -104,9 +117,9 @@ async function loadAllResults() {
     if (fromDate.value) qs.set('from', fromDate.value)
     if (toDate.value) qs.set('to', toDate.value)
     const d = await api<ResultList>('/admin/fax-results?' + qs.toString())
-    rows.value = d.items || []
+    groups.value = d.items || []
     total.value = d.total || 0
-    expandedMeta.value = {}
+    expandedGroups.value = {}
     error.value = ''
   } catch (e: any) { error.value = e.message }
 }
@@ -115,7 +128,7 @@ function load() { view.value === 'portal' ? loadPortalJobs() : loadAllResults() 
 function switchView(v: 'portal' | 'all') {
   view.value = v
   expanded.value = {}
-  expandedMeta.value = {}
+  expandedGroups.value = {}
   load()
 }
 onMounted(() => { loadOrgsTenants(); load() })
@@ -124,7 +137,7 @@ function searchAll() { page.value = 0; loadAllResults() }
 function nextPage() { page.value++; loadAllResults() }
 function prevPage() { if (page.value > 0) { page.value--; loadAllResults() } }
 
-// Expand a portal job to show its upstream attempts (persisted results).
+// Expand a portal job to show its upstream attempts (persisted result legs).
 async function toggleAttempts(j: Job) {
   if (j.job_uuid in expanded.value) {
     delete expanded.value[j.job_uuid]
@@ -132,12 +145,12 @@ async function toggleAttempts(j: Job) {
   }
   try {
     const d = await api<ResultList>('/admin/fax-results?job_uuid=' + encodeURIComponent(j.job_uuid))
-    expanded.value[j.job_uuid] = d.items || []
+    expanded.value[j.job_uuid] = d.items?.[0]?.legs || []
   } catch (e: any) { error.value = e.message }
 }
 
-function toggleMeta(id: number) {
-  expandedMeta.value[id] = !expandedMeta.value[id]
+function toggleGroup(uuid: string) {
+  expandedGroups.value[uuid] = !expandedGroups.value[uuid]
 }
 
 function tenantLabel(id: number): string {
@@ -152,9 +165,14 @@ function fmt(ts: string | null): string {
   return ts ? new Date(ts).toLocaleString() : '—'
 }
 
-function typeBadge(r: ResultRow): string {
-  if (r.result_type === 'bridge') return 'sending'
-  if (r.result_type === 'reception') return 'queued'
+function shortUUID(u: string): string {
+  return u ? u.slice(0, 8) : '—'
+}
+
+function legBadge(t: string): string {
+  if (t === 'bridge') return 'sending'
+  if (t === 'reception') return 'queued'
+  if (t === 'delivery') return 'active'
   return 'active'
 }
 </script>
@@ -210,7 +228,7 @@ function typeBadge(r: ResultRow): string {
                     <tbody>
                       <tr v-for="r in expanded[j.job_uuid]" :key="r.id">
                         <td>{{ r.attempt_number }}</td>
-                        <td><span class="badge" :class="typeBadge(r)">{{ r.result_type }}</span></td>
+                        <td><span class="badge" :class="legBadge(r.result_type)">{{ r.result_type }}</span></td>
                         <td><span class="badge" :class="r.success ? 'success' : 'failed'">{{ r.success ? 'yes' : 'no' }}</span></td>
                         <td>{{ r.transferred_pages }}/{{ r.total_pages || '—' }}</td>
                         <td>{{ r.t38_status || '—' }}</td>
@@ -227,7 +245,7 @@ function typeBadge(r: ResultRow): string {
         </table>
       </template>
 
-      <!-- ===== All upstream fax results ===== -->
+      <!-- ===== All upstream fax results, grouped by job ===== -->
       <template v-else>
         <form class="inline" @submit.prevent="searchAll">
           <div>
@@ -276,43 +294,59 @@ function typeBadge(r: ResultRow): string {
 
         <table style="margin-top:10px">
           <thead>
-            <tr><th>Time</th><th>Type</th><th>From → To</th><th>Tenant (src → dst)</th><th>Success</th><th>Pages</th><th>Cause / Result</th><th></th></tr>
+            <tr><th>Last activity</th><th>Type</th><th>From → To</th><th>Tenant (src → dst)</th><th>Outcome</th><th>Att.</th><th>Pages</th><th></th></tr>
           </thead>
           <tbody>
-            <template v-for="r in rows" :key="r.id">
+            <template v-for="g in groups" :key="g.job_uuid">
               <tr>
-                <td>{{ fmt(r.created_at) }}</td>
-                <td><span class="badge" :class="typeBadge(r)">{{ r.result_type }}</span></td>
-                <td>{{ r.caller_id_number || '—' }} → {{ r.callee_number || '—' }}</td>
-                <td>{{ tenantLabel(r.src_tenant_id) }} → {{ tenantLabel(r.dst_tenant_id) }}</td>
-                <td><span class="badge" :class="r.success ? 'success' : 'failed'">{{ r.success ? 'yes' : 'no' }}</span></td>
-                <td>{{ r.transferred_pages }}/{{ r.total_pages || '—' }}</td>
-                <td>{{ r.hangup_cause || r.result_text || '—' }}</td>
-                <td><button class="secondary" @click="toggleMeta(r.id)">{{ expandedMeta[r.id] ? 'Hide' : 'Details' }}</button></td>
+                <td>{{ fmt(g.last_ts) }}</td>
+                <td>
+                  <span v-for="t in g.leg_types" :key="t" class="badge" :class="legBadge(t)" style="margin-right:4px">{{ t }}</span>
+                </td>
+                <td>{{ g.caller_id_number || '—' }} → {{ g.callee_number || '—' }}</td>
+                <td>{{ tenantLabel(g.src_tenant_id) }} → {{ tenantLabel(g.dst_tenant_id) }}</td>
+                <td><span class="badge" :class="g.success ? 'success' : 'failed'">{{ g.success ? 'success' : 'failed' }}</span></td>
+                <td>{{ g.attempts }}</td>
+                <td>{{ g.transferred_pages }}/{{ g.total_pages || '—' }}</td>
+                <td><button class="secondary" @click="toggleGroup(g.job_uuid)">{{ expandedGroups[g.job_uuid] ? 'Hide' : 'Legs' }}</button></td>
               </tr>
-              <tr v-if="expandedMeta[r.id]">
-                <td colspan="8" class="muted" style="font-size:12px">
-                  <div style="display:flex; gap:24px; flex-wrap:wrap; padding:4px 0">
-                    <span><b>Job:</b> {{ r.job_uuid }}</span>
-                    <span><b>Attempt:</b> {{ r.attempt_number }}</span>
-                    <span v-if="r.is_bridge"><b>Bridge:</b> {{ r.bridge_direction || '—' }} via {{ r.bridge_gateway || '—' }}</span>
-                    <span v-else><b>Endpoint:</b> {{ r.endpoint_type || '—' }}</span>
-                    <span><b>T.38:</b> {{ r.t38_status || (r.used_t38 ? 'used' : '—') }}</span>
-                    <span><b>Rate:</b> {{ r.signal_rate || '—' }}</span>
-                    <span><b>Remote ID:</b> {{ r.remote_id || '—' }}</span>
-                    <span><b>Started:</b> {{ fmt(r.start_ts) }}</span>
-                    <span><b>Ended:</b> {{ fmt(r.end_ts) }}</span>
-                    <span><b>Status:</b> {{ r.status || '—' }}</span>
-                  </div>
+              <tr v-if="expandedGroups[g.job_uuid]">
+                <td colspan="8">
+                  <p class="muted" style="font-size:12px; margin:4px 0">
+                    Job: {{ g.job_uuid }} · first activity {{ fmt(g.first_ts) }} · outcome from final leg ({{ g.status || '—' }})
+                  </p>
+                  <table v-if="g.legs.length" style="margin:6px 0">
+                    <thead>
+                      <tr><th>#</th><th>Type</th><th>Success</th><th>Pages</th><th>T.38</th><th>Rate</th><th>Endpoint / Bridge</th><th>Cause / Result</th><th>Start → End</th><th>Call</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="r in g.legs" :key="r.id">
+                        <td>{{ r.attempt_number }}</td>
+                        <td><span class="badge" :class="legBadge(r.result_type)">{{ r.result_type }}</span></td>
+                        <td><span class="badge" :class="r.success ? 'success' : 'failed'">{{ r.success ? 'yes' : 'no' }}</span></td>
+                        <td>{{ r.transferred_pages }}/{{ r.total_pages || '—' }}</td>
+                        <td>{{ r.t38_status || (r.used_t38 ? 'used' : '—') }}</td>
+                        <td>{{ r.signal_rate || '—' }}</td>
+                        <td>
+                          <template v-if="r.is_bridge">{{ r.bridge_direction || 'bridge' }} via {{ r.bridge_gateway || '—' }}</template>
+                          <template v-else>{{ r.endpoint_type || '—' }}</template>
+                        </td>
+                        <td>{{ r.hangup_cause || r.result_text || '—' }}</td>
+                        <td style="white-space:nowrap">{{ fmt(r.start_ts) }} → {{ fmt(r.end_ts) }}</td>
+                        <td class="muted" :title="r.call_uuid">{{ shortUUID(r.call_uuid) }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p v-else class="muted">No call legs recorded for this job.</p>
                 </td>
               </tr>
             </template>
           </tbody>
         </table>
-        <p v-if="!rows.length" class="muted">No fax results match.</p>
+        <p v-if="!groups.length" class="muted">No fax jobs match.</p>
         <div v-if="total > pageSize" class="inline" style="margin-top:10px; align-items:center">
           <button class="secondary" :disabled="page === 0" @click="prevPage">← Prev</button>
-          <span class="muted">Page {{ page + 1 }} of {{ Math.ceil(total / pageSize) }} ({{ total }} results)</span>
+          <span class="muted">Page {{ page + 1 }} of {{ Math.ceil(total / pageSize) }} ({{ total }} jobs)</span>
           <button class="secondary" :disabled="(page + 1) * pageSize >= total" @click="nextPage">Next →</button>
         </div>
       </template>

@@ -143,16 +143,12 @@ func intDefault(s string, def int) int {
 	return n
 }
 
-// apply attaches the filters to a gorm query on the fax_job_results table.
+// apply attaches the row-level identity/time filters (tenant, number, job
+// UUID, time range) to a gorm query on the fax_job_results table. result_type
+// and success are group-level filters and are applied by the handler itself.
 func (q faxResultQuery) apply(db *gorm.DB) *gorm.DB {
 	if q.TenantID > 0 {
 		db = db.Where("src_tenant_id = ? OR dst_tenant_id = ?", q.TenantID, q.TenantID)
-	}
-	if q.ResultType != "" {
-		db = db.Where("result_type = ?", q.ResultType)
-	}
-	if q.Success != nil {
-		db = db.Where("success = ?", *q.Success)
 	}
 	if q.Number != "" {
 		like := "%" + q.Number + "%"
@@ -170,12 +166,77 @@ func (q faxResultQuery) apply(db *gorm.DB) *gorm.DB {
 	return db
 }
 
+// FaxResultGroup is one fax job (correlated by job_uuid) with all of its
+// call legs/attempts (each with its own call_uuid). The group-level outcome
+// (success, status, pages) is derived from the final primary leg — the latest
+// non-delivery leg, falling back to the latest leg overall.
+type FaxResultGroup struct {
+	JobUUID          uuid.UUID      `json:"job_uuid"`
+	CallerIDNumber   string         `json:"caller_id_number"`
+	CallerIDName     string         `json:"caller_id_name"`
+	CalleeNumber     string         `json:"callee_number"`
+	SrcTenantID      uint           `json:"src_tenant_id"`
+	DstTenantID      uint           `json:"dst_tenant_id"`
+	Attempts         int            `json:"attempts"`
+	LegTypes         []string       `json:"leg_types"`
+	Success          bool           `json:"success"`
+	Status           string         `json:"status"`
+	TransferredPages uint           `json:"transferred_pages"`
+	TotalPages       uint           `json:"total_pages"`
+	FirstTs          time.Time      `json:"first_ts"`
+	LastTs           time.Time      `json:"last_ts"`
+	Legs             []FaxJobResult `json:"legs"`
+}
+
+// deriveGroup builds the group summary from a job's legs, which must be
+// ordered by created_at ascending.
+func deriveGroup(id uuid.UUID, legs []FaxJobResult) FaxResultGroup {
+	g := FaxResultGroup{JobUUID: id, Legs: legs, Attempts: len(legs), LegTypes: []string{}}
+	if len(legs) == 0 {
+		return g
+	}
+	last := legs[len(legs)-1]
+	g.CallerIDNumber = last.CallerIdNumber
+	g.CallerIDName = last.CallerIdName
+	g.CalleeNumber = last.CalleeNumber
+	g.SrcTenantID = last.SrcTenantID
+	g.DstTenantID = last.DstTenantID
+	g.FirstTs = legs[0].CreatedAt
+	g.LastTs = last.CreatedAt
+
+	seen := map[string]bool{}
+	for _, l := range legs {
+		if !seen[l.ResultType] {
+			seen[l.ResultType] = true
+			g.LegTypes = append(g.LegTypes, l.ResultType)
+		}
+	}
+
+	// Final primary leg decides the outcome: latest non-delivery leg,
+	// falling back to the latest leg for delivery-only jobs.
+	primary := last
+	for i := len(legs) - 1; i >= 0; i-- {
+		if legs[i].ResultType != "delivery" {
+			primary = legs[i]
+			break
+		}
+	}
+	g.Success = primary.Success
+	g.Status = primary.Status
+	g.TransferredPages = primary.TransferredPages
+	g.TotalPages = primary.TotalPages
+	return g
+}
+
 // handleListFaxResults lists persisted fax job results (receptions, bridged
 // calls, transmissions, deliveries) across ALL tenants — not just jobs
-// submitted through the portal. Used by the portal's admin "all jobs" view.
+// submitted through the portal — grouped by job UUID. Each group carries all
+// of the job's call legs (individual attempts, each with its own call UUID).
+// Used by the portal's admin "all jobs" view.
 //
-// Query params: tenant_id, result_type, success, number, job_uuid, from, to,
-// limit, offset. Returns {total, items}.
+// Query params: tenant_id, result_type (jobs containing such a leg), success
+// (job-level outcome per the final primary leg), number, job_uuid, from, to,
+// limit, offset. Returns {total: job count, items: []FaxResultGroup}.
 func (s *Server) handleListFaxResults(ctx iris.Context) {
 	q, err := parseFaxResultQuery(ctx.Request().URL.Query())
 	if err != nil {
@@ -184,20 +245,72 @@ func (s *Server) handleListFaxResults(ctx iris.Context) {
 		return
 	}
 
+	base := q.apply(s.DB.Model(&FaxJobResult{}))
+
+	// result_type: keep jobs that have at least one leg of that type (all of
+	// the job's legs are still returned in the group).
+	if q.ResultType != "" {
+		sub := s.DB.Model(&FaxJobResult{}).Select("job_uuid").Where("result_type = ?", q.ResultType)
+		base = base.Where("job_uuid IN (?)", sub)
+	}
+
+	// success: job-level outcome — the success flag of the final primary leg
+	// (latest leg, deliveries ranked below primary legs).
+	if q.Success != nil {
+		latest := s.DB.Model(&FaxJobResult{}).
+			Select("DISTINCT ON (job_uuid) job_uuid, success").
+			Order("job_uuid, CASE WHEN result_type = 'delivery' THEN 1 ELSE 0 END, created_at DESC")
+		sub := s.DB.Table("(?) AS latest_legs", latest).
+			Select("job_uuid").Where("success = ?", *q.Success)
+		base = base.Where("job_uuid IN (?)", sub)
+	}
+
 	var total int64
-	if err := q.apply(s.DB.Model(&FaxJobResult{})).Count(&total).Error; err != nil {
+	if err := base.Session(&gorm.Session{}).Distinct("job_uuid").Count(&total).Error; err != nil {
 		ctx.StatusCode(http.StatusInternalServerError)
-		ctx.JSON(iris.Map{"error": "failed to count fax results: " + err.Error()})
+		ctx.JSON(iris.Map{"error": "failed to count fax jobs: " + err.Error()})
 		return
 	}
 
-	items := []FaxJobResult{}
-	if err := q.apply(s.DB.Model(&FaxJobResult{})).
-		Order("created_at DESC").Limit(q.Limit).Offset(q.Offset).
-		Find(&items).Error; err != nil {
+	// Page over jobs (not rows), most recently active first.
+	var page []struct {
+		JobUUID uuid.UUID
+		LastAt  time.Time
+	}
+	if err := base.Session(&gorm.Session{}).
+		Select("job_uuid, MAX(created_at) AS last_at").
+		Group("job_uuid").Order("last_at DESC").
+		Limit(q.Limit).Offset(q.Offset).
+		Scan(&page).Error; err != nil {
 		ctx.StatusCode(http.StatusInternalServerError)
-		ctx.JSON(iris.Map{"error": "failed to retrieve fax results: " + err.Error()})
+		ctx.JSON(iris.Map{"error": "failed to retrieve fax jobs: " + err.Error()})
 		return
+	}
+
+	items := []FaxResultGroup{}
+	if len(page) == 0 {
+		ctx.JSON(iris.Map{"total": total, "items": items})
+		return
+	}
+
+	uuids := make([]uuid.UUID, 0, len(page))
+	for _, p := range page {
+		uuids = append(uuids, p.JobUUID)
+	}
+	legs := []FaxJobResult{}
+	if err := s.DB.Where("job_uuid IN ?", uuids).
+		Order("created_at ASC").Find(&legs).Error; err != nil {
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to retrieve fax job legs: " + err.Error()})
+		return
+	}
+
+	byJob := map[uuid.UUID][]FaxJobResult{}
+	for _, l := range legs {
+		byJob[l.JobUUID] = append(byJob[l.JobUUID], l)
+	}
+	for _, p := range page {
+		items = append(items, deriveGroup(p.JobUUID, byJob[p.JobUUID]))
 	}
 	ctx.JSON(iris.Map{"total": total, "items": items})
 }

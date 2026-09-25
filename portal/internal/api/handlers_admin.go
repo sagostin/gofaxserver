@@ -1755,23 +1755,25 @@ func (s *Server) adminActiveFaxes(ctx iris.Context) {
 	ctx.JSON(map[string]any{"active": out.Active, "items": items})
 }
 
-// adminFaxResultRow is one upstream fax_job_results row enriched with tenant
-// display names for the admin "all jobs" view.
-type adminFaxResultRow struct {
-	fsclient.FaxResultRow
+// adminFaxResultGroup is one upstream fax job (all of its call legs grouped
+// by job UUID) enriched with tenant display names for the admin "all jobs"
+// view.
+type adminFaxResultGroup struct {
+	fsclient.FaxResultGroup
 	SrcTenantName string `json:"src_tenant_name"`
 	DstTenantName string `json:"dst_tenant_name"`
 }
 
 // adminFaxResultList is the paginated envelope for /admin/fax-results.
 type adminFaxResultList struct {
-	Total int64               `json:"total"`
-	Items []adminFaxResultRow `json:"items"`
+	Total int64                 `json:"total"`
+	Items []adminFaxResultGroup `json:"items"`
 }
 
 // adminListFaxResults proxies gofaxserver's persisted fax job results — every
 // call the server handled (bridged calls, inbound receptions, outbound
-// transmissions, deliveries), not just portal-submitted jobs.
+// transmissions, deliveries), not just portal-submitted jobs — grouped by job
+// UUID, one entry per job with its legs attached.
 func (s *Server) adminListFaxResults(ctx iris.Context) {
 	q := url.Values{}
 	for _, k := range []string{"tenant_id", "result_type", "success", "number", "job_uuid", "from", "to", "limit", "offset"} {
@@ -1786,12 +1788,12 @@ func (s *Server) adminListFaxResults(ctx iris.Context) {
 		return
 	}
 	names := s.tenantNames()
-	items := make([]adminFaxResultRow, 0, len(out.Items))
-	for _, r := range out.Items {
-		items = append(items, adminFaxResultRow{
-			FaxResultRow:  r,
-			SrcTenantName: names[r.SrcTenantID],
-			DstTenantName: names[r.DstTenantID],
+	items := make([]adminFaxResultGroup, 0, len(out.Items))
+	for _, g := range out.Items {
+		items = append(items, adminFaxResultGroup{
+			FaxResultGroup: g,
+			SrcTenantName:  names[g.SrcTenantID],
+			DstTenantName:  names[g.DstTenantID],
 		})
 	}
 	ctx.JSON(adminFaxResultList{Total: out.Total, Items: items})

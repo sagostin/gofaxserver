@@ -323,7 +323,9 @@ type FaxStatusRow struct {
 	T38Status        string    `json:"t38_status"`
 }
 
-// FaxResultRow mirrors one row of gofaxserver's /admin/fax-results listing.
+// FaxResultRow mirrors one call leg (attempt) of gofaxserver's
+// /admin/fax-results listing — a single fax_job_results row with its own
+// call_uuid, correlated to a job via job_uuid.
 type FaxResultRow struct {
 	ID               uint       `json:"id"`
 	SrcTenantID      uint       `json:"src_tenant_id"`
@@ -357,10 +359,30 @@ type FaxResultRow struct {
 	CreatedAt        time.Time  `json:"created_at"`
 }
 
+// FaxResultGroup is one fax job (correlated by job_uuid) with all of its
+// call legs — mirrors gofaxserver's grouped /admin/fax-results listing.
+type FaxResultGroup struct {
+	JobUUID          string         `json:"job_uuid"`
+	CallerIDNumber   string         `json:"caller_id_number"`
+	CallerIDName     string         `json:"caller_id_name"`
+	CalleeNumber     string         `json:"callee_number"`
+	SrcTenantID      uint           `json:"src_tenant_id"`
+	DstTenantID      uint           `json:"dst_tenant_id"`
+	Attempts         int            `json:"attempts"`
+	LegTypes         []string       `json:"leg_types"`
+	Success          bool           `json:"success"`
+	Status           string         `json:"status"`
+	TransferredPages uint           `json:"transferred_pages"`
+	TotalPages       uint           `json:"total_pages"`
+	FirstTs          time.Time      `json:"first_ts"`
+	LastTs           time.Time      `json:"last_ts"`
+	Legs             []FaxResultRow `json:"legs"`
+}
+
 // FaxResultList is the paginated envelope from /admin/fax-results.
 type FaxResultList struct {
-	Total int64          `json:"total"`
-	Items []FaxResultRow `json:"items"`
+	Total int64            `json:"total"`
+	Items []FaxResultGroup `json:"items"`
 }
 
 // --- admin API ---
@@ -663,7 +685,8 @@ func (c *Client) ListActiveFaxes() (*ActiveFaxes, error) {
 }
 
 // ListFaxResults queries gofaxserver's persisted fax_job_results (all call
-// types, all tenants). query is forwarded verbatim as the query string.
+// types, all tenants), grouped by job UUID — each group carries the job's
+// call legs. query is forwarded verbatim as the query string.
 func (c *Client) ListFaxResults(query url.Values) (*FaxResultList, error) {
 	path := "/admin/fax-results"
 	if enc := query.Encode(); enc != "" {
