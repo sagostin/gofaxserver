@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { api } from '../../api'
 import Modal from '../../components/Modal.vue'
 import NotifyRulesEditor from '../../components/NotifyRulesEditor.vue'
+import ActionsMenu, { type ActionItem } from '../../components/ActionsMenu.vue'
 
 interface Org {
   id: number
@@ -101,6 +102,18 @@ async function saveTenantNotify() {
     await load()
   } catch (e: any) { error.value = e.message }
 }
+
+function orgActions(o: Org): ActionItem[] {
+  return [
+    { label: o.active ? 'Deactivate' : 'Reactivate', danger: o.active, onClick: () => toggleActive(o) },
+    { label: o.totp_required ? 'Disable 2FA requirement' : 'Require 2FA', onClick: () => toggleTOTP(o) },
+    { label: 'Reconcile', hint: 'Compare portal state against gofaxserver and report drift', onClick: () => reconcile(o) },
+    { label: 'Re-sync notify', hint: 'Re-derive and push all number notify rules for this org', onClick: () => resyncNotify(o) },
+    { label: 'Tenant notify', hint: 'Org-level notify rules pushed to the gofaxserver tenant', onClick: () => editTenantNotify(o) },
+    { label: 'Rotate credentials', hint: 'Fresh password + API key for the service account, pushed upstream and verified', onClick: () => rotateCredentials(o) },
+    { label: 'Purge', danger: true, hint: 'Delete the upstream tenant, numbers and deactivate portal users', onClick: () => purge(o) },
+  ]
+}
 </script>
 
 <template>
@@ -139,13 +152,8 @@ async function saveTenantNotify() {
             <td><span class="badge" :class="o.totp_required ? 'active' : 'inactive'">{{ o.totp_required ? 'required' : 'off' }}</span></td>
             <td><span class="badge" :class="o.active ? 'active' : 'inactive'">{{ o.active ? 'active' : 'inactive' }}</span></td>
             <td class="actions-cell">
-              <button class="secondary" @click="toggleActive(o)">{{ o.active ? 'Deactivate' : 'Reactivate' }}</button>
-              <button class="secondary" @click="toggleTOTP(o)">{{ o.totp_required ? 'Disable 2FA' : 'Require 2FA' }}</button>
-              <button class="secondary" @click="reconcile(o)">Reconcile</button>
-              <button class="secondary" @click="resyncNotify(o)">Re-sync notify</button>
-              <button class="secondary" @click="editTenantNotify(o)">Tenant notify</button>
-              <button class="secondary" @click="rotateCredentials(o)">Rotate credentials</button>
-              <button class="danger" @click="purge(o)">Purge</button>
+              <RouterLink :to="`/admin/orgs/${o.id}/users`"><button>Manage</button></RouterLink>
+              <ActionsMenu :items="orgActions(o)" />
             </td>
           </tr>
         </tbody>

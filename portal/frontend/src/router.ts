@@ -11,9 +11,31 @@ const router = createRouter({
     { path: '/app/inbox', component: () => import('./views/user/InboxView.vue'), meta: { role: 'user' } },
     // admin realm
     { path: '/admin', component: () => import('./views/admin/OrgsView.vue'), meta: { role: 'admin' } },
-    { path: '/admin/numbers', component: () => import('./views/admin/NumbersView.vue'), meta: { role: 'admin' } },
-    { path: '/admin/users', component: () => import('./views/admin/UsersView.vue'), meta: { role: 'admin' } },
+    {
+      path: '/admin/orgs/:id',
+      component: () => import('./views/admin/OrgDetailView.vue'),
+      meta: { role: 'admin' },
+      children: [
+        { path: '', redirect: (to) => `/admin/orgs/${to.params.id}/users` },
+        {
+          path: 'users',
+          component: () => import('./components/admin/UserManager.vue'),
+          props: (r) => ({ orgId: Number(r.params.id) }),
+          meta: { role: 'admin' },
+        },
+        {
+          path: 'numbers',
+          component: () => import('./components/admin/NumberManager.vue'),
+          props: (r) => ({ orgId: Number(r.params.id) }),
+          meta: { role: 'admin' },
+        },
+      ],
+    },
+    // legacy flat routes, superseded by the org detail tabs
+    { path: '/admin/numbers', redirect: '/admin' },
+    { path: '/admin/users', redirect: '/admin' },
     { path: '/admin/tenants', component: () => import('./views/admin/TenantsView.vue'), meta: { role: 'admin' } },
+    { path: '/admin/tenants/:id', component: () => import('./views/admin/TenantDetailView.vue'), meta: { role: 'admin' } },
     { path: '/admin/endpoints', component: () => import('./views/admin/EndpointsView.vue'), meta: { role: 'admin' } },
     { path: '/admin/gateways', component: () => import('./views/admin/GatewaysView.vue'), meta: { role: 'admin' } },
     { path: '/admin/templates', component: () => import('./views/admin/TemplatesView.vue'), meta: { role: 'admin' } },

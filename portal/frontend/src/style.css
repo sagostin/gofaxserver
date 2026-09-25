@@ -90,8 +90,45 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 
 .error { color: var(--danger); margin-top: 8px; white-space: pre-wrap; }
 .okmsg { color: var(--ok); margin-top: 8px; }
-.actions-cell button { margin-right: 6px; margin-top: 3px; }
+.actions-cell { white-space: nowrap; }
+.actions-cell > * { margin-right: 6px; margin-top: 3px; }
 .login-wrap { max-width: 360px; margin: 15vh auto 0; }
+
+/* Dropdown menus (actions overflow + topbar Configure) */
+.actions-menu { position: relative; display: inline-block; }
+.nav-dropdown { position: relative; display: inline-block; }
+.nav-dropdown-btn {
+  background: none; color: var(--muted); padding: 4px 8px; border-radius: 6px; font-size: 14px;
+}
+.nav-dropdown-btn:hover { color: var(--text); }
+.nav-dropdown-btn.active { color: var(--accent); background: #eff4ff; }
+.menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 90;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .15);
+  min-width: 190px; padding: 4px; display: flex; flex-direction: column;
+}
+.nav-dropdown .menu { left: 0; right: auto; }
+.menu-item {
+  display: block; width: 100%; text-align: left; background: none; color: var(--text);
+  border: none; border-radius: 6px; padding: 8px 12px; font-size: 14px; cursor: pointer;
+  text-decoration: none;
+}
+.menu-item:hover { background: #f3f4f6; }
+.menu-item.danger { color: var(--danger); }
+.menu-item.router-link-active { color: var(--accent); background: #eff4ff; }
+.menu-divider { border-top: 1px solid var(--border); margin: 4px 2px; }
+
+/* Sub-page breadcrumbs + tabs */
+.breadcrumb { margin: 0 0 10px; font-size: 13px; }
+.breadcrumb a { color: var(--muted); text-decoration: none; }
+.breadcrumb a:hover { color: var(--accent); text-decoration: underline; }
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.tabs a {
+  color: var(--muted); text-decoration: none; padding: 8px 14px; font-size: 14px; font-weight: 600;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs a.router-link-active { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* Modal dialog */
 .modal-overlay {
