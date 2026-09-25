@@ -1756,12 +1756,15 @@ func (s *Server) adminActiveFaxes(ctx iris.Context) {
 }
 
 // adminFaxResultGroup is one upstream fax job (all of its call legs grouped
-// by job UUID) enriched with tenant display names for the admin "all jobs"
-// view.
+// by job UUID) enriched with tenant display names — and, for jobs submitted
+// through this portal, the org/user context from the portal's own records —
+// for the admin "all jobs" view.
 type adminFaxResultGroup struct {
 	fsclient.FaxResultGroup
 	SrcTenantName string `json:"src_tenant_name"`
 	DstTenantName string `json:"dst_tenant_name"`
+	PortalOrg     string `json:"portal_org,omitempty"`
+	PortalUser    string `json:"portal_user,omitempty"`
 }
 
 // adminFaxResultList is the paginated envelope for /admin/fax-results.
@@ -1776,7 +1779,7 @@ type adminFaxResultList struct {
 // UUID, one entry per job with its legs attached.
 func (s *Server) adminListFaxResults(ctx iris.Context) {
 	q := url.Values{}
-	for _, k := range []string{"tenant_id", "result_type", "success", "number", "job_uuid", "from", "to", "limit", "offset"} {
+	for _, k := range []string{"tenant_id", "result_type", "success", "origin", "number", "job_uuid", "from", "to", "limit", "offset"} {
 		if v := ctx.URLParam(k); v != "" {
 			q.Set(k, v)
 		}
@@ -1788,15 +1791,55 @@ func (s *Server) adminListFaxResults(ctx iris.Context) {
 		return
 	}
 	names := s.tenantNames()
+
+	// Enrich portal-submitted jobs with org/user context from the portal's
+	// own records (one batch query for the page).
+	uuids := make([]string, 0, len(out.Items))
+	for _, g := range out.Items {
+		uuids = append(uuids, g.JobUUID)
+	}
+	portalMeta := s.portalJobMeta(uuids)
+
 	items := make([]adminFaxResultGroup, 0, len(out.Items))
 	for _, g := range out.Items {
-		items = append(items, adminFaxResultGroup{
+		ag := adminFaxResultGroup{
 			FaxResultGroup: g,
 			SrcTenantName:  names[g.SrcTenantID],
 			DstTenantName:  names[g.DstTenantID],
-		})
+		}
+		if m, ok := portalMeta[g.JobUUID]; ok {
+			ag.PortalOrg = m.org
+			ag.PortalUser = m.user
+		}
+		items = append(items, ag)
 	}
 	ctx.JSON(adminFaxResultList{Total: out.Total, Items: items})
+}
+
+// portalJobMeta maps job UUIDs to the portal org/user that submitted them.
+// Missing uuids (non-portal jobs) are simply absent from the map.
+func (s *Server) portalJobMeta(uuids []string) map[string]struct{ org, user string } {
+	meta := map[string]struct{ org, user string }{}
+	if len(uuids) == 0 {
+		return meta
+	}
+	rows := []struct {
+		JobUUID  string
+		OrgName  string
+		Username string
+	}{}
+	if err := s.DB.Table("fax_jobs").
+		Select("fax_jobs.job_uuid, orgs.name AS org_name, portal_users.username").
+		Joins("JOIN orgs ON orgs.id = fax_jobs.org_id").
+		Joins("JOIN portal_users ON portal_users.id = fax_jobs.user_id").
+		Where("fax_jobs.job_uuid IN ?", uuids).
+		Scan(&rows).Error; err != nil {
+		return meta
+	}
+	for _, r := range rows {
+		meta[r.JobUUID] = struct{ org, user string }{r.OrgName, r.Username}
+	}
+	return meta
 }
 
 type adminJobRow struct {

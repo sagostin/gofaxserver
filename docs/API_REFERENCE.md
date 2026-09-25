@@ -683,6 +683,7 @@ This is the **only** endpoint that takes `multipart/form-data` (not JSON).
 | `file` | file | PDF, TIFF, or TIF document |
 | `caller_number` | string | Source fax number (must belong to the authenticated tenant) |
 | `callee_number` | string | Destination fax number |
+| `source` | string | Optional intake marker identifying the submitting system (e.g. `portal`); recorded on the job's submission leg and used by the `origin` filter on `/admin/fax-results`. Defaults to `user` |
 
 **Example:**
 ```bash

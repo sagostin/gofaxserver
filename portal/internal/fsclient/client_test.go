@@ -25,7 +25,7 @@ import (
 )
 
 func TestSendFaxParsesJobUUID(t *testing.T) {
-	var gotCaller, gotCallee, gotAuth string
+	var gotCaller, gotCallee, gotAuth, gotSource string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/fax/send" {
 			t.Errorf("unexpected path %s", r.URL.Path)
@@ -36,6 +36,7 @@ func TestSendFaxParsesJobUUID(t *testing.T) {
 		}
 		gotCaller = r.FormValue("caller_number")
 		gotCallee = r.FormValue("callee_number")
+		gotSource = r.FormValue("source")
 		file, _, err := r.FormFile("file")
 		if err != nil {
 			t.Errorf("missing file: %v", err)
@@ -57,6 +58,9 @@ func TestSendFaxParsesJobUUID(t *testing.T) {
 	}
 	if gotCaller != "5551234567" || gotCallee != "5559876543" {
 		t.Fatalf("form values wrong: caller=%q callee=%q", gotCaller, gotCallee)
+	}
+	if gotSource != "portal" {
+		t.Fatalf("source marker wrong: got %q, want %q", gotSource, "portal")
 	}
 	if gotAuth == "" {
 		t.Fatal("basic auth header missing")
@@ -161,7 +165,7 @@ func TestListFaxResultsForwardsQueryAndDecodes(t *testing.T) {
 		if q.Get("tenant_id") != "7" || q.Get("result_type") != "bridge" || q.Get("success") != "true" {
 			t.Errorf("query not forwarded: %q", r.URL.RawQuery)
 		}
-		_, _ = w.Write([]byte(`{"total":1,"items":[{"job_uuid":"j-9","src_tenant_id":7,"dst_tenant_id":2,"attempts":2,"leg_types":["bridge"],"success":true,"transferred_pages":2,"legs":[{"id":5,"job_uuid":"j-9","result_type":"bridge","success":true,"is_bridge":true,"bridge_direction":"pbx_to_upstream","gateway":"carrier1","transferred_pages":2}]}]}`))
+		_, _ = w.Write([]byte(`{"total":1,"items":[{"job_uuid":"j-9","src_tenant_id":7,"dst_tenant_id":2,"attempts":2,"leg_types":["bridge"],"success":true,"portal":true,"transferred_pages":2,"legs":[{"id":5,"job_uuid":"j-9","result_type":"bridge","success":true,"is_bridge":true,"bridge_direction":"pbx_to_upstream","gateway":"carrier1","transferred_pages":2}]}]}`))
 	}))
 	defer srv.Close()
 
@@ -177,6 +181,9 @@ func TestListFaxResultsForwardsQueryAndDecodes(t *testing.T) {
 	g := out.Items[0]
 	if g.JobUUID != "j-9" || g.SrcTenantID != 7 || !g.Success || g.Attempts != 2 || len(g.LegTypes) != 1 {
 		t.Fatalf("group = %+v", g)
+	}
+	if !g.Portal {
+		t.Fatalf("portal flag not decoded: %+v", g)
 	}
 	if len(g.Legs) != 1 {
 		t.Fatalf("legs = %+v", g.Legs)

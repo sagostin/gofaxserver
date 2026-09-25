@@ -635,6 +635,14 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 	callerNumber := ctx.FormValue("caller_number")
 	//callerIdName := ctx.FormValue("caller_id_name")
 
+	// Optional intake marker identifying the submitting system (e.g.
+	// "portal"). Stored on the job's submission leg so fax results can
+	// distinguish portal-originated jobs from other API submissions.
+	source := ctx.FormValue("source")
+	if source == "" {
+		source = "user"
+	}
+
 	// todo validate sender for tenants
 
 	// (Optionally, validate these values and return an error if missing.)
@@ -673,7 +681,7 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		SourceInfo: FaxSourceInfo{
 			Timestamp:  time.Now(),
 			SourceType: "webhook",
-			Source:     "user",
+			Source:     source,
 			SourceID:   ctx.Values().GetString("userID"), // Placeholder – optionally extract from request.
 		},
 		Ts: time.Now(),

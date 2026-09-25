@@ -44,6 +44,7 @@ func TestParseFaxResultQueryFilters(t *testing.T) {
 		"tenant_id":   {"7"},
 		"result_type": {"bridge"},
 		"success":     {"true"},
+		"origin":      {"portal"},
 		"number":      {"2507"},
 		"job_uuid":    {id.String()},
 		"from":        {"2026-09-01"},
@@ -54,7 +55,7 @@ func TestParseFaxResultQueryFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.TenantID != 7 || q.ResultType != "bridge" || q.Number != "2507" {
+	if q.TenantID != 7 || q.ResultType != "bridge" || q.Number != "2507" || q.Origin != "portal" {
 		t.Errorf("scalar filters wrong: %+v", q)
 	}
 	if q.Success == nil || !*q.Success {
@@ -85,6 +86,7 @@ func TestParseFaxResultQueryRejectsBadInput(t *testing.T) {
 	for name, v := range map[string]url.Values{
 		"bad result_type": {"result_type": {"bogus"}},
 		"bad success":     {"success": {"maybe"}},
+		"bad origin":      {"origin": {"elsewhere"}},
 		"bad job_uuid":    {"job_uuid": {"not-a-uuid"}},
 		"bad from":        {"from": {"yesterday"}},
 		"bad to":          {"to": {"2026-13-99"}},
@@ -250,6 +252,37 @@ func TestDeriveGroupSubmissionProcessedStillNotAnOutcome(t *testing.T) {
 	}
 	if g.Status != "processed" {
 		t.Errorf("group status should reflect the intake lifecycle, got %q", g.Status)
+	}
+}
+
+func TestDeriveGroupPortalFlag(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+
+	portalSub := leg("submission", 0, true, base)
+	portalSub.SourceInfo = `{"timestamp":"2026-09-25T10:00:00Z","source_type":"webhook","source":"portal","source_id":"42"}`
+	g := deriveGroup(uuid.New(), []FaxJobResult{
+		portalSub,
+		leg("transmission", 1, true, base.Add(time.Minute)),
+	})
+	if !g.Portal {
+		t.Error("job with a portal-marked submission leg should be flagged portal")
+	}
+
+	apiSub := leg("submission", 0, true, base)
+	apiSub.SourceInfo = `{"timestamp":"2026-09-25T10:00:00Z","source_type":"webhook","source":"user","source_id":"7"}`
+	g = deriveGroup(uuid.New(), []FaxJobResult{
+		apiSub,
+		leg("transmission", 1, true, base.Add(time.Minute)),
+	})
+	if g.Portal {
+		t.Error("direct API submission (source=user) must not be flagged portal")
+	}
+
+	g = deriveGroup(uuid.New(), []FaxJobResult{
+		leg("reception", 1, true, base),
+	})
+	if g.Portal {
+		t.Error("inbound reception must not be flagged portal")
 	}
 }
 

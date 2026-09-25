@@ -18,6 +18,7 @@
 package gofaxserver
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,6 +36,7 @@ type faxResultQuery struct {
 	TenantID   uint       // matches src_tenant_id OR dst_tenant_id
 	ResultType string     // reception | bridge | transmission | delivery
 	Success    *bool      // nil = no filter
+	Origin     string     // "" = all | portal | non-portal (submission source marker)
 	Number     string     // substring match on caller or callee number
 	JobUUID    *uuid.UUID // exact job correlation
 	From       *time.Time // created_at >= from
@@ -104,6 +106,13 @@ func parseFaxResultQuery(v url.Values) (faxResultQuery, error) {
 		default:
 			return q, errors.New("success must be true or false")
 		}
+	}
+
+	if o := v.Get("origin"); o != "" {
+		if o != "portal" && o != "non-portal" {
+			return q, fmt.Errorf("invalid origin %q (want portal or non-portal)", o)
+		}
+		q.Origin = o
 	}
 
 	q.Number = v.Get("number")
@@ -189,6 +198,7 @@ type FaxResultGroup struct {
 	TotalPages       uint           `json:"total_pages"`
 	FirstTs          time.Time      `json:"first_ts"`
 	LastTs           time.Time      `json:"last_ts"`
+	Portal           bool           `json:"portal"` // intake came via the portal (submission leg source marker)
 	Legs             []FaxJobResult `json:"legs"`
 }
 
@@ -220,6 +230,14 @@ func deriveGroup(id uuid.UUID, legs []FaxJobResult) FaxResultGroup {
 		if (l.ResultType == "transmission" || l.ResultType == "delivery") &&
 			l.AttemptNumber > g.Attempts {
 			g.Attempts = l.AttemptNumber
+		}
+		// Portal-originated jobs carry the intake marker on the submission
+		// leg's source info.
+		if l.ResultType == "submission" && !g.Portal {
+			var si FaxSourceInfo
+			if err := json.Unmarshal([]byte(l.SourceInfo), &si); err == nil && si.Source == "portal" {
+				g.Portal = true
+			}
 		}
 	}
 
@@ -257,8 +275,10 @@ func deriveGroup(id uuid.UUID, legs []FaxJobResult) FaxResultGroup {
 // Used by the portal's admin "all jobs" view.
 //
 // Query params: tenant_id, result_type (jobs containing such a leg), success
-// (job-level outcome per the final primary leg), number, job_uuid, from, to,
-// limit, offset. Returns {total: job count, items: []FaxResultGroup}.
+// (job-level outcome per the final primary leg), origin (portal = jobs whose
+// intake came via the portal, non-portal = everything else), number,
+// job_uuid, from, to, limit, offset. Returns {total: job count, items:
+// []FaxResultGroup}.
 func (s *Server) handleListFaxResults(ctx iris.Context) {
 	q, err := parseFaxResultQuery(ctx.Request().URL.Query())
 	if err != nil {
@@ -274,6 +294,18 @@ func (s *Server) handleListFaxResults(ctx iris.Context) {
 	if q.ResultType != "" {
 		sub := s.DB.Model(&FaxJobResult{}).Select("job_uuid").Where("result_type = ?", q.ResultType)
 		base = base.Where("job_uuid IN (?)", sub)
+	}
+
+	// origin: keep jobs whose intake came via the portal (submission leg
+	// carrying the "portal" source marker) — or exclude them.
+	if q.Origin != "" {
+		sub := s.DB.Model(&FaxJobResult{}).Select("job_uuid").
+			Where("result_type = ? AND source_info LIKE ?", "submission", `%"source":"portal"%`)
+		if q.Origin == "portal" {
+			base = base.Where("job_uuid IN (?)", sub)
+		} else {
+			base = base.Where("job_uuid NOT IN (?)", sub)
+		}
 	}
 
 	// success: job-level outcome — the success flag of the final primary leg

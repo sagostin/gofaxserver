@@ -378,6 +378,7 @@ type FaxResultGroup struct {
 	TotalPages       uint           `json:"total_pages"`
 	FirstTs          time.Time      `json:"first_ts"`
 	LastTs           time.Time      `json:"last_ts"`
+	Portal           bool           `json:"portal"`
 	Legs             []FaxResultRow `json:"legs"`
 }
 
@@ -719,6 +720,10 @@ func (c *Client) SendFax(username, password, filename string, fileBytes []byte, 
 	}
 	_ = w.WriteField("caller_number", caller)
 	_ = w.WriteField("callee_number", callee)
+	// Intake marker: gofaxserver records this on the job's submission leg so
+	// fax results can distinguish portal-originated jobs from other API
+	// submissions (which default to "user").
+	_ = w.WriteField("source", "portal")
 	if err := w.Close(); err != nil {
 		return "", err
 	}
