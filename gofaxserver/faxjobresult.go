@@ -241,6 +241,13 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		CreatedAt: time.Now(),
 	}
 
+	// Inbound receptions/bridges correlate by session: the job UUID IS the
+	// a-leg channel UUID, so fall back to it when no call ID was set. Only
+	// per-attempt legs (transmissions, deliveries) carry their own UUIDs.
+	if record.CallUUID == uuid.Nil {
+		record.CallUUID = job.UUID
+	}
+
 	sourceRoutingInformation, err := json.Marshal(job.SourceInfo)
 	if err != nil {
 		return err

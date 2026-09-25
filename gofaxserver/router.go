@@ -109,8 +109,13 @@ func (r *Router) routeFax(fax *FaxJob) {
 		),
 	)
 
-	// Emit a lightweight progress tick to UI/consumers
-	r.server.Queue.QueueFaxResult <- QueueFaxResult{Job: fax}
+	// Emit a lightweight progress tick to UI/consumers. Send a SNAPSHOT, not
+	// the live pointer: this handler continues to mutate fax.Endpoints below,
+	// and the async result persistence (storeQueueFaxResult) classifies the
+	// row from Endpoints — the shared pointer races and can stamp an inbound
+	// reception/bridge as "delivery"/"transmission".
+	tick := *fax
+	r.server.Queue.QueueFaxResult <- QueueFaxResult{Job: &tick}
 
 	// --- Source-type specific short-circuit (e.g., came from a trusted upstream gateway)
 	switch fax.SourceInfo.SourceType {

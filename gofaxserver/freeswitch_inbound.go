@@ -291,7 +291,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 				fmt.Sprintf("sip_execute_on_image='t38_gateway %s'", "self nocng"),
 			)
 
-			dsGateways := endpointGatewayDialstring(e.server.UpstreamFsGateways, dstNum)
+			dsGateways := endpointGatewayDialstringTagged(e.server.UpstreamFsGateways, dstNum)
 			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
 
 			bridgeStart = time.Now()
@@ -404,6 +404,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	// --- Queue job routing / cleanup -----------------------------------------
 	faxjob := &FaxJob{
 		UUID:           channelUUID,
+		CallUUID:       channelUUID, // the inbound leg's real session ID (== job UUID)
 		CalleeNumber:   recipient,
 		CallerIdNumber: cidNum,
 		CallerIdName:   cidName,
@@ -452,6 +453,18 @@ EventLoop:
 				// keep loop; result handler may still need to finish/stamp
 			} else {
 				result.AddEvent(ev)
+
+				// Upstream-direction bridges dial ALL upstream gateways as a
+				// failover list: learn which one actually answered from the
+				// per-leg export_vars tag (surfaced on the a-leg once bridged).
+				if bridgeDirection == "upstream" && bridgeGateway == "upstream" {
+					if gw := ev.Get("Variable_" + bridgeGatewayTagVar); gw != "" {
+						logf(logrus.InfoLevel, "Upstream bridge answered via gateway %s",
+							map[string]interface{}{"uuid": channelUUID.String(), "gateway": gw}, gw)
+						bridgeGateway = gw
+						e.server.FaxTracker.MarkBridging(faxjob.UUID, bridgeDirection, bridgeGateway)
+					}
+				}
 
 				if result.HangupCause != "" {
 					logf(logrus.DebugLevel, "Hangup cause observed: %s", map[string]interface{}{"uuid": channelUUID.String()}, result.HangupCause)

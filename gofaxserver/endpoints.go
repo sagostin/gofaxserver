@@ -415,3 +415,28 @@ func endpointGatewayDialstring(endpoints []string, dstNum string) string {
 
 	return dsGateways
 }
+
+// bridgeGatewayTagVar is the per-leg channel variable that records which
+// upstream gateway an upstream-direction bridge leg was dialed through. Each
+// b-leg exports it to the a-leg on answer (export_vars), so the winning
+// gateway shows up as variable_gofax_bridge_gw on the a-leg's events.
+const bridgeGatewayTagVar = "gofax_bridge_gw"
+
+// endpointGatewayDialstringTagged builds the same comma-separated failover
+// dialstring as endpointGatewayDialstring, but tags every leg with
+// bridgeGatewayTagVar=<gw> and export_vars so the a-leg learns which gateway
+// actually answered once bridged. Gateway attribution only — the failover
+// order and call flow are unchanged.
+func endpointGatewayDialstringTagged(endpoints []string, dstNum string) string {
+	var dsGateways string
+
+	for n, gw := range endpoints {
+		if n > 0 {
+			dsGateways += ","
+		}
+		dsGateways += fmt.Sprintf("[%s=%v,export_vars=%s]sofia/gateway/%v/%v",
+			bridgeGatewayTagVar, gw, bridgeGatewayTagVar, gw, dstNum)
+	}
+
+	return dsGateways
+}
