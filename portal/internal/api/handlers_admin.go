@@ -140,6 +140,10 @@ type updateOrgReq struct {
 	// pushed upstream. Toggling off bypasses TOTP for the org's users; their
 	// secrets stay stored so toggling back on re-enforces them.
 	TOTPRequired *bool `json:"totp_required"`
+	// RetentionDays sets how long the org's inbound faxes (incl. sealed
+	// PDFs) are kept before the retention sweeper deletes them. 0 = keep
+	// indefinitely; otherwise 1–3650.
+	RetentionDays *int `json:"retention_days"`
 }
 
 func (s *Server) adminUpdateOrg(ctx iris.Context) {
@@ -204,6 +208,14 @@ func (s *Server) adminUpdateOrg(ctx iris.Context) {
 	if req.TOTPRequired != nil {
 		org.TOTPRequired = *req.TOTPRequired
 	}
+	if req.RetentionDays != nil {
+		if !validRetentionDays(*req.RetentionDays) {
+			ctx.StatusCode(400)
+			ctx.JSON(map[string]string{"error": "retention_days must be 0 (keep forever) or between 1 and 3650"})
+			return
+		}
+		org.RetentionDays = *req.RetentionDays
+	}
 	if err := s.DB.Save(&org).Error; err != nil {
 		ctx.StatusCode(500)
 		ctx.JSON(map[string]string{"error": "failed to update org"})
@@ -211,6 +223,11 @@ func (s *Server) adminUpdateOrg(ctx iris.Context) {
 	}
 	s.audit(ctx, "ORG_UPDATE", fmt.Sprintf("org:%d", org.ID), req)
 	ctx.JSON(org)
+}
+
+// validRetentionDays accepts 0 (keep forever) or 1–3650 days.
+func validRetentionDays(v int) bool {
+	return v >= 0 && v <= 3650
 }
 
 func (s *Server) adminDeleteOrg(ctx iris.Context) {

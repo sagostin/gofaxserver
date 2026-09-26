@@ -52,6 +52,19 @@ func TestClampLimit(t *testing.T) {
 	}
 }
 
+func TestValidRetentionDays(t *testing.T) {
+	for _, ok := range []int{0, 1, 30, 3650} {
+		if !validRetentionDays(ok) {
+			t.Errorf("%d should be valid", ok)
+		}
+	}
+	for _, bad := range []int{-1, -30, 3651, 100000} {
+		if validRetentionDays(bad) {
+			t.Errorf("%d should be rejected", bad)
+		}
+	}
+}
+
 func TestSlugify(t *testing.T) {
 	cases := map[string]string{
 		"Acme Corp": "acme-corp",

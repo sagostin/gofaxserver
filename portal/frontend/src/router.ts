@@ -29,6 +29,12 @@ const router = createRouter({
           props: (r) => ({ orgId: Number(r.params.id) }),
           meta: { role: 'admin' },
         },
+        {
+          path: 'settings',
+          component: () => import('./components/admin/OrgSettings.vue'),
+          props: (r) => ({ orgId: Number(r.params.id) }),
+          meta: { role: 'admin' },
+        },
       ],
     },
     // legacy flat routes, superseded by the org detail tabs

@@ -45,10 +45,14 @@ type Org struct {
 	// TOTPRequired forces every portal user of this org to enroll in TOTP
 	// 2FA before a session is issued. When off, TOTP is fully bypassed for
 	// the org's users (secrets stay stored, so re-enabling re-enforces).
-	TOTPRequired bool      `gorm:"not null;default:false" json:"totp_required"`
-	Active       bool      `gorm:"not null;default:true" json:"active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	TOTPRequired bool `gorm:"not null;default:false" json:"totp_required"`
+	// RetentionDays controls how long this org's inbound faxes (including
+	// their sealed PDFs) are kept before the retention sweeper deletes them.
+	// 0 = keep indefinitely. Valid range 1–3650 when non-zero.
+	RetentionDays int       `gorm:"not null;default:30" json:"retention_days"`
+	Active        bool      `gorm:"not null;default:true" json:"active"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type PortalUser struct {

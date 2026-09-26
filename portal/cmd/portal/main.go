@@ -33,6 +33,7 @@ import (
 	"gofaxportal/internal/fsclient"
 	"gofaxportal/internal/models"
 	"gofaxportal/internal/poller"
+	"gofaxportal/internal/retention"
 
 	"github.com/kataras/iris/v12"
 	"gorm.io/gorm"
@@ -80,12 +81,16 @@ func main() {
 	pollStop := make(chan struct{})
 	go poller.New(cfg, gdb, fx, box).Run(pollStop)
 
+	retentionStop := make(chan struct{})
+	go retention.New(gdb).Run(retentionStop)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go func() {
 		<-ctx.Done()
 		close(stop)
 		close(pollStop)
+		close(retentionStop)
 		_ = app.Shutdown(ctx)
 	}()
 

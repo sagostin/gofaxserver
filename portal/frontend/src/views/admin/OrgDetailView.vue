@@ -10,6 +10,7 @@ interface Org {
   svc_username: string
   tenant_notify: string
   totp_required: boolean
+  retention_days: number
   active: boolean
   user_count: number
   number_count: number
@@ -42,11 +43,13 @@ onMounted(async () => {
         <span style="margin-left:10px">
           <span class="badge" :class="org.active ? 'active' : 'inactive'">{{ org.active ? 'active' : 'inactive' }}</span>
           <span class="badge" :class="org.totp_required ? 'active' : 'inactive'" style="margin-left:6px">2FA {{ org.totp_required ? 'required' : 'off' }}</span>
+          <span class="badge" :class="org.retention_days > 0 ? 'active' : 'inactive'" style="margin-left:6px">Retention {{ org.retention_days > 0 ? org.retention_days + 'd' : 'off' }}</span>
         </span>
       </div>
       <nav class="tabs">
         <RouterLink :to="`/admin/orgs/${orgId}/users`">Users</RouterLink>
         <RouterLink :to="`/admin/orgs/${orgId}/numbers`">Numbers</RouterLink>
+        <RouterLink :to="`/admin/orgs/${orgId}/settings`">Settings</RouterLink>
       </nav>
       <RouterView :key="route.fullPath" />
     </template>
