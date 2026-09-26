@@ -281,6 +281,21 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		// marker. Transitions to "processed" (success=true) when the queue
 		// worker picks the job up — see markSubmissionProcessed.
 		record.Status = "queued"
+
+		// Race safety net: the submission row is persisted asynchronously
+		// (router tick via QueueFaxResult), so a real leg may already have
+		// landed by the time this insert runs. If the job is already in
+		// flight, record the intake directly as processed.
+		var legs int64
+		if err := q.server.DB.Model(&FaxJobResult{}).
+			Where("job_uuid = ? AND result_type <> ?", job.UUID, "submission").
+			Count(&legs).Error; err == nil && legs > 0 {
+			now := time.Now()
+			record.Status = "processed"
+			record.ResultText = "processed"
+			record.Success = true
+			record.EndTs = &now
+		}
 	}
 
 	sourceRoutingInformation, err := json.Marshal(job.SourceInfo)
@@ -328,13 +343,27 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		}
 	}
 
-	return q.server.DB.Create(&record).Error
+	if err := q.server.DB.Create(&record).Error; err != nil {
+		return err
+	}
+
+	// The submission leg is persisted asynchronously (router tick), so the
+	// pickup-time UPDATE in processFax can run before the row exists. The
+	// first real leg lands strictly after intake, making this the reliable
+	// transition point: once any real leg is stored, the job is processed.
+	if resultType != "submission" {
+		q.markSubmissionProcessed(job.UUID)
+	}
+	return nil
 }
 
 // markSubmissionProcessed transitions the job's submission (intake) leg from
-// "queued" to "processed" now that the queue worker has picked the job up.
-// Idempotent: only rows still in the queued state are touched. No-op for
-// jobs without a submission leg (inbound receptions, bridges).
+// "queued" to "processed". Called when the queue worker picks the job up
+// (processFax) and — the reliable ordering point, since the submission row
+// is persisted asynchronously — when the job's first real leg is stored
+// (storeQueueFaxResult). Idempotent: only rows still in the queued state are
+// touched. No-op for jobs without a submission leg (inbound receptions,
+// bridges).
 func (q *Queue) markSubmissionProcessed(jobID uuid.UUID) {
 	now := time.Now()
 	res := q.server.DB.Model(&FaxJobResult{}).
