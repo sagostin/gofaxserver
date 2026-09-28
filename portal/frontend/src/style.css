@@ -37,7 +37,7 @@ h2 { margin-top: 0; }
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 16px; margin-bottom: 20px;
 }
-form.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
 label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 input, select {
   padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: #fff;

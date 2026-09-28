@@ -49,6 +49,7 @@ type FaxRunState struct {
 	DstTenantID uint   `json:"dst_tenant_id"`
 	Caller      string `json:"caller"`
 	Callee      string `json:"callee"`
+	Gateway     string `json:"gateway"` // arrival/source gateway (inbound) or source identifier
 
 	// progress
 	Phase          FaxPhase            `json:"phase"`
@@ -100,6 +101,7 @@ func (t *FaxTracker) Begin(job *FaxJob) {
 			DstTenantID: job.DstTenantID,
 			Caller:      job.CallerIdNumber,
 			Callee:      job.CalleeNumber,
+			Gateway:     job.SourceInfo.Source,
 			Phase:       PhaseRouted,
 			EnqueuedAt:  now,
 			UpdatedAt:   now,
@@ -111,6 +113,9 @@ func (t *FaxTracker) Begin(job *FaxJob) {
 		st.CallUUID = job.CallUUID
 		st.Caller = job.CallerIdNumber
 		st.Callee = job.CalleeNumber
+		if job.SourceInfo.Source != "" {
+			st.Gateway = job.SourceInfo.Source
+		}
 		st.Phase = PhaseRouted
 		st.UpdatedAt = now
 	}

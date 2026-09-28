@@ -11,6 +11,7 @@ interface Run {
   dst_tenant_name: string
   caller: string
   callee: string
+  gateway: string
   attempt: number
   max_attempts: number
   endpoint_type: string
@@ -64,8 +65,16 @@ function tenant(r: Run): string {
 }
 
 function endpoint(r: Run): string {
+  // Bridged calls: show both ends — arrival gateway → outbound gateway
+  // (direction). endpoint_label/value are stamped by MarkBridging.
+  if (r.phase === 'BRIDGING') {
+    const out = r.endpoint_value || '—'
+    const dir = r.endpoint_label || 'bridge'
+    return r.gateway ? `${r.gateway} → ${out} (${dir})` : `${out} (${dir})`
+  }
   const label = r.endpoint_label || r.endpoint_type
-  return r.endpoint_value ? `${label} (${r.endpoint_value})` : label || '—'
+  if (r.endpoint_value) return `${label} (${r.endpoint_value})`
+  return label || r.gateway || '—'
 }
 
 function elapsed(r: Run): string {

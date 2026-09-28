@@ -83,11 +83,21 @@ function fmtPages(l: FaxLeg): string {
 // submission (intake) legs — not a real hangup cause or outcome.
 const submissionMarker = 'WEBHOOK'
 
+// bridgePath renders both ends of a bridged call: arrival gateway → outbound
+// gateway (direction). l.gateway is the arrival/source gateway (where the call
+// came in), l.bridge_gateway the gateway the bridge dialed out on.
+function bridgePath(l: FaxLeg): string {
+  const arrival = l.gateway || '—'
+  const outbound = l.bridge_gateway || '—'
+  const dir = l.bridge_direction || 'bridge'
+  return `${arrival} → ${outbound} (${dir})`
+}
+
 // summary assembles the one-line fact list for a leg, skipping empty fields.
 function summary(l: FaxLeg): string {
   const facts: string[] = []
   if (l.is_bridge) {
-    facts.push(`${l.bridge_direction || 'bridge'} via ${l.bridge_gateway || '—'}`)
+    facts.push(bridgePath(l))
   } else if (l.gateway) {
     facts.push(`via ${l.gateway}`)
   } else if (l.endpoint_type) {
@@ -110,7 +120,8 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
   const rows: { k: string; v: string; copy?: string }[] = []
   if (l.call_uuid) rows.push({ k: 'Call UUID', v: l.call_uuid, copy: l.call_uuid })
   if (l.is_bridge) {
-    rows.push({ k: 'Bridge', v: `${l.bridge_direction || '—'} via ${l.bridge_gateway || '—'}` })
+    rows.push({ k: 'Bridge', v: bridgePath(l) })
+    rows.push({ k: 'Outbound gateway', v: l.bridge_gateway || '—' })
   } else if (l.endpoint_type) {
     rows.push({ k: 'Endpoint', v: l.endpoint_type })
   }

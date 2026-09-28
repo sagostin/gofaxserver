@@ -154,7 +154,13 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	// --- Subscribe / filter events ------------------------------------------
 	send("linger")
 	send(fmt.Sprintf("filter Unique-ID %s", channelUUID.String()))
-	send("event plain CHANNEL_CALLSTATE CUSTOM spandsp::rxfaxnegociateresult spandsp::rxfaxpageresult spandsp::rxfaxresult")
+	// CHANNEL_CALLSTATE carries the hangup state; CHANNEL_BRIDGE/CHANNEL_HANGUP
+	// carry the full channel-variable dump — required for upstream bridge
+	// gateway attribution, since the winning b-leg's gateway tag
+	// (gofax_bridge_gw, exported to the a-leg via export_vars on answer) only
+	// surfaces on events that include channel variables. Bridged calls run no
+	// fax app, so no spandsp custom events exist for them.
+	send("event plain CHANNEL_CALLSTATE CHANNEL_BRIDGE CHANNEL_HANGUP CUSTOM spandsp::rxfaxnegociateresult spandsp::rxfaxpageresult spandsp::rxfaxresult")
 
 	// --- Extract caller/callee and context -----------------------------------
 	var (
@@ -496,6 +502,22 @@ EventLoop:
 	}
 
 	bridgeEnd = time.Now()
+
+	// Fallback gateway attribution for upstream bridges: if the winning b-leg's
+	// gateway tag never surfaced on an event (e.g. CHANNEL_BRIDGE missed), ask
+	// FreeSWITCH directly. Best effort — the channel may already be gone
+	// (uuid_getvar answers -ERR, surfaced as an error), in which case the
+	// "upstream" placeholder is kept.
+	if enableBridge && bridgeDirection == "upstream" && bridgeGateway == "upstream" {
+		if resp, err := c.Send(fmt.Sprintf("api uuid_getvar %s %s", channelUUID, bridgeGatewayTagVar)); err == nil {
+			if gw := strings.TrimSpace(resp.Body); gw != "" {
+				logf(logrus.InfoLevel, "Upstream bridge gateway resolved via uuid_getvar: %s",
+					map[string]interface{}{"uuid": channelUUID.String(), "gateway": gw}, gw)
+				bridgeGateway = gw
+				e.server.FaxTracker.MarkBridging(faxjob.UUID, bridgeDirection, bridgeGateway)
+			}
+		}
+	}
 
 	// --- Feed the outcome into the fax policy engine -------------------------
 	if !enableBridge {

@@ -292,6 +292,7 @@ type FaxRunState struct {
 	DstTenantID   uint      `json:"dst_tenant_id"`
 	Caller        string    `json:"caller"`
 	Callee        string    `json:"callee"`
+	Gateway       string    `json:"gateway"` // arrival/source gateway (inbound/bridge)
 	Attempt       int       `json:"attempt"`
 	MaxAttempts   int       `json:"max_attempts"`
 	EndpointType  string    `json:"endpoint_type"`
