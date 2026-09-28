@@ -461,10 +461,24 @@ EventLoop:
 				result.AddEvent(ev)
 
 				// Upstream-direction bridges dial ALL upstream gateways as a
-				// failover list: learn which one actually answered from the
-				// per-leg export_vars tag (surfaced on the a-leg once bridged).
+				// failover list: learn which one actually answered. The gateway
+				// tag (gofax_bridge_gw) is set on the b-leg(s), NOT on the a-leg
+				// this connection is filtered to — so read it off the winning
+				// b-leg directly: CHANNEL_BRIDGE carries Other-Leg-Unique-Id,
+				// and the b-leg is alive and tagged at that moment (same
+				// pattern as the outbound path, which reads the tag off the
+				// originated gateway leg's own events). The exported a-leg
+				// variable is kept as a zero-cost fast path.
 				if bridgeDirection == "upstream" && bridgeGateway == "upstream" {
-					if gw := ev.Get("Variable_" + bridgeGatewayTagVar); gw != "" {
+					gw := ev.Get("Variable_" + bridgeGatewayTagVar)
+					if gw == "" && ev.Get("Event-Name") == "CHANNEL_BRIDGE" {
+						if bLeg := ev.Get("Other-Leg-Unique-Id"); bLeg != "" {
+							if resp, err := c.Send(fmt.Sprintf("api uuid_getvar %s %s", bLeg, bridgeGatewayTagVar)); err == nil {
+								gw = strings.TrimSpace(resp.Body)
+							}
+						}
+					}
+					if gw != "" {
 						logf(logrus.InfoLevel, "Upstream bridge answered via gateway %s",
 							map[string]interface{}{"uuid": channelUUID.String(), "gateway": gw}, gw)
 						bridgeGateway = gw
