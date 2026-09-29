@@ -683,7 +683,13 @@ func (s *Server) adminDeleteNumber(ctx iris.Context) {
 // The portal destination is always present for orgs with a service account,
 // even with no assigned users. Only active users with an email and
 // email_notify enabled are included. Custom segments duplicating a derived
-// one are dropped so the output is deterministic.
+// one are dropped so the output is deterministic. Assigned users whose
+// email is also a custom email_full recipient are dropped from the derived
+// email_report segment — email_full is a superset (report plus the original
+// fax), so the report-only mail would be pure duplication. Tenant-level
+// email_full (org TenantNotify) is intentionally not consulted here:
+// gofaxserver applies the same override after merging number and tenant
+// notify strings, which is the only place that sees both.
 // db is usually s.DB, or an open transaction whose uncommitted user /
 // assignment changes the computation must see.
 func (s *Server) computeNotify(db *gorm.DB, numberID uint, svcUsername, customNotify string) string {
@@ -693,6 +699,7 @@ func (s *Server) computeNotify(db *gorm.DB, numberID uint, svcUsername, customNo
 		Joins("JOIN user_numbers ON user_numbers.user_id = portal_users.id").
 		Where("user_numbers.number_id = ? AND portal_users.active = ? AND portal_users.email_notify = ? AND portal_users.email <> ''", numberID, true, true).
 		Distinct().Order("portal_users.email ASC").Pluck("portal_users.email", &emails)
+	emails = filterDerivedReportEmails(emails, customNotify)
 	if len(emails) > 0 {
 		dests = append(dests, "email_report->"+strings.Join(emails, ";"))
 	}
@@ -700,6 +707,47 @@ func (s *Server) computeNotify(db *gorm.DB, numberID uint, svcUsername, customNo
 		dests = append(dests, "portal->"+svcUsername)
 	}
 	return mergeNotifySegments(dests, customNotify)
+}
+
+// emailFullRecipients returns the lowercase recipient set of every
+// email_full segment in a (normalized) custom notify string. Malformed input
+// yields an empty set — normalization happens at write time, and a
+// hand-edited row must never break a resync.
+func emailFullRecipients(customNotify string) map[string]bool {
+	out := map[string]bool{}
+	custom, err := normalizeCustomNotify(customNotify)
+	if err != nil || custom == "" {
+		return out
+	}
+	for _, seg := range strings.Split(custom, ",") {
+		typ, dest, found := strings.Cut(seg, "->")
+		if !found || strings.TrimSpace(typ) != "email_full" {
+			continue
+		}
+		for _, r := range strings.Split(dest, ";") {
+			if r = strings.ToLower(strings.TrimSpace(r)); r != "" {
+				out[r] = true
+			}
+		}
+	}
+	return out
+}
+
+// filterDerivedReportEmails drops derived email_report recipients that are
+// also custom email_full recipients (case-insensitive): those users already
+// get the report as part of the full fax email.
+func filterDerivedReportEmails(emails []string, customNotify string) []string {
+	full := emailFullRecipients(customNotify)
+	if len(full) == 0 {
+		return emails
+	}
+	out := make([]string, 0, len(emails))
+	for _, e := range emails {
+		if !full[strings.ToLower(strings.TrimSpace(e))] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // mergeNotifySegments appends the normalized custom segments to the derived

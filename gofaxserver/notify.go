@@ -325,11 +325,16 @@ func fitText(pdf *fpdf.Fpdf, text string, width float64) string {
 // processNotifyDestinations resolves the notify destinations for a completed
 // fax job. Number-level and tenant-level notify strings are MERGED (both
 // fire) for the source side (sender receipts) and the destination side
-// (recipient receipts), with duplicates removed by type+destination. The
-// number lookup is attempted even when the tenant is unresolved, so a
-// tenant-map miss (e.g. unresolvable tenant id) can never silently suppress
-// a number's notify. Every decision is logged: a silently empty result here
-// was a recurring production failure mode with zero log trail.
+// (recipient receipts), with duplicates removed by type+destination. Two
+// post-merge filters then apply: recipients covered by an email_full
+// destination are stripped from email_report destinations (email_full is a
+// superset — report plus the original fax), and for bridged calls all email
+// destination types are dropped (a bridge carries no real fax status) while
+// portal/webhook destinations still fire. The number lookup is attempted
+// even when the tenant is unresolved, so a tenant-map miss (e.g.
+// unresolvable tenant id) can never silently suppress a number's notify.
+// Every decision is logged: a silently empty result here was a recurring
+// production failure mode with zero log trail.
 func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error) {
 	var notifyDestinations []NotifyDestination
 
@@ -423,6 +428,72 @@ func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error
 		})
 	}
 
+	// email_full override: any recipient covered by an email_full destination
+	// is stripped from email_report destinations — email_full carries the same
+	// report PLUS the original fax, so the report-only mail would be pure
+	// duplication. email_full_failure deliberately does NOT suppress: it only
+	// fires on total failure, so suppressing email_report would silence the
+	// address's success receipts.
+	fullRecipients := map[string]bool{}
+	for _, d := range deduped {
+		if d.Type == "email_full" {
+			for _, r := range splitEmailRecipients(d.Destination) {
+				fullRecipients[strings.ToLower(r)] = true
+			}
+		}
+	}
+	if len(fullRecipients) > 0 {
+		filtered := make([]NotifyDestination, 0, len(deduped))
+		for _, d := range deduped {
+			if d.Type != "email_report" && d.Type != "email" {
+				filtered = append(filtered, d)
+				continue
+			}
+			var kept, suppressed []string
+			for _, r := range splitEmailRecipients(d.Destination) {
+				if fullRecipients[strings.ToLower(r)] {
+					suppressed = append(suppressed, r)
+				} else {
+					kept = append(kept, r)
+				}
+			}
+			if len(suppressed) > 0 {
+				logf(logrus.InfoLevel, "email_report recipients suppressed by email_full", map[string]interface{}{
+					"suppressed": suppressed, "kept": kept,
+				})
+			}
+			if len(kept) > 0 {
+				d.Destination = strings.Join(kept, ";")
+				filtered = append(filtered, d)
+			}
+		}
+		deduped = filtered
+	}
+
+	// Bridged calls never carry real fax status (no pages, no result text —
+	// the outcome is inferred from the SIP hangup), so email notifications
+	// for them are noise. Portal status pushes and webhooks still fire: the
+	// portal needs the outcome to complete its job record, and webhooks are
+	// deliberate operator configuration.
+	if f.IsBridge {
+		filtered := make([]NotifyDestination, 0, len(deduped))
+		var dropped []string
+		for _, d := range deduped {
+			switch d.Type {
+			case "email", "email_report", "email_full", "email_full_failure":
+				dropped = append(dropped, d.Type)
+			default:
+				filtered = append(filtered, d)
+			}
+		}
+		if len(dropped) > 0 {
+			logf(logrus.InfoLevel, "bridged call: suppressing email notify destinations", map[string]interface{}{
+				"dropped": dropped,
+			})
+		}
+		deduped = filtered
+	}
+
 	logf(logrus.InfoLevel, "notify destination resolution complete", map[string]interface{}{
 		"total": len(deduped), "types": destinationTypeCounts(deduped),
 	})
@@ -498,6 +569,22 @@ func destinationTypeCounts(destinations []NotifyDestination) map[string]int {
 		counts[d.Type]++
 	}
 	return counts
+}
+
+// splitEmailRecipients splits a notify email destination on ';' or ',' (the
+// same separators SendEmailWithAttachment accepts), trims spaces, and drops
+// empty tokens.
+func splitEmailRecipients(dest string) []string {
+	recipients := strings.FieldsFunc(dest, func(r rune) bool {
+		return r == ';' || r == ','
+	})
+	out := make([]string, 0, len(recipients))
+	for _, r := range recipients {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // SendEmailWithAttachment sends an email with a plain text body and a file attachment via SMTP.

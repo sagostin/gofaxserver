@@ -111,6 +111,40 @@ func TestNormalizeCustomNotify(t *testing.T) {
 	}
 }
 
+func TestFilterDerivedReportEmails(t *testing.T) {
+	emails := []string{"alice@acme.tld", "bob@acme.tld"}
+
+	// A custom email_full covering a derived recipient drops it from the
+	// report-only list (email_full already carries the report).
+	got := filterDerivedReportEmails(emails, "email_full->alice@acme.tld")
+	if len(got) != 1 || got[0] != "bob@acme.tld" {
+		t.Errorf("partial overlap: got %v", got)
+	}
+
+	// Matching is case-insensitive and tolerant of spacing.
+	got = filterDerivedReportEmails(emails, " email_full-> Alice@Acme.tld ; ops@acme.tld ")
+	if len(got) != 1 || got[0] != "bob@acme.tld" {
+		t.Errorf("case/spacing: got %v", got)
+	}
+
+	// Full overlap empties the list (computeNotify then skips the segment).
+	if got := filterDerivedReportEmails(emails, "email_full->alice@acme.tld;bob@acme.tld"); len(got) != 0 {
+		t.Errorf("full overlap: got %v", got)
+	}
+
+	// No email_full custom (or none at all) leaves the list untouched.
+	for _, custom := range []string{"", "webhook->https://hooks/x", "email_full->ops@acme.tld", "email_full_failure->alice@acme.tld"} {
+		if got := filterDerivedReportEmails(emails, custom); len(got) != 2 {
+			t.Errorf("custom %q must not filter derived emails, got %v", custom, got)
+		}
+	}
+
+	// Malformed custom strings never break a resync.
+	if got := filterDerivedReportEmails(emails, "bad-segment"); len(got) != 2 {
+		t.Errorf("malformed custom: got %v", got)
+	}
+}
+
 func TestMergeNotifySegments(t *testing.T) {
 	derived := []string{"email_report->alice@acme.tld", "portal->svc_acme"}
 

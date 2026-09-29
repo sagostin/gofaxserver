@@ -363,6 +363,147 @@ func TestProcessNotifyDestinationsNone(t *testing.T) {
 	}
 }
 
+// An email_full destination overrides email_report for the same recipient:
+// email_full carries the same report plus the original fax, so the
+// report-only mail would be pure duplication.
+func TestProcessNotifyDestinationsEmailFullOverridesReport(t *testing.T) {
+	q := newNotifyTestQueue(
+		map[uint]*Tenant{1: {ID: 1, Name: "acme"}},
+		map[string]*TenantNumber{
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->user@acme.com,email_full->user@acme.com"},
+		},
+	)
+	dests, err := q.processNotifyDestinations(notifyJob(1, 0, "5551234567", "8005559999"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dests) != 1 || dests[0].Type != "email_full" {
+		t.Fatalf("expected email_report to be fully suppressed by email_full, got %+v", dests)
+	}
+}
+
+// A partial overlap keeps email_report for the uncovered recipients only.
+func TestProcessNotifyDestinationsEmailFullPartialOverride(t *testing.T) {
+	q := newNotifyTestQueue(
+		map[uint]*Tenant{1: {ID: 1, Name: "acme"}},
+		map[string]*TenantNumber{
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->user@acme.com;ops@acme.com,email_full->ops@acme.com"},
+		},
+	)
+	dests, err := q.processNotifyDestinations(notifyJob(1, 0, "5551234567", "8005559999"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dests) != 2 {
+		t.Fatalf("expected 2 destinations, got %+v", dests)
+	}
+	report := findDest(dests, "email_report")
+	if report == nil || report.Destination != "user@acme.com" {
+		t.Fatalf("expected email_report kept with only the uncovered recipient, got %+v", dests)
+	}
+}
+
+// No overlap: email_report and email_full both fire for their recipients.
+func TestProcessNotifyDestinationsEmailFullNoOverlap(t *testing.T) {
+	q := newNotifyTestQueue(
+		map[uint]*Tenant{1: {ID: 1, Name: "acme"}},
+		map[string]*TenantNumber{
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->user@acme.com,email_full->ops@acme.com"},
+		},
+	)
+	dests, err := q.processNotifyDestinations(notifyJob(1, 0, "5551234567", "8005559999"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dests) != 2 || findDest(dests, "email_report") == nil || findDest(dests, "email_full") == nil {
+		t.Fatalf("expected both destinations to fire, got %+v", dests)
+	}
+}
+
+// email_full_failure never suppresses email_report: it only fires on total
+// failure, so suppressing would silence the address's success receipts.
+func TestProcessNotifyDestinationsEmailFullFailureDoesNotOverride(t *testing.T) {
+	q := newNotifyTestQueue(
+		map[uint]*Tenant{1: {ID: 1, Name: "acme", Notify: "email_full_failure->ops@acme.com"}},
+		map[string]*TenantNumber{
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->ops@acme.com"},
+		},
+	)
+	dests, err := q.processNotifyDestinations(notifyJob(1, 0, "5551234567", "8005559999"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dests) != 2 || findDest(dests, "email_report") == nil || findDest(dests, "email_full_failure") == nil {
+		t.Fatalf("expected email_report to survive email_full_failure, got %+v", dests)
+	}
+}
+
+// Recipient matching is case-insensitive; the surviving destination keeps
+// its original casing.
+func TestProcessNotifyDestinationsEmailFullOverrideCaseInsensitive(t *testing.T) {
+	q := newNotifyTestQueue(
+		map[uint]*Tenant{1: {ID: 1, Name: "acme"}},
+		map[string]*TenantNumber{
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->User@Acme.com,email_full->user@acme.COM"},
+		},
+	)
+	dests, err := q.processNotifyDestinations(notifyJob(1, 0, "5551234567", "8005559999"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dests) != 1 || dests[0].Type != "email_full" {
+		t.Fatalf("expected case-insensitive suppression, got %+v", dests)
+	}
+}
+
+// Tenant-level email_full overrides a number-level email_report — the
+// cross-source case only the gofaxserver merge can see.
+func TestProcessNotifyDestinationsTenantEmailFullOverridesNumberReport(t *testing.T) {
+	q := newNotifyTestQueue(
+		map[uint]*Tenant{1: {ID: 1, Name: "acme", Notify: "email_full->ops@acme.com"}},
+		map[string]*TenantNumber{
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->ops@acme.com;user@acme.com,portal->svc_acme"},
+		},
+	)
+	dests, err := q.processNotifyDestinations(notifyJob(1, 0, "5551234567", "8005559999"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dests) != 3 {
+		t.Fatalf("expected 3 destinations (email_report survivor, email_full, portal), got %+v", dests)
+	}
+	report := findDest(dests, "email_report")
+	if report == nil || report.Destination != "user@acme.com" {
+		t.Fatalf("expected email_report kept with only user@acme.com, got %+v", dests)
+	}
+}
+
+// Bridged calls carry no real fax status, so email destinations are dropped
+// while portal and webhook destinations still fire.
+func TestProcessNotifyDestinationsBridgeSuppressesEmail(t *testing.T) {
+	q := newNotifyTestQueue(
+		map[uint]*Tenant{1: {ID: 1, Name: "acme", Notify: "email_full_failure->ops@acme.com"}},
+		map[string]*TenantNumber{
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->user@acme.com,email_full->ops@acme.com,portal->svc_acme,webhook->https://hooks/x"},
+		},
+	)
+	job := notifyJob(1, 0, "5551234567", "8005559999")
+	job.IsBridge = true
+	dests, err := q.processNotifyDestinations(job)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, d := range dests {
+		switch d.Type {
+		case "email", "email_report", "email_full", "email_full_failure":
+			t.Fatalf("bridged call must not dispatch email destinations, got %+v", dests)
+		}
+	}
+	if findDest(dests, "portal") == nil || findDest(dests, "webhook") == nil {
+		t.Fatalf("portal and webhook destinations must survive bridge suppression, got %+v", dests)
+	}
+}
+
 // GenerateFaxResultsPDF must not panic for endpoint-less jobs (notify-only
 // failed receptions / bridged calls) or attempts without results.
 func TestGenerateFaxResultsPDFEndpointless(t *testing.T) {

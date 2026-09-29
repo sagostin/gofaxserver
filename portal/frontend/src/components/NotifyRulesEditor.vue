@@ -15,7 +15,7 @@ interface Rule {
 
 const TYPES = [
   { value: 'email_report', hint: 'Delivery report email (PDF report attached)', placeholder: 'ops@acme.tld' },
-  { value: 'email_full', hint: 'Full fax PDF by email', placeholder: 'ops@acme.tld' },
+  { value: 'email_full', hint: 'Full fax PDF by email — replaces report-only emails for the same address', placeholder: 'ops@acme.tld' },
   { value: 'email_full_failure', hint: 'Full fax PDF by email on failures', placeholder: 'ops@acme.tld' },
   { value: 'webhook', hint: 'JSON webhook POST', placeholder: 'https://example.com/hook' },
   { value: 'webhook_form', hint: 'Form-encoded webhook POST', placeholder: 'https://example.com/hook' },
