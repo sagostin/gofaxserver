@@ -18,6 +18,7 @@ interface InboxItem {
 const faxes = ref<InboxItem[]>([])
 const timer = ref<number | null>(null)
 const error = ref('')
+const loaded = ref(false)
 
 async function load() {
   try {
@@ -25,6 +26,8 @@ async function load() {
     error.value = ''
   } catch (e: any) {
     error.value = e.message
+  } finally {
+    loaded.value = true
   }
 }
 
@@ -70,6 +73,7 @@ function fileUrl(id: number): string {
           </tr>
         </tbody>
       </table>
+      <p v-else-if="!loaded" class="muted">Loading…</p>
       <p v-else class="muted">No received faxes yet.</p>
       <p v-if="error" class="error">{{ error }}</p>
     </div>

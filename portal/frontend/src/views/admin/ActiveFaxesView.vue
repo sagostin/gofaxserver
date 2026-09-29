@@ -27,6 +27,7 @@ const items = ref<Run[]>([])
 const active = ref(0)
 const timer = ref<number | null>(null)
 const error = ref('')
+const loaded = ref(false)
 const tenantFilter = ref('')
 const phaseFilter = ref('')
 
@@ -37,6 +38,7 @@ async function load() {
     active.value = d.active || 0
     error.value = ''
   } catch (e: any) { error.value = e.message }
+  finally { loaded.value = true }
 }
 onMounted(() => { load(); timer.value = window.setInterval(load, 3000) })
 onUnmounted(() => { if (timer.value) clearInterval(timer.value) })
@@ -133,7 +135,8 @@ function phaseBadge(phase: string): string {
           </tr>
         </tbody>
       </table>
-      <p v-else class="muted">Nothing in flight right now.</p>
+      <p v-if="!filtered.length && !loaded" class="muted">Loading…</p>
+      <p v-else-if="!filtered.length" class="muted">Nothing in flight right now.</p>
       <p v-if="error" class="error">{{ error }}</p>
     </div>
   </main>

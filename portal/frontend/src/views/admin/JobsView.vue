@@ -30,6 +30,7 @@ interface ResultGroup {
 interface ResultList { total: number; items: ResultGroup[] }
 
 const error = ref('')
+const loaded = ref(false)
 
 // --- all fax results state (grouped by job UUID) ---
 const groups = ref<ResultGroup[]>([])
@@ -72,6 +73,7 @@ async function loadAllResults() {
     expandedGroups.value = {}
     error.value = ''
   } catch (e: any) { error.value = e.message }
+  finally { loaded.value = true }
 }
 
 onMounted(() => { loadOrgsTenants(); loadAllResults() })
@@ -241,7 +243,8 @@ async function copyUuid(u: string) {
           </template>
         </tbody>
       </table>
-      <p v-if="!groups.length" class="muted">No fax jobs match.</p>
+      <p v-if="!loaded" class="muted">Loading…</p>
+      <p v-else-if="!groups.length" class="muted">No fax jobs match.</p>
       <div v-if="total > pageSize" class="inline" style="margin-top:10px; align-items:center">
         <button class="secondary" :disabled="page === 0" @click="prevPage">← Prev</button>
         <span class="muted">Page {{ page + 1 }} of {{ Math.ceil(total / pageSize) }} ({{ total }} jobs)</span>
