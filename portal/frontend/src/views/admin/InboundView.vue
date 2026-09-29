@@ -29,7 +29,8 @@ const numberSearch = ref('')
 const page = ref(0)
 const pageSize = 50
 const error = ref('')
-// Expanded attempt rows, keyed by inbox fax id. null = expanded but failed.
+const loaded = ref(false)
+// Expanded attempt rows, keyed by inbox fax id. null = expanded, attempts fetch in flight.
 const attempts = ref<Record<number, FaxLeg[] | null>>({})
 
 async function load() {
@@ -44,6 +45,7 @@ async function load() {
     attempts.value = {}
     error.value = ''
   } catch (e: any) { error.value = e.message }
+  finally { loaded.value = true }
 }
 onMounted(async () => {
   await load()
@@ -143,13 +145,15 @@ function fmtSize(bytes: number): string {
             </tr>
             <tr v-if="f.id in attempts">
               <td colspan="8">
-                <FaxLegList v-if="attempts[f.id]?.length" :legs="attempts[f.id]!" />
+                <p v-if="attempts[f.id] === null" class="muted">Loading…</p>
+                <FaxLegList v-else-if="attempts[f.id]?.length" :legs="attempts[f.id]!" />
                 <p v-else class="muted">No upstream attempts recorded for this job.</p>
               </td>
             </tr>
           </template>
         </tbody>
       </table>
+      <p v-else-if="!loaded" class="muted">Loading…</p>
       <p v-else class="muted">No inbound faxes stored.</p>
       <div v-if="total > pageSize" class="inline" style="margin-top:10px; align-items:center">
         <button class="secondary" :disabled="page === 0" @click="prevPage">← Prev</button>
