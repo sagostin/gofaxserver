@@ -19,13 +19,13 @@ package api
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"gofaxportal/internal/convert"
 	"gofaxportal/internal/crypto"
 	"gofaxportal/internal/fsclient"
 	"gofaxportal/internal/models"
@@ -60,47 +60,44 @@ func (s *Server) handleSendFax(ctx iris.Context) {
 		return
 	}
 
-	file, fh, err := ctx.FormFile("file")
-	if err != nil {
-		ctx.StatusCode(iris.StatusBadRequest)
-		ctx.JSON(map[string]string{"error": "file field required"})
-		return
-	}
-	defer file.Close()
-
-	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	if !allowedExts[ext] {
-		ctx.StatusCode(iris.StatusBadRequest)
-		ctx.JSON(map[string]string{"error": "unsupported file type (pdf, tif, tiff only)"})
-		return
-	}
-	maxBytes := s.Cfg.UploadMaxMB << 20
-	if fh.Size > maxBytes {
-		ctx.StatusCode(iris.StatusRequestEntityTooLarge)
-		ctx.JSON(map[string]string{"error": "file too large"})
-		return
-	}
-	head := make([]byte, 512)
-	n, _ := io.ReadFull(file, head)
-	ct := http.DetectContentType(head[:n])
-	if n > 0 && !allowedMIMEs[ct] {
-		ctx.StatusCode(iris.StatusBadRequest)
-		ctx.JSON(map[string]string{"error": "unsupported content type: " + ct})
-		return
-	}
-	data := make([]byte, 0, fh.Size)
-	data = append(data, head[:n]...)
-	extra, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
-	if err != nil {
-		ctx.StatusCode(iris.StatusInternalServerError)
-		ctx.JSON(map[string]string{"error": "failed reading upload"})
-		return
-	}
-	data = append(data, extra...)
-	if int64(len(data)) > maxBytes {
-		ctx.StatusCode(iris.StatusRequestEntityTooLarge)
-		ctx.JSON(map[string]string{"error": "file too large"})
-		return
+	// Two sources for the document:
+	//  - prepared_id: output of POST /faxes/prepare (converted, previewed,
+	//    optional cover page). Always a normalized PDF.
+	//  - file: raw one-shot upload (pdf/tiff only), the legacy path.
+	var filename string
+	var data []byte
+	var prepared *convert.PreparedDoc
+	if pid := strings.TrimSpace(ctx.FormValue("prepared_id")); pid != "" {
+		prepared = s.loadOwnedPrepared(ctx, pid, userID)
+		if prepared == nil {
+			return
+		}
+		b, err := prepared.ReadPDF()
+		if err != nil {
+			ctx.StatusCode(iris.StatusInternalServerError)
+			ctx.JSON(map[string]string{"error": "failed reading prepared document"})
+			return
+		}
+		data = b
+		base := strings.TrimSuffix(filepath.Base(prepared.Filename), filepath.Ext(prepared.Filename))
+		filename = base + ".pdf"
+	} else {
+		f, d, ok := s.readUpload(ctx)
+		if !ok {
+			return
+		}
+		ext := strings.ToLower(filepath.Ext(f))
+		if !allowedExts[ext] {
+			ctx.StatusCode(iris.StatusBadRequest)
+			ctx.JSON(map[string]string{"error": "unsupported file type (pdf, tif, tiff only — use the prepare flow for other formats)"})
+			return
+		}
+		if ct := http.DetectContentType(d); !allowedMIMEs[ct] {
+			ctx.StatusCode(iris.StatusBadRequest)
+			ctx.JSON(map[string]string{"error": "unsupported content type: " + ct})
+			return
+		}
+		filename, data = f, d
 	}
 
 	caller := sanitizeNumber(ctx.FormValue("caller_number"))
@@ -145,7 +142,7 @@ func (s *Server) handleSendFax(ctx iris.Context) {
 		return
 	}
 
-	jobUUID, ferr := s.FX.SendFax(org.SvcUsername, svcPass, fh.Filename, data, caller, callee)
+	jobUUID, ferr := s.FX.SendFax(org.SvcUsername, svcPass, filename, data, caller, callee)
 	if ferr != nil {
 		status := iris.StatusInternalServerError
 		var ae *fsclient.APIError
@@ -164,7 +161,7 @@ func (s *Server) handleSendFax(ctx iris.Context) {
 		UserID:           userID,
 		CallerNumber:     caller,
 		CalleeNumber:     callee,
-		OriginalFilename: filepath.Base(fh.Filename),
+		OriginalFilename: filepath.Base(filename),
 		Status:           models.JobQueued,
 		SubmittedAt:      time.Now().UTC(),
 	}
@@ -175,8 +172,13 @@ func (s *Server) handleSendFax(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "fax submitted upstream but failed to record job", "job_uuid": jobUUID})
 		return
 	}
+	// The prepared copy has been handed off; don't leave it on disk until TTL.
+	if prepared != nil {
+		_ = s.Converter.Delete(prepared.ID)
+	}
 	s.audit(ctx, "FAX_SEND", jobUUID, map[string]any{
 		"caller": caller, "callee": callee, "filename": job.OriginalFilename, "bytes": len(data),
+		"prepared": prepared != nil,
 	})
 	ctx.StatusCode(iris.StatusCreated)
 	ctx.JSON(job)

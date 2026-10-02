@@ -27,6 +27,7 @@ import (
 
 	"gofaxportal/internal/auth"
 	"gofaxportal/internal/config"
+	"gofaxportal/internal/convert"
 	"gofaxportal/internal/crypto"
 	"gofaxportal/internal/fsclient"
 	"gofaxportal/internal/models"
@@ -37,15 +38,17 @@ import (
 )
 
 type Server struct {
-	Cfg        *config.Config
-	DB         *gorm.DB
-	Auth       *auth.Service
-	Box        *crypto.Box
-	FaxBox     *crypto.Box // domain-separated box sealing received fax PDFs at rest
-	TOTPBox    *crypto.Box // domain-separated box sealing user TOTP secrets at rest
-	FX         *fsclient.Client
-	LoginLimit *auth.RateLimiter
-	SendLimit  *auth.RateLimiter
+	Cfg          *config.Config
+	DB           *gorm.DB
+	Auth         *auth.Service
+	Box          *crypto.Box
+	FaxBox       *crypto.Box // domain-separated box sealing received fax PDFs at rest
+	TOTPBox      *crypto.Box // domain-separated box sealing user TOTP secrets at rest
+	FX           *fsclient.Client
+	Converter    *convert.Converter
+	LoginLimit   *auth.RateLimiter
+	SendLimit    *auth.RateLimiter
+	PrepareLimit *auth.RateLimiter
 }
 
 func New(cfg *config.Config, db *gorm.DB, authSvc *auth.Service, box, faxBox *crypto.Box, fx *fsclient.Client) *Server {
@@ -54,15 +57,26 @@ func New(cfg *config.Config, db *gorm.DB, authSvc *auth.Service, box, faxBox *cr
 		panic("totp encryption key: " + err.Error())
 	}
 	return &Server{
-		Cfg:        cfg,
-		DB:         db,
-		Auth:       authSvc,
-		Box:        box,
-		FaxBox:     faxBox,
-		TOTPBox:    totpBox,
-		FX:         fx,
-		LoginLimit: auth.NewRateLimiter(time.Minute),
-		SendLimit:  auth.NewRateLimiter(time.Hour),
+		Cfg:     cfg,
+		DB:      db,
+		Auth:    authSvc,
+		Box:     box,
+		FaxBox:  faxBox,
+		TOTPBox: totpBox,
+		FX:      fx,
+		Converter: convert.New(convert.Config{
+			Enabled:        cfg.Converter.Enabled,
+			GotenbergURL:   cfg.Converter.GotenbergURL,
+			GhostscriptBin: cfg.Converter.GhostscriptBin,
+			ImageMagickBin: cfg.Converter.ImageMagickBin,
+			TempDir:        cfg.Converter.TempDir,
+			PrepareTTL:     time.Duration(cfg.Converter.PrepareTTLMin) * time.Minute,
+			MaxPages:       cfg.Converter.MaxPages,
+			DefaultFitMode: convert.FitMode(cfg.Converter.DefaultFitMode),
+		}),
+		LoginLimit:   auth.NewRateLimiter(time.Minute),
+		SendLimit:    auth.NewRateLimiter(time.Hour),
+		PrepareLimit: auth.NewRateLimiter(time.Hour),
 	}
 }
 
@@ -111,6 +125,9 @@ func (s *Server) BuildApp() *iris.Application {
 	userParty.Get("/faxes", s.handleListJobs)
 	userParty.Get("/faxes/{id:uint}", s.handleGetJob)
 	userParty.Post("/faxes", s.handleSendFax)
+	userParty.Post("/faxes/prepare", s.handlePrepareFax)
+	userParty.Get("/faxes/prepare/{id}/preview/{page:int}", s.handleGetPreparedPreview)
+	userParty.Delete("/faxes/prepare/{id}", s.handleDeletePrepared)
 	userParty.Get("/inbox", s.handleListInbox)
 	userParty.Get("/inbox/{id:uint}", s.handleGetInbound)
 	userParty.Get("/inbox/{id:uint}/file", s.handleGetInboundFile)

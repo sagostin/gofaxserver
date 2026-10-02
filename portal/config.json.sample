@@ -22,6 +22,17 @@
   "upload_max_mb": 20,
   "login_rate_per_minute": 5,
   "send_rate_per_hour": 120,
+  "prepare_rate_per_hour": 240,
+  "converter": {
+    "enabled": true,
+    "gotenberg_url": "http://127.0.0.1:3200",
+    "ghostscript_bin": "gs",
+    "imagemagick_bin": "magick",
+    "temp_dir": "",
+    "prepare_ttl_minutes": 60,
+    "max_pages": 50,
+    "default_fit_mode": "constrain"
+  },
   "bootstrap_admin": {
     "username": "admin",
     "password": "",

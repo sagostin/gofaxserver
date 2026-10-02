@@ -340,8 +340,52 @@ Endpoints** with the `direct` scope source.
 | `internal/crypto` | AES-GCM secret sealing |
 | `internal/fsclient` | typed gofaxserver API client (incl. reconciliation lists) |
 | `internal/api` | Iris HTTP API + RBAC middleware + audit |
+| `internal/convert` | portal-side docx/doc/png/jpeg/tiff → PDF, cover pages, B&W previews, prepared-doc store |
 | `internal/poller` | job status reconciliation loop |
 | `frontend/` | Vue 3 + Vite SPA (embedded into the binary via `go:embed`) |
+
+## Document conversion, previews & cover pages
+
+The portal accepts **PDF, TIFF, PNG, JPEG, DOCX and DOC** uploads for sending
+and converts everything to a normalized PDF **portal-side** — gofaxserver is
+untouched and still receives only PDF/TIFF via its unchanged `/fax/send`
+pipeline. The send flow is two-step: **Prepare preview → review → Send**.
+
+Engines per input type (`internal/convert`):
+
+| Input | Engine |
+|-------|--------|
+| `.png` / `.jpg` / `.jpeg` | pure-Go rasterization onto a US Letter page (1728×2156, fax geometry), embedded via fpdf |
+| `.docx` / `.doc` | **Gotenberg** sidecar container (LibreOffice), loopback-only |
+| `.tif` / `.tiff` | ImageMagick (multi-page CCITT fax TIFFs), pinned to 204×196 dpi |
+| `.pdf` | pass-through (validated + page-counted) |
+
+- **Image fit modes** — `constrain` (default: preserve aspect, white
+  letterbox), `fill` (cover the page, crop overflow), `stretch` (distort to
+  exactly fill).
+- **Cover page** — optional; fill in To / From / Subject / Comments and a
+  Letter cover sheet is generated (fpdf) and prepended (pdfcpu merge) with an
+  automatic "pages: N (including this cover page)" line.
+- **Fax-accurate preview** — Ghostscript renders every page to B&W PNG at
+  204×196 dpi, the same geometry gofaxserver's own tiffg3 conversion uses, so
+  what the user sees is what the receiving fax machine prints. Preview
+  rendering is best-effort: if `gs` is unavailable the document is still
+  sendable, just without previews.
+- **Lifecycle** — prepared documents live on disk under `converter.temp_dir`
+  (mode 0700, owner-only files) and are deleted on send, on explicit discard,
+  or by a sweeper after `converter.prepare_ttl_minutes` (default 60). Every
+  access is owner-checked; `max_pages` (default 50) caps converted documents.
+
+Gotenberg runs on bridge networking with its API published on
+`127.0.0.1:${GOTENBERG_PORT:-3200}` only (see `portal/docker-compose.yml`) —
+LibreOffice is the component that parses untrusted office files, so it stays
+outside the portal process and image. Preparing is separately rate-limited
+(`PORTAL_PREPARE_RATE_PER_HOUR`, default 240/h/user) and every prepare,
+failure, discard and send is audit-logged.
+
+The one-shot `POST /portal/api/faxes` with a raw `file` field still works for
+PDF/TIFF exactly as before (back-compat); other formats must go through the
+prepare flow.
 
 ## Configuration
 
@@ -358,6 +402,15 @@ Copy `config.json.sample` to `config.json` or configure purely via env vars:
 | `PORTAL_ADMIN_API_KEY` | required; matches gofaxserver `web.api_key` |
 | `PORTAL_INBOUND_API_KEY` | optional pre-shared key for inbound fax delivery; must match gofaxserver `portal.api_key` |
 | `PORTAL_BOOTSTRAP_USERNAME/PASSWORD/EMAIL` | creates the first admin when DB empty |
+| `PORTAL_CONVERTER_ENABLED` | portal-side conversion pipeline (default `true`) |
+| `PORTAL_GOTENBERG_URL` | Gotenberg sidecar for docx/doc (default `http://127.0.0.1:3200`) |
+| `GOTENBERG_PORT` | loopback port the Gotenberg container publishes (default `3200`) |
+| `PORTAL_GS_BIN` / `PORTAL_MAGICK_BIN` | binary paths for previews / tiff→pdf (defaults `gs`, `magick`) |
+| `PORTAL_CONVERTER_TEMP_DIR` | prepared-doc storage (default `<os-tmp>/gofaxportal-convert`) |
+| `PORTAL_CONVERTER_TTL_MINUTES` | prepared-doc lifetime (default `60`) |
+| `PORTAL_CONVERTER_MAX_PAGES` | page cap after conversion (default `50`) |
+| `PORTAL_CONVERTER_DEFAULT_FIT` | image fit default: `constrain` / `fill` / `stretch` |
+| `PORTAL_PREPARE_RATE_PER_HOUR` | prepare rate limit per user (default `240`) |
 
 On first start with an empty user table and a bootstrap password set, an
 initial admin account is created.
@@ -447,9 +500,16 @@ cd .. && go build -o gofaxportal ./cmd/portal
 ./gofaxportal -c config.json
 ```
 
-Docker (host networking to match the root compose) — this starts **two**
+Host-binary installs additionally need `ghostscript` + `imagemagick` on PATH
+(previews / tiff→pdf) and, for docx/doc, a Gotenberg instance
+(`docker run -p 127.0.0.1:3200:3000 gotenberg/gotenberg:8`) pointed at by
+`converter.gotenberg_url`. Without them, PNG/JPEG conversion and sending still
+work; previews and docx/doc/tiff conversion degrade gracefully with an error.
+
+Docker (host networking to match the root compose) — this starts **three**
 containers: `gofaxportal-postgres` (its own PostgreSQL on :5433, data in
-`portal/postgres/data`) and `gofaxportal` (:8081):
+`portal/postgres/data`), `gofaxportal` (:8081) and `gofaxportal-gotenberg`
+(bridge networking, loopback-only :3200 — docx/doc conversion):
 
 ```bash
 docker compose -f portal/docker-compose.yml up -d --build
@@ -522,8 +582,14 @@ when the org requires 2FA): `POST /portal/api/auth/totp/setup`,
 `POST /portal/api/auth/totp/verify`.
 
 Fax users: `GET /portal/api/me/numbers`, `POST /portal/api/faxes` (multipart:
-`file`,`caller_number`,`callee_number`), `GET /portal/api/faxes[?status=]`,
-`GET /portal/api/faxes/{id}`, plus the inbox: `GET /portal/api/inbox`,
+either `file`,`caller_number`,`callee_number` for one-shot PDF/TIFF, or
+`prepared_id`,`caller_number`,`callee_number` from the prepare flow),
+`GET /portal/api/faxes[?status=]`, `GET /portal/api/faxes/{id}`.
+Prepare flow (conversion + preview): `POST /portal/api/faxes/prepare`
+(multipart: `file`, `fit_mode`, `cover_enabled`, `cover_to`, `cover_from`,
+`cover_subject`, `cover_comments`), `GET /portal/api/faxes/prepare/{id}/preview/{page}`
+(B&W PNG, owner-scoped), `DELETE /portal/api/faxes/prepare/{id}`;
+plus the inbox: `GET /portal/api/inbox`,
 `GET /portal/api/inbox/{id}`, `GET /portal/api/inbox/{id}/file` (decrypted
 PDF, scoped to assigned numbers).
 
@@ -610,7 +676,15 @@ revokes sessions, and forces re-enrollment at next login. Admin accounts
 - HttpOnly + SameSite=Lax cookies (enable `cookie_secure` behind TLS).
 - Per-user number allowlist enforced server-side before proxying upstream;
   gofaxserver independently enforces tenant-level ownership of caller numbers.
-- Upload validation mirrors gofaxserver (extension + magic-byte sniffing + size cap).
+- Upload validation: extension allowlist + magic-byte sniffing (extension and
+  sniffed content type must agree) + size cap on both the prepare and
+  one-shot send paths; converted output is additionally page-capped.
+- Untrusted docx/doc parsing happens only inside the Gotenberg sidecar
+  container (LibreOffice), never in the portal process; its API is published
+  on loopback only. Ghostscript/ImageMagick run with `-dSAFER` and timeouts.
+- Prepared documents are stored owner-only (0700/0600) with UUIDv4 names
+  (path traversal rejected), are owner-checked on every access, and are
+  deleted on send/discard or reaped after the TTL.
 - Login/send rate limiting; full admin audit trail.
 - Optional org-enforced TOTP 2FA (see below); pending-auth tokens are
   single-use, hashed at rest, rate-limited, and expire after 10 minutes;

@@ -38,6 +38,8 @@ services:
     depends_on:
       postgres-portal:
         condition: service_healthy
+      gotenberg:
+        condition: service_started
     environment:
       # Set false if the portal is served over plain HTTP (no TLS proxy).
       - PORTAL_COOKIE_SECURE=${PORTAL_COOKIE_SECURE:-true}
@@ -52,12 +54,29 @@ services:
       - PORTAL_ADMIN_API_KEY=${PORTAL_ADMIN_API_KEY}
       - PORTAL_BOOTSTRAP_USERNAME=${PORTAL_BOOTSTRAP_USERNAME:-admin}
       - PORTAL_BOOTSTRAP_PASSWORD=${PORTAL_BOOTSTRAP_PASSWORD}
+      # Portal-side document conversion (docx/doc via Gotenberg, previews via
+      # in-image ghostscript). Loopback only.
+      - PORTAL_CONVERTER_ENABLED=${PORTAL_CONVERTER_ENABLED:-true}
+      - PORTAL_GOTENBERG_URL=${PORTAL_GOTENBERG_URL:-http://127.0.0.1:3200}
     # Option A (env-only, default): no config file needed.
     # Option B (config file): uncomment and provide ./config.json
     #   (see config.json.sample); env vars still override file values.
     # volumes:
     #   - ./config.json:/etc/gofaxportal/config.json:ro
     network_mode: host
+    restart: always
+
+  # Gotenberg (LibreOffice) converts uploaded docx/doc to PDF for the
+  # portal's prepare flow. LibreOffice is the part that parses untrusted
+  # office documents, so it deliberately runs OUTSIDE the portal image, on
+  # bridge networking with the API published on loopback only — the
+  # host-networked portal reaches it at 127.0.0.1:${GOTENBERG_PORT:-3200} and
+  # nothing else can.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: gofaxportal-gotenberg
+    ports:
+      - "127.0.0.1:${GOTENBERG_PORT:-3200}:3000"
     restart: always
 
 # No reverse proxy here on purpose:

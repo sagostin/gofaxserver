@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -56,7 +58,13 @@ type Config struct {
 	UploadMaxMB         int64          `json:"upload_max_mb"`
 	LoginRatePerMinute  int            `json:"login_rate_per_minute"`
 	SendRatePerHour     int            `json:"send_rate_per_hour"`
+	PrepareRatePerHour  int            `json:"prepare_rate_per_hour"`
 	BootstrapAdmin      BootstrapAdmin `json:"bootstrap_admin"`
+
+	// Converter drives the portal-side document conversion pipeline
+	// (docx/doc/png/jpeg → PDF, cover pages, fax previews). gofaxserver is
+	// untouched — it still receives a plain PDF.
+	Converter Converter `json:"converter"`
 }
 
 type Database struct {
@@ -80,6 +88,18 @@ type BootstrapAdmin struct {
 	Email    string `json:"email"`
 }
 
+// Converter is the portal-side conversion pipeline config.
+type Converter struct {
+	Enabled        bool   `json:"enabled"`
+	GotenbergURL   string `json:"gotenberg_url"`   // docx/doc → PDF (LibreOffice sidecar)
+	GhostscriptBin string `json:"ghostscript_bin"` // fax-accurate B&W previews
+	ImageMagickBin string `json:"imagemagick_bin"` // tiff → PDF
+	TempDir        string `json:"temp_dir"`        // prepared docs live here until TTL
+	PrepareTTLMin  int    `json:"prepare_ttl_minutes"`
+	MaxPages       int    `json:"max_pages"`
+	DefaultFitMode string `json:"default_fit_mode"` // constrain | fill | stretch
+}
+
 func defaults() *Config {
 	return &Config{
 		Listen:              ":8081",
@@ -88,8 +108,18 @@ func defaults() *Config {
 		UploadMaxMB:         20,
 		LoginRatePerMinute:  5,
 		SendRatePerHour:     120,
+		PrepareRatePerHour:  240,
 		TrustedProxies:      []string{"127.0.0.1", "::1"},
 		BootstrapAdmin:      BootstrapAdmin{Username: "admin"},
+		Converter: Converter{
+			Enabled:        true,
+			GotenbergURL:   "http://127.0.0.1:3200",
+			GhostscriptBin: "gs",
+			ImageMagickBin: "magick",
+			PrepareTTLMin:  60,
+			MaxPages:       50,
+			DefaultFitMode: "constrain",
+		},
 	}
 }
 
@@ -163,6 +193,40 @@ func Load(path string) (*Config, error) {
 	if v := env("PORTAL_BOOTSTRAP_EMAIL"); v != "" {
 		cfg.BootstrapAdmin.Email = v
 	}
+	cv := &cfg.Converter
+	if v := env("PORTAL_CONVERTER_ENABLED"); v != "" {
+		cv.Enabled = v == "true" || v == "1"
+	}
+	if v := env("PORTAL_GOTENBERG_URL"); v != "" {
+		cv.GotenbergURL = v
+	}
+	if v := env("PORTAL_GS_BIN"); v != "" {
+		cv.GhostscriptBin = v
+	}
+	if v := env("PORTAL_MAGICK_BIN"); v != "" {
+		cv.ImageMagickBin = v
+	}
+	if v := env("PORTAL_CONVERTER_TEMP_DIR"); v != "" {
+		cv.TempDir = v
+	}
+	if v := env("PORTAL_CONVERTER_TTL_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cv.PrepareTTLMin = n
+		}
+	}
+	if v := env("PORTAL_CONVERTER_MAX_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cv.MaxPages = n
+		}
+	}
+	if v := env("PORTAL_CONVERTER_DEFAULT_FIT"); v != "" {
+		cv.DefaultFitMode = strings.ToLower(v)
+	}
+	if v := env("PORTAL_PREPARE_RATE_PER_HOUR"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.PrepareRatePerHour = n
+		}
+	}
 	if cfg.GofaxServer.BaseURL == "" {
 		cfg.GofaxServer.BaseURL = "http://127.0.0.1:8080"
 	}
@@ -177,6 +241,33 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.SendRatePerHour <= 0 {
 		cfg.SendRatePerHour = 120
+	}
+	if cfg.PrepareRatePerHour <= 0 {
+		cfg.PrepareRatePerHour = 240
+	}
+	cv = &cfg.Converter
+	if cv.GotenbergURL == "" {
+		cv.GotenbergURL = "http://127.0.0.1:3200"
+	}
+	if cv.GhostscriptBin == "" {
+		cv.GhostscriptBin = "gs"
+	}
+	if cv.ImageMagickBin == "" {
+		cv.ImageMagickBin = "magick"
+	}
+	if cv.TempDir == "" {
+		cv.TempDir = filepath.Join(os.TempDir(), "gofaxportal-convert")
+	}
+	if cv.PrepareTTLMin <= 0 {
+		cv.PrepareTTLMin = 60
+	}
+	if cv.MaxPages <= 0 {
+		cv.MaxPages = 50
+	}
+	switch cv.DefaultFitMode {
+	case "constrain", "fill", "stretch":
+	default:
+		cv.DefaultFitMode = "constrain"
 	}
 	if db.Port == "" {
 		db.Port = "5432"

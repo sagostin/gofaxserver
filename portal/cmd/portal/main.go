@@ -84,6 +84,10 @@ func main() {
 	retentionStop := make(chan struct{})
 	go retention.New(gdb).Run(retentionStop)
 
+	// Reap expired prepared documents (uploaded → converted → never sent).
+	convertStop := make(chan struct{})
+	go srv.Converter.Run(convertStop)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go func() {
@@ -91,6 +95,7 @@ func main() {
 		close(stop)
 		close(pollStop)
 		close(retentionStop)
+		close(convertStop)
 		_ = app.Shutdown(ctx)
 	}()
 

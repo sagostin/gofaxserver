@@ -16,7 +16,12 @@ COPY --from=ui /src/internal/web/dist ./internal/web/dist
 RUN CGO_ENABLED=0 go build -o /out/gofaxportal ./cmd/portal
 
 FROM alpine:3.20
-RUN adduser -D -u 10001 appuser && apk add --no-cache ca-certificates tzdata
+# ghostscript: fax-accurate B&W previews of prepared documents.
+# imagemagick: tiff → PDF normalization (multi-page CCITT fax TIFFs).
+# ttf-dejavu: fallback fonts so gs can render PDFs with non-embedded fonts.
+# docx/doc conversion is NOT here — that's the Gotenberg sidecar (compose).
+RUN adduser -D -u 10001 appuser && \
+    apk add --no-cache ca-certificates tzdata ghostscript imagemagick ttf-dejavu
 COPY --from=build /out/gofaxportal /usr/local/bin/gofaxportal
 USER appuser
 EXPOSE 8081
