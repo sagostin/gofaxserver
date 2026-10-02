@@ -44,6 +44,7 @@ type Server struct {
 	Box          *crypto.Box
 	FaxBox       *crypto.Box // domain-separated box sealing received fax PDFs at rest
 	TOTPBox      *crypto.Box // domain-separated box sealing user TOTP secrets at rest
+	PrepBox      *crypto.Box // domain-separated box sealing prepared outbound docs at rest
 	FX           *fsclient.Client
 	Converter    *convert.Converter
 	LoginLimit   *auth.RateLimiter
@@ -56,6 +57,12 @@ func New(cfg *config.Config, db *gorm.DB, authSvc *auth.Service, box, faxBox *cr
 	if err != nil {
 		panic("totp encryption key: " + err.Error())
 	}
+	// Prepared outbound documents (converted PDF + preview PNGs) are sealed
+	// at rest under their own domain-separated key, like received faxes.
+	prepBox, err := crypto.NewPrepBox(cfg.EncryptionKey)
+	if err != nil {
+		panic("prep encryption key: " + err.Error())
+	}
 	return &Server{
 		Cfg:     cfg,
 		DB:      db,
@@ -63,13 +70,13 @@ func New(cfg *config.Config, db *gorm.DB, authSvc *auth.Service, box, faxBox *cr
 		Box:     box,
 		FaxBox:  faxBox,
 		TOTPBox: totpBox,
+		PrepBox: prepBox,
 		FX:      fx,
 		Converter: convert.New(convert.Config{
 			Enabled:        cfg.Converter.Enabled,
 			GotenbergURL:   cfg.Converter.GotenbergURL,
 			GhostscriptBin: cfg.Converter.GhostscriptBin,
 			ImageMagickBin: cfg.Converter.ImageMagickBin,
-			TempDir:        cfg.Converter.TempDir,
 			PrepareTTL:     time.Duration(cfg.Converter.PrepareTTLMin) * time.Minute,
 			MaxPages:       cfg.Converter.MaxPages,
 			DefaultFitMode: convert.FitMode(cfg.Converter.DefaultFitMode),

@@ -156,6 +156,38 @@ type Session struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// PreparedFax is a converted, fax-ready outbound document awaiting user
+// confirmation (two-step send flow: prepare → preview → send). The PDF is
+// sealed at rest (AES-256-GCM, domain-separated prep key derived from
+// encryption_key — same construction as received faxes); DocSHA256/DocBytes
+// describe the plaintext for integrity + display. Rows are deleted on
+// send/discard or swept after ExpiresAt.
+type PreparedFax struct {
+	ID           string `gorm:"primaryKey;size:36" json:"id"` // uuidv4
+	UserID       uint   `gorm:"index:idx_prepared_user_expiry;not null" json:"-"`
+	OrgID        uint   `gorm:"index;not null" json:"-"`
+	Filename     string `json:"filename"` // original upload name
+	Pages        int    `json:"pages"`
+	PreviewPages int    `json:"preview_pages"`
+	FitMode      string `json:"fit_mode,omitempty"`
+	Cover        bool   `json:"cover"`
+	// DocEnc is the sealed PDF; never serialized.
+	DocEnc    []byte    `gorm:"not null" json:"-"`
+	DocSHA256 string    `json:"-"`
+	DocBytes  int64     `json:"doc_bytes"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `gorm:"index:idx_prepared_user_expiry;index" json:"expires_at"`
+}
+
+// PreparedFaxPreview is one sealed B&W preview page of a PreparedFax.
+type PreparedFaxPreview struct {
+	ID            uint   `gorm:"primaryKey" json:"-"`
+	PreparedFaxID string `gorm:"uniqueIndex:idx_prep_preview;size:36;not null" json:"-"`
+	Page          int    `gorm:"uniqueIndex:idx_prep_preview;not null" json:"page"`
+	// DataEnc is the sealed PNG; never serialized.
+	DataEnc []byte `gorm:"not null" json:"-"`
+}
+
 const (
 	PendingAuthPurposeLogin  = "login"  // password OK, TOTP code still owed
 	PendingAuthPurposeEnroll = "enroll" // password OK, TOTP enrollment still owed
@@ -201,5 +233,5 @@ type AuditLog struct {
 }
 
 func AllModels() []any {
-	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &InboundFax{}, &Session{}, &PendingAuth{}, &AuditLog{}, &Branding{}}
+	return []any{&Org{}, &PortalUser{}, &Number{}, &UserNumber{}, &FaxJob{}, &InboundFax{}, &Session{}, &PendingAuth{}, &AuditLog{}, &Branding{}, &PreparedFax{}, &PreparedFaxPreview{}}
 }

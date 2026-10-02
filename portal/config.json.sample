@@ -28,7 +28,6 @@
     "gotenberg_url": "http://127.0.0.1:3200",
     "ghostscript_bin": "gs",
     "imagemagick_bin": "magick",
-    "temp_dir": "",
     "prepare_ttl_minutes": 60,
     "max_pages": 50,
     "default_fit_mode": "constrain"

@@ -18,17 +18,28 @@
 package convert
 
 import (
+	"bytes"
 	"context"
+	"io"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
 
-// pdfPageCount returns the page count of a PDF (pure Go, via pdfcpu).
-func pdfPageCount(path string) (int, error) {
-	return api.PageCountFile(context.Background(), path)
+// pdfPageCount returns the page count of a PDF (pure Go, in memory).
+func pdfPageCount(pdf []byte) (int, error) {
+	return api.PageCount(context.Background(), bytes.NewReader(pdf), nil)
 }
 
-// mergePDFs concatenates inFiles (in order) into outFile.
-func mergePDFs(inFiles []string, outFile string) error {
-	return api.MergeCreateFile(context.Background(), inFiles, outFile, false, nil)
+// mergePDFs concatenates first+second (in order) into a new PDF, in memory.
+func mergePDFs(first, second []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	err := api.MergeRaw(
+		context.Background(),
+		[]io.ReadSeeker{bytes.NewReader(first), bytes.NewReader(second)},
+		&buf, false, nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

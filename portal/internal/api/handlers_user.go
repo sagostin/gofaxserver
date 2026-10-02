@@ -18,6 +18,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -25,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"gofaxportal/internal/convert"
 	"gofaxportal/internal/crypto"
 	"gofaxportal/internal/fsclient"
 	"gofaxportal/internal/models"
@@ -62,20 +63,27 @@ func (s *Server) handleSendFax(ctx iris.Context) {
 
 	// Two sources for the document:
 	//  - prepared_id: output of POST /faxes/prepare (converted, previewed,
-	//    optional cover page). Always a normalized PDF.
+	//    optional cover page). Sealed in the portal DB; always a normalized PDF.
 	//  - file: raw one-shot upload (pdf/tiff only), the legacy path.
 	var filename string
 	var data []byte
-	var prepared *convert.PreparedDoc
+	var prepared *models.PreparedFax
 	if pid := strings.TrimSpace(ctx.FormValue("prepared_id")); pid != "" {
 		prepared = s.loadOwnedPrepared(ctx, pid, userID)
 		if prepared == nil {
 			return
 		}
-		b, err := prepared.ReadPDF()
+		b, err := s.PrepBox.Open(prepared.DocEnc)
 		if err != nil {
 			ctx.StatusCode(iris.StatusInternalServerError)
-			ctx.JSON(map[string]string{"error": "failed reading prepared document"})
+			ctx.JSON(map[string]string{"error": "failed to unseal prepared document"})
+			return
+		}
+		sum := sha256.Sum256(b)
+		if hex.EncodeToString(sum[:]) != prepared.DocSHA256 {
+			s.audit(ctx, "FAX_SEND_INTEGRITY", prepared.ID, nil)
+			ctx.StatusCode(iris.StatusInternalServerError)
+			ctx.JSON(map[string]string{"error": "prepared document failed integrity check"})
 			return
 		}
 		data = b
@@ -172,9 +180,10 @@ func (s *Server) handleSendFax(ctx iris.Context) {
 		ctx.JSON(map[string]string{"error": "fax submitted upstream but failed to record job", "job_uuid": jobUUID})
 		return
 	}
-	// The prepared copy has been handed off; don't leave it on disk until TTL.
+	// The prepared copy has been handed off; delete it instead of letting it
+	// sit sealed until the TTL sweep.
 	if prepared != nil {
-		_ = s.Converter.Delete(prepared.ID)
+		s.deletePrepared(prepared.ID)
 	}
 	s.audit(ctx, "FAX_SEND", jobUUID, map[string]any{
 		"caller": caller, "callee": callee, "filename": job.OriginalFilename, "bytes": len(data),

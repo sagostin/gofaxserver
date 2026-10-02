@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -94,7 +93,6 @@ type Converter struct {
 	GotenbergURL   string `json:"gotenberg_url"`   // docx/doc → PDF (LibreOffice sidecar)
 	GhostscriptBin string `json:"ghostscript_bin"` // fax-accurate B&W previews
 	ImageMagickBin string `json:"imagemagick_bin"` // tiff → PDF
-	TempDir        string `json:"temp_dir"`        // prepared docs live here until TTL
 	PrepareTTLMin  int    `json:"prepare_ttl_minutes"`
 	MaxPages       int    `json:"max_pages"`
 	DefaultFitMode string `json:"default_fit_mode"` // constrain | fill | stretch
@@ -206,9 +204,6 @@ func Load(path string) (*Config, error) {
 	if v := env("PORTAL_MAGICK_BIN"); v != "" {
 		cv.ImageMagickBin = v
 	}
-	if v := env("PORTAL_CONVERTER_TEMP_DIR"); v != "" {
-		cv.TempDir = v
-	}
 	if v := env("PORTAL_CONVERTER_TTL_MINUTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cv.PrepareTTLMin = n
@@ -254,9 +249,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cv.ImageMagickBin == "" {
 		cv.ImageMagickBin = "magick"
-	}
-	if cv.TempDir == "" {
-		cv.TempDir = filepath.Join(os.TempDir(), "gofaxportal-convert")
 	}
 	if cv.PrepareTTLMin <= 0 {
 		cv.PrepareTTLMin = 60

@@ -119,16 +119,16 @@ func maxf(a, b float64) float64 {
 }
 
 // imageToPDF renders a PNG/JPEG onto one Letter page per the fit mode and
-// writes the result as a single-page PDF.
-func (c *Converter) imageToPDF(data []byte, outPath string, mode FitMode) error {
+// returns the resulting single-page PDF.
+func (c *Converter) imageToPDF(data []byte, mode FitMode) ([]byte, error) {
 	src, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("decode image: %w", err)
+		return nil, fmt.Errorf("decode image: %w", err)
 	}
 	b := src.Bounds()
 	iw, ih := b.Dx(), b.Dy()
 	if iw < 1 || ih < 1 || iw > maxImgDim || ih > maxImgDim {
-		return fmt.Errorf("image dimensions %dx%d out of range", iw, ih)
+		return nil, fmt.Errorf("image dimensions %dx%d out of range", iw, ih)
 	}
 
 	if mode == FitFill {
@@ -161,12 +161,12 @@ func (c *Converter) imageToPDF(data []byte, outPath string, mode FitMode) error 
 	imgType := "PNG"
 	if format == "jpeg" {
 		if err := jpeg.Encode(&buf, flat, &jpeg.Options{Quality: jpegQuality}); err != nil {
-			return err
+			return nil, err
 		}
 		imgType = "JPG"
 	} else {
 		if err := png.Encode(&buf, flat); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -181,7 +181,7 @@ func (c *Converter) imageToPDF(data []byte, outPath string, mode FitMode) error 
 
 	out := &bytes.Buffer{}
 	if err := pdf.Output(out); err != nil {
-		return fmt.Errorf("render PDF: %w", err)
+		return nil, fmt.Errorf("render PDF: %w", err)
 	}
-	return writeFileAtomic(outPath, out.Bytes())
+	return out.Bytes(), nil
 }

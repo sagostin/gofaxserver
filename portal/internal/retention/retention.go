@@ -66,7 +66,8 @@ func (s *Sweeper) Run(stop <-chan struct{}) {
 	}
 }
 
-// Sweep deletes expired inbound faxes for every org with retention enabled.
+// Sweep deletes expired inbound faxes for every org with retention enabled,
+// plus expired prepared (pre-send) outbound documents.
 func (s *Sweeper) Sweep() {
 	orgs := []models.Org{}
 	if err := s.DB.Where("retention_days > 0").Find(&orgs).Error; err != nil {
@@ -75,6 +76,44 @@ func (s *Sweeper) Sweep() {
 	}
 	for i := range orgs {
 		s.sweepOrg(&orgs[i])
+	}
+	s.sweepPrepared()
+}
+
+// sweepPrepared deletes prepared outbound faxes (and their preview rows)
+// past their TTL — uploaded and converted but never sent.
+func (s *Sweeper) sweepPrepared() {
+	cutoff := s.now().UTC()
+	deleted := int64(0)
+	for {
+		var batch []models.PreparedFax
+		if err := s.DB.Select("id").Where("expires_at < ?", cutoff).Limit(batchSize).Find(&batch).Error; err != nil {
+			log.Printf("[retention] list expired prepared faxes: %v", err)
+			return
+		}
+		if len(batch) == 0 {
+			break
+		}
+		ids := make([]string, 0, len(batch))
+		for _, p := range batch {
+			ids = append(ids, p.ID)
+		}
+		if err := s.DB.Where("prepared_fax_id IN ?", ids).Delete(&models.PreparedFaxPreview{}).Error; err != nil {
+			log.Printf("[retention] delete prepared previews: %v", err)
+			return
+		}
+		res := s.DB.Where("id IN ?", ids).Delete(&models.PreparedFax{})
+		if res.Error != nil {
+			log.Printf("[retention] delete prepared faxes: %v", res.Error)
+			return
+		}
+		deleted += res.RowsAffected
+		if len(batch) < batchSize {
+			break
+		}
+	}
+	if deleted > 0 {
+		log.Printf("[retention] deleted %d expired prepared fax(es)", deleted)
 	}
 }
 

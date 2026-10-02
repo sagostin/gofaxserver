@@ -18,16 +18,22 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gofaxportal/internal/convert"
+	"gofaxportal/internal/models"
 
+	"github.com/google/uuid"
 	"github.com/kataras/iris/v12"
+	"gorm.io/gorm"
 )
 
 // prepareMIMEs maps each allowed extension to the content types
@@ -91,7 +97,8 @@ func (s *Server) readUpload(ctx iris.Context) (filename string, data []byte, ok 
 }
 
 // handlePrepareFax converts an uploaded document (docx/doc/png/jpeg/pdf/tiff)
-// to a fax-ready PDF with optional cover page, and returns preview URLs.
+// to a fax-ready PDF with optional cover page, seals it into the DB (same
+// AES-256-GCM posture as received faxes), and returns preview URLs.
 // Two-step flow: the user reviews the previews, then POSTs /faxes with the
 // prepared_id.
 func (s *Server) handlePrepareFax(ctx iris.Context) {
@@ -147,7 +154,7 @@ func (s *Server) handlePrepareFax(ctx iris.Context) {
 		}
 	}
 
-	doc, err := s.Converter.Prepare(ctx.Request().Context(), filename, data, userID, orgID, convert.Options{
+	res, err := s.Converter.Convert(ctx.Request().Context(), filename, data, convert.Options{
 		FitMode: fitMode,
 		Cover:   cover,
 	})
@@ -167,42 +174,106 @@ func (s *Server) handlePrepareFax(ctx iris.Context) {
 		return
 	}
 
-	s.audit(ctx, "FAX_PREPARE", doc.ID, map[string]any{
-		"filename": doc.Filename, "pages": doc.Pages, "cover": doc.Cover, "fit_mode": doc.FitMode,
+	// Seal + persist. Same construction as inbound fax storage: AES-256-GCM
+	// blobs, plaintext SHA-256 + byte count kept for integrity/display.
+	sum := sha256.Sum256(res.PDF)
+	docEnc, err := s.PrepBox.Seal(res.PDF)
+	if err != nil {
+		ctx.StatusCode(iris.StatusInternalServerError)
+		ctx.JSON(map[string]string{"error": "failed to seal document"})
+		return
+	}
+	now := time.Now().UTC()
+	prep := &models.PreparedFax{
+		ID:           uuid.NewString(),
+		UserID:       userID,
+		OrgID:        orgID,
+		Filename:     filepath.Base(filename),
+		Pages:        res.Pages,
+		PreviewPages: len(res.Previews),
+		FitMode:      string(res.FitMode),
+		Cover:        res.Cover,
+		DocEnc:       docEnc,
+		DocSHA256:    hex.EncodeToString(sum[:]),
+		DocBytes:     int64(len(res.PDF)),
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(s.Converter.Cfg().PrepareTTL),
+	}
+	previews := make([]models.PreparedFaxPreview, 0, len(res.Previews))
+	for i, png := range res.Previews {
+		sealed, serr := s.PrepBox.Seal(png)
+		if serr != nil {
+			ctx.StatusCode(iris.StatusInternalServerError)
+			ctx.JSON(map[string]string{"error": "failed to seal preview"})
+			return
+		}
+		previews = append(previews, models.PreparedFaxPreview{
+			PreparedFaxID: prep.ID, Page: i + 1, DataEnc: sealed,
+		})
+	}
+	err = s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(prep).Error; err != nil {
+			return err
+		}
+		if len(previews) > 0 {
+			return tx.Create(&previews).Error
+		}
+		return nil
+	})
+	if err != nil {
+		ctx.StatusCode(iris.StatusInternalServerError)
+		ctx.JSON(map[string]string{"error": "failed to store prepared document"})
+		return
+	}
+
+	s.audit(ctx, "FAX_PREPARE", prep.ID, map[string]any{
+		"filename": prep.Filename, "pages": prep.Pages, "cover": prep.Cover, "fit_mode": prep.FitMode,
 	})
 
-	previews := make([]string, 0, doc.PreviewPages)
-	for i := 1; i <= doc.PreviewPages; i++ {
-		previews = append(previews, "/faxes/prepare/"+doc.ID+"/preview/"+strconv.Itoa(i))
+	urls := make([]string, 0, len(previews))
+	for i := range previews {
+		urls = append(urls, "/faxes/prepare/"+prep.ID+"/preview/"+strconv.Itoa(i+1))
 	}
 	ctx.StatusCode(iris.StatusCreated)
 	ctx.JSON(map[string]any{
-		"id":         doc.ID,
-		"filename":   doc.Filename,
-		"pages":      doc.Pages,
-		"cover":      doc.Cover,
-		"fit_mode":   doc.FitMode,
-		"previews":   previews,
-		"expires_at": doc.ExpiresAt,
+		"id":         prep.ID,
+		"filename":   prep.Filename,
+		"pages":      prep.Pages,
+		"cover":      prep.Cover,
+		"fit_mode":   prep.FitMode,
+		"previews":   urls,
+		"expires_at": prep.ExpiresAt,
 	})
 }
 
-// loadOwnedPrepared loads a prepared doc and enforces ownership. Writes the
-// error response and returns nil on failure.
-func (s *Server) loadOwnedPrepared(ctx iris.Context, id string, userID uint) *convert.PreparedDoc {
-	doc, err := s.Converter.Load(id)
-	if err != nil {
+// loadOwnedPrepared fetches a prepared fax row and enforces ownership +
+// expiry. Writes the error response and returns nil on failure; expired rows
+// are deleted lazily.
+func (s *Server) loadOwnedPrepared(ctx iris.Context, id string, userID uint) *models.PreparedFax {
+	gone := func() *models.PreparedFax {
 		ctx.StatusCode(iris.StatusGone)
 		ctx.JSON(map[string]string{"error": "prepared document not found or expired"})
 		return nil
 	}
-	if doc.UserID != userID {
-		// Not the owner's document — same response as not-found: no oracle.
-		ctx.StatusCode(iris.StatusGone)
-		ctx.JSON(map[string]string{"error": "prepared document not found or expired"})
-		return nil
+	var prep models.PreparedFax
+	// Owner check inside the query: another user's id is indistinguishable
+	// from an unknown one — no oracle.
+	if err := s.DB.Where("id = ? AND user_id = ?", id, userID).First(&prep).Error; err != nil {
+		return gone()
 	}
-	return doc
+	if time.Now().UTC().After(prep.ExpiresAt) {
+		s.deletePrepared(prep.ID)
+		return gone()
+	}
+	return &prep
+}
+
+// deletePrepared removes a prepared fax and its preview rows.
+func (s *Server) deletePrepared(id string) {
+	s.DB.Transaction(func(tx *gorm.DB) error {
+		tx.Where("prepared_fax_id = ?", id).Delete(&models.PreparedFaxPreview{})
+		return tx.Where("id = ?", id).Delete(&models.PreparedFax{}).Error
+	})
 }
 
 // handleGetPreparedPreview streams one B&W preview page PNG.
@@ -211,19 +282,31 @@ func (s *Server) handleGetPreparedPreview(ctx iris.Context) {
 	if !ok {
 		return
 	}
-	doc := s.loadOwnedPrepared(ctx, ctx.Params().Get("id"), userID)
-	if doc == nil {
+	prep := s.loadOwnedPrepared(ctx, ctx.Params().Get("id"), userID)
+	if prep == nil {
 		return
 	}
 	page, err := ctx.Params().GetInt("page")
-	if err != nil || page < 1 || page > doc.PreviewPages {
+	if err != nil || page < 1 || page > prep.PreviewPages {
 		ctx.StatusCode(iris.StatusBadRequest)
 		ctx.JSON(map[string]string{"error": "invalid page"})
 		return
 	}
+	var row models.PreparedFaxPreview
+	if err := s.DB.Where("prepared_fax_id = ? AND page = ?", prep.ID, page).First(&row).Error; err != nil {
+		ctx.StatusCode(iris.StatusNotFound)
+		ctx.JSON(map[string]string{"error": "preview not found"})
+		return
+	}
+	png, err := s.PrepBox.Open(row.DataEnc)
+	if err != nil {
+		ctx.StatusCode(iris.StatusInternalServerError)
+		ctx.JSON(map[string]string{"error": "failed to unseal preview"})
+		return
+	}
 	ctx.Header("Cache-Control", "no-store")
 	ctx.Header("Content-Type", "image/png")
-	ctx.ServeFile(doc.PreviewPath(page))
+	ctx.Write(png)
 }
 
 // handleDeletePrepared discards a prepared document (user bailed out).
@@ -232,11 +315,11 @@ func (s *Server) handleDeletePrepared(ctx iris.Context) {
 	if !ok {
 		return
 	}
-	doc := s.loadOwnedPrepared(ctx, ctx.Params().Get("id"), userID)
-	if doc == nil {
+	prep := s.loadOwnedPrepared(ctx, ctx.Params().Get("id"), userID)
+	if prep == nil {
 		return
 	}
-	_ = s.Converter.Delete(doc.ID)
-	s.audit(ctx, "FAX_PREPARE_DISCARD", doc.ID, nil)
+	s.deletePrepared(prep.ID)
+	s.audit(ctx, "FAX_PREPARE_DISCARD", prep.ID, nil)
 	ctx.StatusCode(iris.StatusNoContent)
 }

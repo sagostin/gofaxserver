@@ -23,13 +23,18 @@
 //   - png/jpeg: pure-Go rasterization onto a Letter page with a fit mode
 //     (constrain/fill/stretch), embedded via fpdf.
 //   - docx/doc: a Gotenberg sidecar (LibreOffice) over loopback HTTP.
-//   - tiff: ImageMagick (handles multi-page CCITT fax TIFFs natively).
+//   - tiff: ImageMagick via stdin/stdout (multi-page CCITT fax TIFFs).
 //   - pdf: pass-through (validated + page-counted only).
 //
-// An optional generated cover page is prepended (pdfcpu merge), and
-// Ghostscript renders fax-accurate B&W previews (204x196 dpi mono — the same
-// geometry gofaxserver uses for its tiffg3 conversion, so what the user sees
-// is what the receiving fax machine prints).
+// An optional generated cover page is prepended (pdfcpu merge, in memory),
+// and Ghostscript renders fax-accurate B&W previews (204x196 dpi mono — the
+// same geometry gofaxserver uses for its tiffg3 conversion, so what the user
+// sees is what the receiving fax machine prints).
+//
+// The package is pure compute: Convert returns everything in memory and
+// never touches the filesystem. Persistence (sealed with the domain-separated
+// prep box, in the portal DB — same posture as received faxes) is the API
+// layer's job. External tools exchange plaintext over pipes only.
 package convert
 
 import (
@@ -101,7 +106,7 @@ func (c CoverFields) Sanitize() CoverFields {
 	return CoverFields{To: clip(c.To), From: clip(c.From), Subject: clip(c.Subject), Comments: clip(c.Comments)}
 }
 
-// Options control a single Prepare run.
+// Options control a single Convert run.
 type Options struct {
 	FitMode FitMode
 	Cover   *CoverFields // nil = no cover page
@@ -114,8 +119,7 @@ type Config struct {
 	GotenbergURL   string
 	GhostscriptBin string
 	ImageMagickBin string
-	TempDir        string
-	PrepareTTL     time.Duration
+	PrepareTTL     time.Duration // consumed by the API layer (expiry of stored docs)
 	MaxPages       int
 	DefaultFitMode FitMode
 }
@@ -131,9 +135,6 @@ func (c *Config) ApplyDefaults() {
 	if c.ImageMagickBin == "" {
 		c.ImageMagickBin = "magick"
 	}
-	if c.TempDir == "" {
-		c.TempDir = filepath.Join(osTempDir(), "gofaxportal-convert")
-	}
 	if c.PrepareTTL <= 0 {
 		c.PrepareTTL = time.Hour
 	}
@@ -145,11 +146,10 @@ func (c *Config) ApplyDefaults() {
 	}
 }
 
-// Converter prepares uploaded documents for faxing.
+// Converter converts uploaded documents into fax-ready PDFs.
 type Converter struct {
 	cfg  Config
 	http *http.Client
-	now  func() time.Time // injectable for tests
 }
 
 func New(cfg Config) *Converter {
@@ -157,11 +157,10 @@ func New(cfg Config) *Converter {
 	return &Converter{
 		cfg:  cfg,
 		http: &http.Client{Timeout: 120 * time.Second}, // LibreOffice on big docs can be slow
-		now:  time.Now,
 	}
 }
 
-// Cfg exposes the (defaulted) config for callers that need e.g. TempDir.
+// Cfg exposes the (defaulted) config for callers that need e.g. PrepareTTL.
 func (c *Converter) Cfg() Config { return c.cfg }
 
 // ErrTooManyPages is returned when a document exceeds Config.MaxPages.
@@ -177,10 +176,18 @@ var AllowedExts = map[string]bool{
 	".docx": true, ".doc": true,
 }
 
-// Prepare converts data (named filename, used for its extension) into a
-// normalized PDF plus fax-accurate previews, stores it, and returns the
-// prepared document descriptor.
-func (c *Converter) Prepare(ctx context.Context, filename string, data []byte, userID, orgID uint, opts Options) (*PreparedDoc, error) {
+// Result is the converted output, entirely in memory.
+type Result struct {
+	PDF      []byte   // normalized fax-ready PDF (Letter pages)
+	Previews [][]byte // fax-accurate B&W PNG per page; empty if gs unavailable
+	Pages    int
+	Cover    bool
+	FitMode  FitMode
+}
+
+// Convert normalizes data (named filename, used for its extension) into a
+// fax-ready PDF with optional cover page and B&W previews.
+func (c *Converter) Convert(ctx context.Context, filename string, data []byte, opts Options) (*Result, error) {
 	ext := strings.ToLower(filepath.Ext(filename))
 	if !AllowedExts[ext] {
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedType, ext)
@@ -189,74 +196,56 @@ func (c *Converter) Prepare(ctx context.Context, filename string, data []byte, u
 		opts.FitMode = c.cfg.DefaultFitMode
 	}
 
-	doc := newPreparedDoc(c.cfg.TempDir, filename, userID, orgID, c.now(), c.cfg.PrepareTTL)
-	if err := doc.initDir(); err != nil {
-		return nil, err
-	}
-	// Any failure after this point must not leave half-written dirs behind.
-	ok := false
-	defer func() {
-		if !ok {
-			_ = c.Delete(doc.ID)
-		}
-	}()
-
-	pdfPath := doc.PDFPath()
+	var pdf []byte
 	var err error
 	switch ext {
 	case ".pdf":
-		err = writeFileAtomic(pdfPath, data)
+		pdf = data
 	case ".tif", ".tiff":
-		err = c.tiffToPDF(ctx, data, pdfPath)
+		pdf, err = c.tiffToPDF(ctx, data)
 	case ".png", ".jpg", ".jpeg":
-		err = c.imageToPDF(data, pdfPath, opts.FitMode)
+		pdf, err = c.imageToPDF(data, opts.FitMode)
 	case ".docx", ".doc":
-		err = c.officeToPDF(ctx, filename, data, pdfPath)
+		pdf, err = c.officeToPDF(ctx, filename, data)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	// Cover page: generate, prepend, re-count.
-	if opts.Cover != nil && !opts.Cover.Empty() {
+	// Cover page: generate, prepend (all in memory).
+	cover := opts.Cover != nil && !opts.Cover.Empty()
+	if cover {
 		fields := opts.Cover.Sanitize()
-		bodyPages, cerr := pdfPageCount(pdfPath)
+		bodyPages, cerr := pdfPageCount(pdf)
 		if cerr != nil {
 			return nil, fmt.Errorf("count pages: %w", cerr)
 		}
-		coverPath := filepath.Join(doc.Dir(), "cover.pdf")
-		if cerr := renderCoverPage(coverPath, fields, bodyPages); cerr != nil {
+		coverPDF, cerr := renderCoverPage(fields, bodyPages)
+		if cerr != nil {
 			return nil, fmt.Errorf("render cover page: %w", cerr)
 		}
-		if cerr := mergePDFs([]string{coverPath, pdfPath}, pdfPath+".merged"); cerr != nil {
-			return nil, fmt.Errorf("merge cover page: %w", cerr)
+		pdf, err = mergePDFs(coverPDF, pdf)
+		if err != nil {
+			return nil, fmt.Errorf("merge cover page: %w", err)
 		}
-		if cerr := replaceFile(pdfPath+".merged", pdfPath); cerr != nil {
-			return nil, fmt.Errorf("merge cover page: %w", cerr)
-		}
-		doc.Cover = true
 	}
 
-	pages, err := pdfPageCount(pdfPath)
+	pages, err := pdfPageCount(pdf)
 	if err != nil {
 		return nil, fmt.Errorf("count pages: %w", err)
 	}
 	if pages > c.cfg.MaxPages {
 		return nil, fmt.Errorf("%w (%d > %d)", ErrTooManyPages, pages, c.cfg.MaxPages)
 	}
-	doc.Pages = pages
+
+	res := &Result{PDF: pdf, Pages: pages, Cover: cover, FitMode: opts.FitMode}
 
 	// Fax-accurate B&W previews. Non-fatal: a missing gs binary must not
-	// block sending — the response simply carries no preview URLs.
-	if n, perr := c.renderPreviews(ctx, pdfPath, doc.Dir(), pages); perr != nil {
-		log.Printf("[convert] preview render failed for %s: %v", doc.ID, perr)
+	// block sending — the result simply carries no previews.
+	if previews, perr := c.renderPreviews(ctx, pdf, pages); perr != nil {
+		log.Printf("[convert] preview render failed: %v", perr)
 	} else {
-		doc.PreviewPages = n
+		res.Previews = previews
 	}
-
-	if err := doc.saveMeta(); err != nil {
-		return nil, err
-	}
-	ok = true
-	return doc, nil
+	return res, nil
 }

@@ -25,10 +25,10 @@ import (
 	"github.com/go-pdf/fpdf"
 )
 
-// renderCoverPage writes a simple one-page Letter cover sheet. bodyPages is
+// renderCoverPage renders a simple one-page Letter cover sheet. bodyPages is
 // the page count of the document it precedes, so the sheet can report the
 // total page count a fax recipient should expect.
-func renderCoverPage(outPath string, f CoverFields, bodyPages int) error {
+func renderCoverPage(f CoverFields, bodyPages int) ([]byte, error) {
 	pdf := fpdf.New("P", "pt", "Letter", "")
 	pdf.SetMargins(72, 72, 72) // 1in
 	pdf.SetAutoPageBreak(true, 72)
@@ -71,7 +71,7 @@ func renderCoverPage(outPath string, f CoverFields, bodyPages int) error {
 
 	out := &bytes.Buffer{}
 	if err := pdf.Output(out); err != nil {
-		return err
+		return nil, err
 	}
-	return writeFileAtomic(outPath, out.Bytes())
+	return out.Bytes(), nil
 }

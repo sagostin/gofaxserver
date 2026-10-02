@@ -86,6 +86,14 @@ func NewTOTPBox(secret string) (*Box, error) {
 	return NewBox("gofaxportal-totp-v1:" + secret)
 }
 
+// NewPrepBox derives the domain-separated box used to seal prepared outbound
+// documents (converted PDFs + preview PNGs) at rest while they await
+// confirmation, so they sit under a different key than received faxes, TOTP
+// secrets and service-account passwords.
+func NewPrepBox(secret string) (*Box, error) {
+	return NewBox("gofaxportal-prep-storage-v1:" + secret)
+}
+
 // RandomToken returns n random bytes hex-encoded.
 func RandomToken(n int) string {
 	buf := make([]byte, n)

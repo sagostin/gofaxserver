@@ -18,71 +18,78 @@
 package convert
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 )
 
-// execTimeout caps external converter runs so a wedged gs/magick can't
+// execTimeout caps each external converter run so a wedged gs/magick can't
 // pin a handler forever.
 const execTimeout = 90 * time.Second
 
-// renderPreviews rasterizes every page of pdfPath to fax-accurate B&W PNGs
-// (1728x2156, 204x196 dpi mono — the same geometry gofaxserver's own tiffg3
-// pipeline produces, so the preview matches the transmitted fax). Returns
-// the number of preview pages written.
-func (c *Converter) renderPreviews(ctx context.Context, pdfPath, dir string, pages int) (int, error) {
-	if pages < 1 {
-		return 0, nil
-	}
+// runPiped feeds stdin to an external tool and returns its stdout. Both
+// converter tools support explicit-format pipes, so plaintext documents never
+// touch the filesystem — only sealed output is written (by the caller).
+func runPiped(ctx context.Context, bin string, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
-	outPattern := filepath.Join(dir, "page-%d.png")
-	cmd := exec.CommandContext(ctx, c.cfg.GhostscriptBin,
-		"-q", "-dNOPAUSE", "-dBATCH", "-dSAFER",
-		"-sDEVICE=pngmono", "-r204x196", "-g1728x2156", "-dPDFFitPage",
-		"-sOutputFile="+outPattern, pdfPath,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return 0, fmt.Errorf("ghostscript: %w: %s", err, truncate(string(out), 256))
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = bytes.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("%s: %w: %s", bin, err, truncate(stderr.String(), 256))
 	}
-	for i := 1; i <= pages; i++ {
-		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("page-%d.png", i))); err != nil {
-			return i - 1, fmt.Errorf("ghostscript produced %d/%d pages", i-1, pages)
+	return stdout.Bytes(), nil
+}
+
+// renderPreviews rasterizes every page of pdf to fax-accurate B&W PNGs
+// (1728x2156, 204x196 dpi mono — the same geometry gofaxserver's own tiffg3
+// pipeline produces, so the preview matches the transmitted fax).
+//
+// Ghostscript is invoked once per page with the PDF on stdin and the PNG on
+// stdout — multi-page %d output patterns would force plaintext files.
+func (c *Converter) renderPreviews(ctx context.Context, pdf []byte, pages int) ([][]byte, error) {
+	if pages < 1 {
+		return nil, nil
+	}
+	previews := make([][]byte, 0, pages)
+	for page := 1; page <= pages; page++ {
+		png, err := runPiped(ctx, c.cfg.GhostscriptBin, pdf,
+			"-q", "-dNOPAUSE", "-dBATCH", "-dSAFER",
+			"-sDEVICE=pngmono", "-r204x196", "-g1728x2156", "-dPDFFitPage",
+			fmt.Sprintf("-dFirstPage=%d", page), fmt.Sprintf("-dLastPage=%d", page),
+			"-sOutputFile=-", "-",
+		)
+		if err != nil {
+			return nil, fmt.Errorf("ghostscript page %d: %w", page, err)
 		}
+		if !bytes.HasPrefix(png, []byte("\x89PNG")) {
+			return nil, fmt.Errorf("ghostscript page %d: no PNG on stdout", page)
+		}
+		previews = append(previews, png)
 	}
-	return pages, nil
+	return previews, nil
 }
 
 // tiffToPDF converts a (possibly multi-page) TIFF to PDF via ImageMagick,
 // which handles CCITT fax compression natively. Density is pinned to fax
-// resolution so the PDF page size matches the scan geometry.
-func (c *Converter) tiffToPDF(ctx context.Context, data []byte, outPath string) error {
-	in, err := os.CreateTemp(filepath.Dir(outPath), "upload-*.tiff")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(in.Name())
-	if _, err := in.Write(data); err != nil {
-		in.Close()
-		return err
-	}
-	if err := in.Close(); err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, execTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, c.cfg.ImageMagickBin,
-		in.Name(), "-units", "PixelsPerInch", "-density", "204x196", outPath+".tmp.pdf",
+// resolution so the PDF page size matches the scan geometry. Input and
+// output both travel over pipes.
+func (c *Converter) tiffToPDF(ctx context.Context, data []byte) ([]byte, error) {
+	pdf, err := runPiped(ctx, c.cfg.ImageMagickBin, data,
+		"tiff:-", "-units", "PixelsPerInch", "-density", "204x196", "pdf:-",
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("imagemagick: %w: %s", err, truncate(string(out), 256))
+	if err != nil {
+		return nil, err
 	}
-	return os.Rename(outPath+".tmp.pdf", outPath)
+	if !bytes.HasPrefix(pdf, []byte("%PDF-")) {
+		return nil, fmt.Errorf("imagemagick produced non-PDF output")
+	}
+	return pdf, nil
 }
 
 func truncate(s string, n int) string {

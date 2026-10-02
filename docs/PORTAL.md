@@ -371,10 +371,15 @@ Engines per input type (`internal/convert`):
   what the user sees is what the receiving fax machine prints. Preview
   rendering is best-effort: if `gs` is unavailable the document is still
   sendable, just without previews.
-- **Lifecycle** — prepared documents live on disk under `converter.temp_dir`
-  (mode 0700, owner-only files) and are deleted on send, on explicit discard,
-  or by a sweeper after `converter.prepare_ttl_minutes` (default 60). Every
-  access is owner-checked; `max_pages` (default 50) caps converted documents.
+- **Lifecycle** — prepared documents are stored **in the portal DB**, sealed
+  with AES-256-GCM under a domain-separated key derived from `encryption_key`
+  (`prepared_faxes` + `prepared_fax_previews` tables — the same construction
+  as received faxes, nothing plaintext on disk; the whole pipeline runs in
+  memory and external tools exchange plaintext over pipes). Documents are
+  deleted on send, on explicit discard, or by the retention sweeper after
+  `converter.prepare_ttl_minutes` (default 60). Every access is owner-checked
+  in the SQL query itself (no cross-user oracle); `max_pages` (default 50)
+  caps converted documents.
 
 Gotenberg runs on bridge networking with its API published on
 `127.0.0.1:${GOTENBERG_PORT:-3200}` only (see `portal/docker-compose.yml`) —
@@ -406,8 +411,7 @@ Copy `config.json.sample` to `config.json` or configure purely via env vars:
 | `PORTAL_GOTENBERG_URL` | Gotenberg sidecar for docx/doc (default `http://127.0.0.1:3200`) |
 | `GOTENBERG_PORT` | loopback port the Gotenberg container publishes (default `3200`) |
 | `PORTAL_GS_BIN` / `PORTAL_MAGICK_BIN` | binary paths for previews / tiff→pdf (defaults `gs`, `magick`) |
-| `PORTAL_CONVERTER_TEMP_DIR` | prepared-doc storage (default `<os-tmp>/gofaxportal-convert`) |
-| `PORTAL_CONVERTER_TTL_MINUTES` | prepared-doc lifetime (default `60`) |
+| `PORTAL_CONVERTER_TTL_MINUTES` | prepared-doc lifetime in the DB (default `60`) |
 | `PORTAL_CONVERTER_MAX_PAGES` | page cap after conversion (default `50`) |
 | `PORTAL_CONVERTER_DEFAULT_FIT` | image fit default: `constrain` / `fill` / `stretch` |
 | `PORTAL_PREPARE_RATE_PER_HOUR` | prepare rate limit per user (default `240`) |
@@ -681,10 +685,14 @@ revokes sessions, and forces re-enrollment at next login. Admin accounts
   one-shot send paths; converted output is additionally page-capped.
 - Untrusted docx/doc parsing happens only inside the Gotenberg sidecar
   container (LibreOffice), never in the portal process; its API is published
-  on loopback only. Ghostscript/ImageMagick run with `-dSAFER` and timeouts.
-- Prepared documents are stored owner-only (0700/0600) with UUIDv4 names
-  (path traversal rejected), are owner-checked on every access, and are
-  deleted on send/discard or reaped after the TTL.
+  on loopback only.
+- Prepared documents live in the portal DB, sealed AES-256-GCM
+  (domain-separated key, same construction as received faxes) with plaintext
+  SHA-256 integrity verified on open. Ownership is enforced inside the SQL
+  query (another user's prepared id is indistinguishable from an unknown
+  one), and rows are deleted on send/discard or swept after the TTL.
+  Ghostscript/ImageMagick run with `-dSAFER` and timeouts, exchanging data
+  over pipes — plaintext never touches the filesystem.
 - Login/send rate limiting; full admin audit trail.
 - Optional org-enforced TOTP 2FA (see below); pending-auth tokens are
   single-use, hashed at rest, rate-limited, and expire after 10 minutes;
