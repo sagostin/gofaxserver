@@ -32,9 +32,11 @@ const prepared = ref<Prepared | null>(null)
 const pageIdx = ref(0)
 
 const imageExts = ['.png', '.jpg', '.jpeg']
-const selectedFile = computed(() => fileEl.value?.files?.[0] || null)
+// fileName is a plain ref set by @change: a computed over fileEl.files would
+// cache forever, because DOM FileLists are not reactive.
+const fileName = ref('')
 const isImage = computed(() => {
-  const n = selectedFile.value?.name.toLowerCase() || ''
+  const n = fileName.value.toLowerCase()
   return imageExts.some((e) => n.endsWith(e))
 })
 const previewSrc = computed(() =>
@@ -46,10 +48,15 @@ function resetPrepared() {
   pageIdx.value = 0
 }
 
+function onFileChange() {
+  fileName.value = fileEl.value?.files?.[0]?.name || ''
+  resetPrepared()
+}
+
 async function prepare() {
   error.value = ''
   okMsg.value = ''
-  const f = selectedFile.value
+  const f = fileEl.value?.files?.[0]
   if (!f) return (error.value = 'choose a file (PDF, TIFF, PNG, JPEG, DOCX or DOC)')
   if (!caller.value) return (error.value = 'no outbound number selected')
   const form = new FormData()
@@ -90,6 +97,7 @@ async function send() {
     coverSubject.value = ''
     coverComments.value = ''
     if (fileEl.value) fileEl.value.value = ''
+    fileName.value = ''
     resetPrepared()
   } catch (e: any) {
     error.value = e.message
@@ -135,7 +143,7 @@ async function discard() {
             accept=".pdf,.tif,.tiff,.png,.jpg,.jpeg,.docx,.doc,application/pdf,image/tiff,image/png,image/jpeg"
             required
             :disabled="!!prepared"
-            @change="resetPrepared"
+            @change="onFileChange"
           />
         </div>
         <div v-if="isImage && !prepared">
