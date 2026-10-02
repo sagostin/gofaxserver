@@ -7,7 +7,7 @@ RUN npm install --no-fund --no-audit
 COPY portal/frontend/ ./
 RUN npm run build
 
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src/portal
 COPY portal/go.mod portal/go.sum ./
 RUN go mod download || true
