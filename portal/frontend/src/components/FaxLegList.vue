@@ -5,7 +5,7 @@
 export interface FaxLeg {
   id: number
   call_uuid: string
-  result_type: string // reception | bridge | transmission | delivery | submission
+  result_type: string // reception | bridge | transmission | delivery | submission | notify
   attempt_number: number
   endpoint_type: string
   gateway: string // actual FS gateway used (transmission: winning gw; reception/bridge: arrival gw)
@@ -83,6 +83,14 @@ function fmtPages(l: FaxLeg): string {
 // submission (intake) legs — not a real hangup cause or outcome.
 const submissionMarker = 'WEBHOOK'
 
+// notifyBadge maps a notify leg's dispatch outcome (status: sent | failed |
+// skipped) onto a badge class — a skipped receipt (e.g. email_full_failure
+// with any successful attempt) is not a failure.
+function notifyBadge(l: FaxLeg): string {
+  if (l.status === 'skipped') return 'skipped'
+  return l.success ? 'success' : 'failed'
+}
+
 // bridgePath renders both ends of a bridged call: arrival gateway → outbound
 // gateway (direction). l.gateway is the arrival/source gateway (where the call
 // came in), l.bridge_gateway the gateway the bridge dialed out on.
@@ -158,6 +166,7 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
         <span class="chip">#{{ leg.attempt_number }}</span>
         <span class="badge" :class="leg.result_type">{{ leg.result_type }}</span>
         <span v-if="leg.result_type === 'submission'" class="badge" :class="leg.success ? 'processed' : 'queued'">{{ leg.success ? 'processed' : 'queued' }}</span>
+        <span v-else-if="leg.result_type === 'notify'" class="badge" :class="notifyBadge(leg)">{{ leg.status || (leg.success ? 'sent' : 'failed') }}</span>
         <span v-else class="badge" :class="leg.success ? 'success' : 'failed'">{{ leg.success ? 'success' : 'failed' }}</span>
         <span class="leg-summary">{{ summary(leg) }}</span>
         <span class="leg-when muted">

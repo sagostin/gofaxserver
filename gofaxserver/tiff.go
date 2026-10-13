@@ -46,6 +46,29 @@ func tiffToPdf(inputTiff string) (pdfPath string, err error) {
 	return pdfPath, nil
 }
 
+// countTiffPages returns the number of pages (images) in a TIFF file using
+// ImageMagick's identify. Used at intake so outbound jobs carry their true
+// total page count before SpanDSP reports Fax-Document-Total-Pages at hangup.
+// (identify prints one line per image; the "%n" format is not used because it
+// repeats the count once per image, e.g. "151515" for 15 pages.)
+func countTiffPages(inputTiff string) (int, error) {
+	cmd := exec.Command("magick", "identify", inputTiff)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("failed to identify TIFF page count: %v, output: %s", err, string(output))
+	}
+	pages := 0
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.TrimSpace(line) != "" {
+			pages++
+		}
+	}
+	if pages == 0 {
+		return 0, fmt.Errorf("no images found in TIFF %s", inputTiff)
+	}
+	return pages, nil
+}
+
 func pdfToTiff(docID uuid.UUID, fileExtension string, file multipart.File, fileHeader *multipart.FileHeader) (fileName string, err error) {
 	fileFormat := "temp_%s%s"
 

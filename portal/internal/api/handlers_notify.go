@@ -37,6 +37,7 @@ type statusNotifyPayload struct {
 	AllAttemptsFailed bool      `json:"all_attempts_failed"`
 	Attempts          int       `json:"attempts"`
 	TransferredPages  uint      `json:"transferred_pages"`
+	TotalPages        uint      `json:"total_pages"`
 	ResultText        string    `json:"result_text"`
 	HangupCause       string    `json:"hangup_cause"`
 	CallerIdNumber    string    `json:"caller_id_number"`
@@ -109,8 +110,9 @@ func (s *Server) handleStatusNotify(ctx iris.Context) {
 	}
 
 	updates := map[string]any{
-		"attempts": p.Attempts,
-		"pages":    int(p.TransferredPages),
+		"attempts":    p.Attempts,
+		"pages":       int(p.TransferredPages),
+		"total_pages": int(p.TotalPages),
 	}
 	completed := p.EndTs
 	if completed.IsZero() {

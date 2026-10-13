@@ -36,6 +36,7 @@ func TestStatusNotifyPayloadDecodesUpstreamShape(t *testing.T) {
 		"all_attempts_failed": false,
 		"attempts": 2,
 		"transferred_pages": 4,
+		"total_pages": 5,
 		"result_text": "OK",
 		"hangup_cause": "NORMAL_CLEARING",
 		"caller_id_number": "+17785559876",
@@ -58,6 +59,9 @@ func TestStatusNotifyPayloadDecodesUpstreamShape(t *testing.T) {
 	}
 	if p.TransferredPages != 4 {
 		t.Errorf("transferred_pages mismatch: %d", p.TransferredPages)
+	}
+	if p.TotalPages != 5 {
+		t.Errorf("total_pages mismatch: %d", p.TotalPages)
 	}
 	if p.ResultText != "OK" || p.HangupCause != "NORMAL_CLEARING" {
 		t.Errorf("result fields mismatch: %+v", p)

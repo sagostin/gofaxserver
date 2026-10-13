@@ -68,6 +68,8 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 .badge.transmission { background: #e0e7ff; color: #3730a3; }
 .badge.delivery { background: #e5e7eb; color: #374151; }
 .badge.submission { background: #f3e8ff; color: #6b21a8; }
+.badge.notify { background: #cffafe; color: #155e75; }
+.badge.skipped { background: #e5e7eb; color: #374151; }
 .badge.processed { background: #dcfce7; color: var(--ok); }
 
 /* Fax job legs (FaxLegList) */

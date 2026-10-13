@@ -296,3 +296,33 @@ func TestDeriveGroupDeliveryOnlyFallback(t *testing.T) {
 		t.Error("delivery-only job should fall back to latest leg")
 	}
 }
+
+// Notify legs record receipt deliveries (emails, webhooks, portal pushes) —
+// they must never decide the job's outcome: a successful email about a
+// failed fax must not flip the group to success, and a failed webhook about
+// a successful fax must not flip it to failure.
+func TestDeriveGroupNotifyDoesNotDecide(t *testing.T) {
+	base := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+
+	failedFaxDelivered := deriveGroup(uuid.New(), []FaxJobResult{
+		leg("transmission", 1, false, base),
+		leg("notify", 0, true, base.Add(time.Minute)),
+	})
+	if failedFaxDelivered.Success {
+		t.Error("successful notify delivery must not override the failed transmission")
+	}
+	if failedFaxDelivered.Attempts != 1 {
+		t.Errorf("notify legs must not count as attempts, got %d", failedFaxDelivered.Attempts)
+	}
+	if len(failedFaxDelivered.LegTypes) != 2 {
+		t.Errorf("leg types wrong: %v", failedFaxDelivered.LegTypes)
+	}
+
+	sentFaxWebhookDown := deriveGroup(uuid.New(), []FaxJobResult{
+		leg("reception", 1, true, base),
+		leg("notify", 0, false, base.Add(time.Minute)),
+	})
+	if !sentFaxWebhookDown.Success {
+		t.Error("failed notify delivery must not override the successful reception")
+	}
+}

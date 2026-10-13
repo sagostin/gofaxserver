@@ -51,6 +51,7 @@ var faxResultTypes = map[string]bool{
 	"transmission": true,
 	"delivery":     true,
 	"submission":   true,
+	"notify":       true,
 }
 
 // parseTimeBound accepts RFC3339 or a bare YYYY-MM-DD date.
@@ -179,10 +180,11 @@ func (q faxResultQuery) apply(db *gorm.DB) *gorm.DB {
 // FaxResultGroup is one fax job (correlated by job_uuid) with all of its
 // call legs/attempts (each with its own call_uuid). The group-level outcome
 // (success, status, pages) is derived from the final primary leg — the latest
-// non-delivery, non-submission leg, falling back to the latest leg overall.
-// Attempts counts real outbound attempts: the highest attempt_number seen on
-// transmission/delivery legs (receptions, bridges and submissions are the
-// job's source/intake, not attempts).
+// non-delivery, non-submission, non-notify leg, falling back to the latest
+// leg overall. Attempts counts real outbound attempts: the highest
+// attempt_number seen on transmission/delivery legs (receptions, bridges,
+// submissions and notify deliveries are the job's source/intake/receipts,
+// not attempts).
 type FaxResultGroup struct {
 	JobUUID          uuid.UUID      `json:"job_uuid"`
 	CallerIDNumber   string         `json:"caller_id_number"`
@@ -242,11 +244,11 @@ func deriveGroup(id uuid.UUID, legs []FaxJobResult) FaxResultGroup {
 	}
 
 	// Final primary leg decides the outcome: latest leg that is not a
-	// delivery or submission, falling back to the latest leg for
-	// delivery/submission-only jobs.
+	// delivery, submission or notify leg, falling back to the latest leg
+	// overall for delivery/submission/notify-only jobs.
 	primary := last
 	for i := len(legs) - 1; i >= 0; i-- {
-		if legs[i].ResultType != "delivery" && legs[i].ResultType != "submission" {
+		if legs[i].ResultType != "delivery" && legs[i].ResultType != "submission" && legs[i].ResultType != "notify" {
 			primary = legs[i]
 			break
 		}
@@ -311,11 +313,13 @@ func (s *Server) handleListFaxResults(ctx iris.Context) {
 	// success: job-level outcome — the success flag of the final primary leg
 	// (latest leg, deliveries ranked below primary legs). Submission legs are
 	// excluded entirely: they track intake lifecycle (queued/processed), not
-	// outcomes, so intake-only jobs match neither success filter value.
+	// outcomes. Notify legs are excluded too: a delivered receipt must never
+	// flip a failed fax to success (or vice versa). Jobs without a real
+	// outcome leg match neither success filter value.
 	if q.Success != nil {
 		latest := s.DB.Model(&FaxJobResult{}).
 			Select("DISTINCT ON (job_uuid) job_uuid, success").
-			Where("result_type <> ?", "submission").
+			Where("result_type NOT IN ?", []string{"submission", "notify"}).
 			Order("job_uuid, CASE WHEN result_type = 'delivery' THEN 1 ELSE 0 END, created_at DESC")
 		sub := s.DB.Table("(?) AS latest_legs", latest).
 			Select("job_uuid").Where("success = ?", *q.Success)

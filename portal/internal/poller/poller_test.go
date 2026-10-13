@@ -201,3 +201,68 @@ func TestDecideIgnoresProcessedSubmissionRow(t *testing.T) {
 		t.Fatalf("processed submission row must not count as an attempt, got %+v", d)
 	}
 }
+
+// notifyRow mimics a persisted notify-delivery leg (result_type "notify"):
+// gofaxserver records each emailed report / webhook / portal push alongside
+// the job's call legs. These are receipts, not fax attempts.
+func notifyRow(success bool) fsclient.FaxStatusRow {
+	return fsclient.FaxStatusRow{
+		JobUUID: "j-1", ResultType: "notify", AttemptNumber: 0,
+		StartTs: base.Add(3 * time.Minute), EndTs: base.Add(3 * time.Minute),
+		Success: success, ResultText: "email_report -> ops@example.com: sent",
+	}
+}
+
+func TestDecideIgnoresNotifyRows(t *testing.T) {
+	// Regression guard: a successful email delivery about a FAILED fax must
+	// never flip the job to success (and must not count as an attempt).
+	rows := []fsclient.FaxStatusRow{
+		row(false, 1, 0, "", "NORMAL_UNSPECIFIED"),
+		notifyRow(true),
+	}
+	d := decide(rows, false, true, true, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobFailed {
+		t.Fatalf("failed fax + delivered receipt should be failed, got %+v", d)
+	}
+	if d.attempts != 1 {
+		t.Fatalf("notify row must not count as an attempt, got %+v", d)
+	}
+
+	// And a failed webhook about a SUCCESSFUL fax must not flip it to failed.
+	rows = []fsclient.FaxStatusRow{
+		row(true, 1, 5, "OK", "NORMAL_CLEARING"),
+		notifyRow(false),
+	}
+	d = decide(rows, false, true, true, base.Add(-5*time.Minute), base)
+	if !d.terminal || d.status != models.JobSuccess {
+		t.Fatalf("successful fax + failed receipt should be success, got %+v", d)
+	}
+
+	// A notify-only job (nothing else heard) stays queued.
+	d = decide([]fsclient.FaxStatusRow{notifyRow(true)},
+		false, true, false, base.Add(-5*time.Minute), base)
+	if d.terminal || d.status != models.JobQueued || d.attempts != 0 {
+		t.Fatalf("notify-only job stays queued, got %+v", d)
+	}
+}
+
+func TestDecideTotalPages(t *testing.T) {
+	// Total pages come from any non-notify row, including the submission
+	// leg's intake TIFF count, so in-flight jobs already show the total.
+	sub := submissionRow()
+	sub.TotalPages = 15
+	r := row(true, 1, 15, "OK", "NORMAL_CLEARING")
+	r.TotalPages = 15
+	d := decide([]fsclient.FaxStatusRow{sub, r, notifyRow(true)},
+		false, true, true, base.Add(-5*time.Minute), base)
+	if d.totalPages != 15 {
+		t.Fatalf("total pages should be picked up across rows, got %+v", d)
+	}
+
+	// Intake count alone (no attempt rows yet) still surfaces.
+	d = decide([]fsclient.FaxStatusRow{sub},
+		false, true, false, base.Add(-time.Minute), base)
+	if d.totalPages != 15 || d.terminal {
+		t.Fatalf("in-flight job should carry the intake total, got %+v", d)
+	}
+}

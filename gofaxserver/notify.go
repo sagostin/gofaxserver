@@ -63,6 +63,7 @@ type PortalStatusPayload struct {
 	AllAttemptsFailed bool      `json:"all_attempts_failed"`
 	Attempts          int       `json:"attempts"`
 	TransferredPages  uint      `json:"transferred_pages"`
+	TotalPages        uint      `json:"total_pages,omitempty"`
 	ResultText        string    `json:"result_text,omitempty"`
 	HangupCause       string    `json:"hangup_cause,omitempty"`
 	CallerIdNumber    string    `json:"caller_id_number,omitempty"`
@@ -73,7 +74,8 @@ type PortalStatusPayload struct {
 
 // buildPortalStatusPayload collapses all per-attempt results into one final
 // outcome: the successful attempt wins if there is one, otherwise the latest
-// attempt describes the failure. Pages are the max across attempts.
+// attempt describes the failure. Pages (transferred and total) are the max
+// across attempts.
 func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 	p := PortalStatusPayload{
 		AllAttemptsFailed: nfr.AllAttemptsFailed,
@@ -92,6 +94,9 @@ func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 		}
 		if job.Result.TransferredPages > p.TransferredPages {
 			p.TransferredPages = job.Result.TransferredPages
+		}
+		if job.Result.TotalPages > p.TotalPages {
+			p.TotalPages = job.Result.TotalPages
 		}
 		if job.Result.Success && successJob == nil {
 			successJob = job
@@ -113,6 +118,35 @@ func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 		p.EndTs = chosen.Result.EndTs
 	}
 	return p
+}
+
+// pagesSummary renders page counts for subjects/bodies as "transferred/total"
+// when the total is known (SpanDSP reports Fax-Document-Total-Pages at hangup
+// for both rx and tx; outbound jobs also carry the intake TIFF page count).
+// A "failed" fax with transferred == total is a strong partial-success signal
+// (all pages crossed, the session just didn't close cleanly), so the ratio is
+// always shown when available. Falls back to a bare count when total is
+// unknown.
+func pagesSummary(transferred, total uint) string {
+	if total > 0 {
+		if transferred == 1 && total == 1 {
+			return "1/1 page"
+		}
+		return fmt.Sprintf("%d/%d pages", transferred, total)
+	}
+	if transferred == 1 {
+		return "1 page"
+	}
+	return fmt.Sprintf("%d pages", transferred)
+}
+
+// pagesSummaryPlain renders the bare "transferred/total" ratio (no unit) for
+// aligned body fields, falling back to the transferred count alone.
+func pagesSummaryPlain(transferred, total uint) string {
+	if total > 0 {
+		return fmt.Sprintf("%d/%d", transferred, total)
+	}
+	return fmt.Sprintf("%d", transferred)
 }
 
 // emailSubjectBody builds a human-readable subject and plain-text body for
@@ -139,10 +173,7 @@ func (nfr *NotifyFaxResults) emailSubjectBody(kind string) (subject, body string
 		phrase = fmt.Sprintf("Fax to %s", j.CalleeNumber)
 	}
 
-	pages := fmt.Sprintf("%d pages", p.TransferredPages)
-	if p.TransferredPages == 1 {
-		pages = "1 page"
-	}
+	pages := pagesSummary(p.TransferredPages, p.TotalPages)
 
 	if p.Success {
 		subject = fmt.Sprintf("%s succeeded (%s)", phrase, pages)
@@ -173,7 +204,7 @@ func (nfr *NotifyFaxResults) emailSubjectBody(kind string) (subject, body string
 	fmt.Fprintf(&b, "Direction: %s\n", direction)
 	fmt.Fprintf(&b, "From:      %s\n", from)
 	fmt.Fprintf(&b, "To:        %s\n", j.CalleeNumber)
-	fmt.Fprintf(&b, "Pages:     %d\n", p.TransferredPages)
+	fmt.Fprintf(&b, "Pages:     %s\n", pagesSummaryPlain(p.TransferredPages, p.TotalPages))
 	fmt.Fprintf(&b, "Attempts:  %d\n", p.Attempts)
 	if p.ResultText != "" {
 		fmt.Fprintf(&b, "Result:    %s\n", p.ResultText)
@@ -218,12 +249,13 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 	// Define a map of column headers to their widths.
 	columns := map[string]float64{
 		"Call ID":   45,
-		"Message":   50,
-		"Timestamp": 50,
-		"Status":    45,
+		"Message":   38,
+		"Timestamp": 45,
+		"Status":    40,
+		"Pages":     22,
 	}
 	// Define the desired order of the columns.
-	order := []string{"Call ID", "Timestamp", "Status", "Message"}
+	order := []string{"Call ID", "Timestamp", "Status", "Pages", "Message"}
 
 	// Draw the table header.
 	pdf.SetFont("Arial", "B", 12)
@@ -268,6 +300,7 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 		timestamp := ""
 		resultText := faxJob.Status
 		success := "failed"
+		pages := ""
 		if faxJob.Result != nil {
 			timestamp = faxJob.Result.EndTs.Format("2006-01-02 15:04:05")
 			if faxJob.Result.ResultText != "" {
@@ -278,6 +311,11 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 			}
 			if faxJob.Result.Success {
 				success = "success"
+			}
+			// transferred/total when known — surfaces the "failed but every
+			// page crossed" case directly on the report.
+			if faxJob.Result.TransferredPages > 0 || faxJob.Result.TotalPages > 0 {
+				pages = pagesSummaryPlain(faxJob.Result.TransferredPages, faxJob.Result.TotalPages)
 			}
 		}
 
@@ -292,6 +330,7 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 			"Call ID":   shortCallID,
 			"Timestamp": timestamp,
 			"Status":    success + " (" + endpointType + ")",
+			"Pages":     pages,
 			"Message":   resultText,
 		}
 
@@ -716,6 +755,47 @@ func SendEmailWithAttachment(subject, to, body string, attachmentPaths []string)
 	return nil
 }
 
+// recordNotifyDelivery persists one notify dispatch outcome as a "notify" leg
+// in fax_job_results, so notification deliveries (email, webhook, portal push)
+// are visible alongside the job's call legs in the all-jobs view. Notify legs
+// never decide the job's outcome: deriveGroup and the /admin/fax-results
+// success filter exclude them, and the portal poller skips result_type
+// "notify" rows. outcome is "sent", "failed", or "skipped"; detail carries the
+// human-readable destination + result (e.g. "email_report -> ops@x: sent").
+func (q *Queue) recordNotifyDelivery(f *FaxJob, dest NotifyDestination, outcome, detail string, start time.Time) {
+	if f == nil {
+		return
+	}
+	end := time.Now()
+	record := FaxJobResult{
+		SrcTenantID:    f.SrcTenantID,
+		DstTenantID:    f.DstTenantID,
+		JobUUID:        f.UUID,
+		CallUUID:       f.UUID, // no call of its own; correlate by job
+		CalleeNumber:   f.CalleeNumber,
+		CallerIdNumber: f.CallerIdNumber,
+		CallerIdName:   f.CallerIdName,
+		FileName:       f.FileName,
+		IsBridge:       f.IsBridge,
+		ResultType:     "notify",
+		EndpointType:   dest.Type,
+		Status:         outcome,
+		Success:        outcome == "sent",
+		ResultText:     detail,
+		StartTs:        &start,
+		EndTs:          &end,
+		CreatedAt:      end,
+	}
+	if err := q.server.DB.Create(&record).Error; err != nil {
+		q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+			"Notify",
+			fmt.Sprintf("failed to persist notify delivery leg: %v", err),
+			logrus.ErrorLevel,
+			map[string]interface{}{"uuid": f.UUID.String(), "type": dest.Type},
+		))
+	}
+}
+
 // processNotifyDestinationsAsync processes each NotifyDestination concurrently.
 func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destinations []NotifyDestination, firstPageTiffPDF string) {
 	var notifyWg sync.WaitGroup
@@ -764,6 +844,15 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 		go func() {
 			defer notifyWg.Done()
 
+			// Every terminal path through the switch sets outcome/detail;
+			// the deferred record persists the dispatch as a "notify" leg so
+			// deliveries are visible with the job in the all-jobs view.
+			dispatchStart := time.Now()
+			outcome, detail := "skipped", fmt.Sprintf("%s -> %s: no dispatch performed", dest.Type, dest.Destination)
+			defer func() {
+				q.recordNotifyDelivery(nFR.FaxJob, dest, outcome, detail, dispatchStart)
+			}()
+
 			// Process each destination based on its type.
 			switch dest.Type {
 			case "email", "email_report":
@@ -771,6 +860,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				// normalized at parse time; kept here for robustness).
 				subject, body := nFR.emailSubjectBody("email_report")
 				if err := SendEmailWithAttachment(subject, dest.Destination, body, []string{faxReport}); err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("email_report -> %s: %v", dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
@@ -778,6 +869,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
 					))
 				} else {
+					outcome = "sent"
+					detail = fmt.Sprintf("email_report -> %s: sent", dest.Destination)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						"email_report sent successfully",
@@ -792,6 +885,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 			case "email_full", "email_full_failure":
 				if dest.Type == "email_full_failure" {
 					if !nFR.AllAttemptsFailed {
+						detail = fmt.Sprintf("email_full_failure -> %s: skipped, not all attempts failed", dest.Destination)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							"skipping email_full_failure: not all attempts failed",
@@ -832,6 +926,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				}
 
 				if err := SendEmailWithAttachment(subject, dest.Destination, body, attachments); err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("%s -> %s: %v", dest.Type, dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to send email to %s: %v", dest.Destination, err),
@@ -839,6 +935,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						map[string]interface{}{"uuid": nFR.FaxJob.UUID.String()},
 					))
 				} else {
+					outcome = "sent"
+					detail = fmt.Sprintf("%s -> %s: sent", dest.Type, dest.Destination)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						"email_full sent successfully",
@@ -854,6 +952,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				// Read the fax file from disk.
 				fileBytes, err := os.ReadFile(faxReport)
 				if err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("webhook -> %s: failed to read fax file: %v", dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to read fax file for webhook: %v", err),
@@ -879,6 +979,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 
 				payload, err := json.Marshal(payloadStruct)
 				if err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("webhook -> %s: failed to marshal payload: %v", dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to marshal payload for webhook: %v", err),
@@ -891,6 +993,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				webhookURL := dest.Destination
 				req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(payload))
 				if err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("webhook -> %s: %v", dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("error creating POST request for webhook: %v", err),
@@ -902,6 +1006,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					client := &http.Client{Timeout: 10 * time.Second}
 					resp, err := client.Do(req)
 					if err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook -> %s: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("error sending POST request to webhook: %v", err),
@@ -911,6 +1017,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					} else {
 						resp.Body.Close()
 						if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+							outcome = "sent"
+							detail = fmt.Sprintf("webhook -> %s: sent (HTTP %d)", dest.Destination, resp.StatusCode)
 							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 								"Notify",
 								"webhook notification sent successfully",
@@ -923,6 +1031,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 								},
 							))
 						} else {
+							outcome = "failed"
+							detail = fmt.Sprintf("webhook -> %s: HTTP %d", dest.Destination, resp.StatusCode)
 							q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 								"Notify",
 								fmt.Sprintf("webhook responded with status %d", resp.StatusCode),
@@ -938,6 +1048,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 
 					payload, err := json.Marshal(nFR)
 					if err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: failed to marshal payload: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("failed to marshal payload for webhook: %v", err),
@@ -958,6 +1070,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					// Open the first page PDF file.
 					file, err := os.Open(firstPageTiffPDF)
 					if err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: failed to open first page pdf: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("failed to open first page pdf: %v", err),
@@ -971,6 +1085,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					// Attach the file to the form; field name "firstpage_pdf".
 					part, err := writer.CreateFormFile("firstpage_pdf", filepath.Base(firstPageTiffPDF))
 					if err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: failed to create form file: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("failed to create form file: %v", err),
@@ -981,6 +1097,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					}
 					_, err = io.Copy(part, file)
 					if err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: failed to copy file data: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("failed to copy file data: %v", err),
@@ -992,6 +1110,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 
 					// Close the writer to flush the multipart data.
 					if err := writer.Close(); err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: failed to close writer: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("failed to close writer: %v", err),
@@ -1005,6 +1125,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					webhookURL := dest.Destination
 					req, err := http.NewRequest("POST", webhookURL, body)
 					if err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("failed to create webhook_form request: %v", err),
@@ -1018,6 +1140,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					client := &http.Client{Timeout: 10 * time.Second}
 					resp, err := client.Do(req)
 					if err != nil {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: %v", dest.Destination, err)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("failed to send webhook_form request: %v", err),
@@ -1028,6 +1152,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					}
 					resp.Body.Close()
 					if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+						outcome = "sent"
+						detail = fmt.Sprintf("webhook_form -> %s: sent (HTTP %d)", dest.Destination, resp.StatusCode)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							"webhook_form notification sent successfully",
@@ -1040,6 +1166,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 							},
 						))
 					} else {
+						outcome = "failed"
+						detail = fmt.Sprintf("webhook_form -> %s: HTTP %d", dest.Destination, resp.StatusCode)
 						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 							"Notify",
 							fmt.Sprintf("webhook_form responded with status %d", resp.StatusCode),
@@ -1055,6 +1183,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				// delivery (svc username in the path + optional X-API-Key).
 				portalBase := strings.TrimRight(gofaxlib.Config.Portal.URL, "/")
 				if portalBase == "" {
+					detail = fmt.Sprintf("portal -> %s: skipped, portal.url is empty", dest.Destination)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						"portal notify destination configured but portal.url is empty, skipping",
@@ -1066,6 +1195,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 
 				payload, err := json.Marshal(nFR.buildPortalStatusPayload())
 				if err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("portal -> %s: failed to marshal payload: %v", dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("failed to marshal portal notify payload: %v", err),
@@ -1078,6 +1209,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				notifyURL := portalBase + "/portal/api/notify/" + dest.Destination
 				req, err := http.NewRequest("POST", notifyURL, bytes.NewReader(payload))
 				if err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("portal -> %s: %v", dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("error creating portal notify request: %v", err),
@@ -1094,6 +1227,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				client := &http.Client{Timeout: 10 * time.Second}
 				resp, err := client.Do(req)
 				if err != nil {
+					outcome = "failed"
+					detail = fmt.Sprintf("portal -> %s: %v", dest.Destination, err)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("error sending portal notify request: %v", err),
@@ -1104,6 +1239,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 				}
 				resp.Body.Close()
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+					outcome = "sent"
+					detail = fmt.Sprintf("portal -> %s: sent (HTTP %d)", dest.Destination, resp.StatusCode)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						"portal status notification sent successfully",
@@ -1116,6 +1253,8 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 						},
 					))
 				} else {
+					outcome = "failed"
+					detail = fmt.Sprintf("portal -> %s: HTTP %d", dest.Destination, resp.StatusCode)
 					q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 						"Notify",
 						fmt.Sprintf("portal notify endpoint responded with status %d", resp.StatusCode),
@@ -1129,6 +1268,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 			case "gateway":
 				// Gateway notifications are not implemented; log loudly
 				// instead of silently "processing" nothing.
+				detail = fmt.Sprintf("gateway -> %s: skipped, not implemented", dest.Destination)
 				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 					"Notify",
 					"gateway notify destination type is not implemented, skipping",
@@ -1139,6 +1279,7 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 					},
 				))
 			default:
+				detail = fmt.Sprintf("%s -> %s: skipped, unknown notify destination type", dest.Type, dest.Destination)
 				q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
 					"Notify",
 					"unknown notify destination type, skipping",

@@ -116,6 +116,9 @@ func (p *Poller) reconcile(job *models.FaxJob, activeSet map[string]bool, active
 	updates := map[string]any{
 		"attempts": d.attempts,
 	}
+	if d.totalPages > 0 {
+		updates["total_pages"] = d.totalPages
+	}
 	if d.terminal {
 		updates["status"] = d.status
 		updates["pages"] = d.pages
@@ -145,6 +148,7 @@ type decision struct {
 	status     string // target status (may equal current)
 	attempts   int
 	pages      int
+	totalPages int
 	resultText string
 	lastErr    string
 	completed  *time.Time
@@ -157,6 +161,13 @@ type decision struct {
 // ignored when deciding the terminal state.
 const placeholderHangupCause = "WEBHOOK"
 
+// notifyResultType marks notify-delivery legs (emailed reports, webhooks,
+// portal pushes) persisted by gofaxserver alongside the job's call legs.
+// They record receipt delivery, not fax attempts: counting them as attempts
+// — or worse, letting a successful email delivery flip a failed fax to
+// success — would corrupt the terminal-state decision.
+const notifyResultType = "notify"
+
 // decide is a pure function so the heuristic is unit-testable.
 //
 // Rules:
@@ -167,17 +178,28 @@ const placeholderHangupCause = "WEBHOOK"
 //  3. Otherwise still in flight: sending if seen in the tracker or previously
 //     seen there, queued if we've heard nothing yet.
 func decide(rows []fsclient.FaxStatusRow, inActive, activeOK, seenActive bool, submitted, now time.Time) decision {
-	// Drop placeholder rows (enqueue markers), keeping only real attempt rows.
+	d := decision{status: models.JobQueued}
+	// Total pages is metadata, not an outcome: pick it up from any non-notify
+	// row, including the placeholder submission leg (which carries the intake
+	// TIFF page count) so in-flight jobs already show the document total.
+	for _, r := range rows {
+		if r.ResultType != notifyResultType && r.TotalPages > d.totalPages {
+			d.totalPages = r.TotalPages
+		}
+	}
+
+	// Drop placeholder rows (enqueue markers) and notify-delivery legs,
+	// keeping only real attempt rows.
 	real := make([]fsclient.FaxStatusRow, 0, len(rows))
 	for _, r := range rows {
-		if r.HangupCause == placeholderHangupCause {
+		if r.HangupCause == placeholderHangupCause || r.ResultType == notifyResultType {
 			continue
 		}
 		real = append(real, r)
 	}
 	rows = real
 
-	d := decision{status: models.JobQueued, attempts: len(rows)}
+	d.attempts = len(rows)
 	bestPages := 0
 	var successRow, lastRow *fsclient.FaxStatusRow
 	for i := range rows {

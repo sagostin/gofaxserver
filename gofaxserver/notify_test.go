@@ -117,6 +117,29 @@ func TestBuildPortalStatusPayloadNoResults(t *testing.T) {
 	}
 }
 
+// TestBuildPortalStatusPayloadTotalPages: total pages are the max across
+// attempts, mirroring transferred pages — a retried attempt that saw the
+// full document must surface its total even if a later attempt hung up
+// before re-negotiating it.
+func TestBuildPortalStatusPayloadTotalPages(t *testing.T) {
+	now := time.Now()
+	a := attemptJob(false, 10, "OK", "NORMAL_CLEARING", now.Add(-time.Minute))
+	a.Result.TotalPages = 15
+	b := attemptJob(true, 15, "OK", "NORMAL_CLEARING", now)
+	b.Result.TotalPages = 15
+	nfr := NotifyFaxResults{
+		FaxJob:  &FaxJob{UUID: uuid.New()},
+		Results: map[string]*FaxJob{"a": a, "b": b},
+	}
+	p := nfr.buildPortalStatusPayload()
+	if p.TotalPages != 15 {
+		t.Errorf("total pages should be the max across attempts, got %d", p.TotalPages)
+	}
+	if p.TransferredPages != 15 {
+		t.Errorf("transferred pages should be the max across attempts, got %d", p.TransferredPages)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // parseNotifyString
 // ---------------------------------------------------------------------------
@@ -629,6 +652,50 @@ func TestEmailSubjectBodyBridged(t *testing.T) {
 	}
 	subject, _ := nfr.emailSubjectBody("email_report")
 	if subject != "Bridged fax 2507620300 → 2365461209 succeeded (2 pages)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+}
+
+// TestEmailSubjectBodyPagesRatio: when SpanDSP reported the document total,
+// pages render as transferred/total — a "failed" reception that actually
+// got every page reads 15/15, and a partial reads 10/15.
+func TestEmailSubjectBodyPagesRatio(t *testing.T) {
+	now := time.Now()
+
+	partial := attemptJob(true, 10, "OK", "NORMAL_CLEARING", now)
+	partial.Result.TotalPages = 15
+	nfr := NotifyFaxResults{
+		FaxJob:  emailJob("gateway", "2507620300", "2365461209", ""),
+		Results: map[string]*FaxJob{"a": partial},
+	}
+	subject, body := nfr.emailSubjectBody("email_report")
+	if subject != "Fax from 2507620300 succeeded (10/15 pages)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+	if !strings.Contains(body, "Pages:     10/15") {
+		t.Errorf("body missing pages ratio:\n%s", body)
+	}
+
+	full := attemptJob(false, 15, "NO ANSWER", "NO_ANSWER", now)
+	full.Result.TotalPages = 15
+	nfr = NotifyFaxResults{
+		FaxJob:            emailJob("gateway", "2507620300", "2365461209", ""),
+		AllAttemptsFailed: true,
+		Results:           map[string]*FaxJob{"a": full},
+	}
+	subject, body = nfr.emailSubjectBody("email_report")
+	if !strings.Contains(body, "Pages:     15/15") {
+		t.Errorf("failed fax with all pages should still show 15/15:\n%s", body)
+	}
+
+	single := attemptJob(true, 1, "OK", "NORMAL_CLEARING", now)
+	single.Result.TotalPages = 1
+	nfr = NotifyFaxResults{
+		FaxJob:  emailJob("webhook", "2365461209", "2507620300", ""),
+		Results: map[string]*FaxJob{"a": single},
+	}
+	subject, _ = nfr.emailSubjectBody("email_report")
+	if subject != "Fax to 2507620300 succeeded (1/1 page)" {
 		t.Errorf("unexpected subject: %q", subject)
 	}
 }

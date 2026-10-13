@@ -115,6 +115,7 @@ type FaxJob struct {
 	OriginalFilename string     `json:"original_filename"`
 	Status           string     `gorm:"index;not null;default:'queued'" json:"status"`
 	Pages            int        `json:"pages"`
+	TotalPages       int        `json:"total_pages"` // document page count when known (0 = unknown)
 	Attempts         int        `json:"attempts"`
 	ResultText       string     `json:"result_text"`
 	LastError        string     `json:"last_error"`

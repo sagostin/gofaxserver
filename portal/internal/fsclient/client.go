@@ -319,6 +319,7 @@ type FaxStatusRow struct {
 	EndTs            time.Time `json:"end_ts"`
 	HangupCause      string    `json:"hangup_cause"`
 	TransferredPages int       `json:"transferred_pages"`
+	TotalPages       int       `json:"total_pages"`
 	Success          bool      `json:"success"`
 	ResultText       string    `json:"result_text"`
 	T38Status        string    `json:"t38_status"`

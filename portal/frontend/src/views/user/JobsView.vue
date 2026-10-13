@@ -10,6 +10,7 @@ interface Job {
   original_filename: string
   status: string
   pages: number
+  total_pages: number
   attempts: number
   result_text: string
   last_error: string
@@ -42,6 +43,14 @@ onUnmounted(() => { if (timer.value) clearInterval(timer.value) })
 function fmt(ts: string | null): string {
   return ts ? new Date(ts).toLocaleString() : '—'
 }
+
+// fmtPages shows transferred/total when the document total is known
+// (0 = unknown), so a "failed" fax whose pages all crossed reads 15/15.
+function fmtPages(j: Job): string {
+  if (!j.pages && !j.total_pages) return '—'
+  if (j.total_pages) return `${j.pages}/${j.total_pages}`
+  return `${j.pages}`
+}
 </script>
 
 <template>
@@ -58,7 +67,7 @@ function fmt(ts: string | null): string {
             <td>{{ j.original_filename }}</td>
             <td>{{ j.caller_number }} → {{ j.callee_number }}</td>
             <td><span class="badge" :class="j.status">{{ j.status }}</span></td>
-            <td>{{ j.pages || '—' }}</td>
+            <td>{{ fmtPages(j) }}</td>
             <td>{{ j.attempts }}</td>
             <td>{{ j.result_text || j.last_error || '—' }}</td>
           </tr>

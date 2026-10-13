@@ -629,6 +629,23 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 		return
 	}
 
+	// Count the converted document's pages so the job carries its true total
+	// from intake (queued/in-progress jobs show transferred/total in fax
+	// results and notify emails). SpanDSP's Fax-Document-Total-Pages at
+	// hangup remains authoritative on the real transmission legs. A count
+	// failure is non-fatal: the fax goes out regardless.
+	var totalPages uint
+	if n, countErr := countTiffPages(tiff); countErr != nil {
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Web",
+			fmt.Sprintf("failed to count TIFF pages at intake: %v", countErr),
+			logrus.WarnLevel,
+			map[string]interface{}{"uuid": docID.String(), "file": tiff},
+		))
+	} else {
+		totalPages = uint(n)
+	}
+
 	// Extract source/destination numbers and caller name from form fields.
 	// Use FormValue to get additional parameters from the request.
 	calleeNumber := ctx.FormValue("callee_number")
@@ -677,6 +694,7 @@ func (s *Server) handleDocumentUpload(ctx iris.Context) {
 			HangupCause: "WEBHOOK",
 			ResultText:  "queued",
 			Success:     false,
+			TotalPages:  totalPages,
 		},
 		SourceInfo: FaxSourceInfo{
 			Timestamp:  time.Now(),

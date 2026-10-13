@@ -718,7 +718,7 @@ curl -X GET "http://<HOST>:8080/fax/status?uuid=550e8400-e29b-41d4-a716-44665544
   -H "Authorization: Basic $(echo -n 'tenantuser:password' | base64)"
 ```
 
-**Response:** array of `fax_job_results` rows. Multiple rows may be returned for a single job UUID when retries occurred. Portal/API-submitted jobs also include a `submission` row (attempt_number 0, hangup_cause `WEBHOOK`) recording the job's intake lifecycle — `result_text`/`status` go from `queued` (accepted) to `processed` (picked up by the queue worker, `success: true`). It is not a call attempt and must be ignored for terminal-state decisions:
+**Response:** array of `fax_job_results` rows. Multiple rows may be returned for a single job UUID when retries occurred. Portal/API-submitted jobs also include a `submission` row (attempt_number 0, hangup_cause `WEBHOOK`) recording the job's intake lifecycle — `result_text`/`status` go from `queued` (accepted) to `processed` (picked up by the queue worker, `success: true`). It is not a call attempt and must be ignored for terminal-state decisions. Completed jobs additionally carry `notify` rows (one per attempted notification delivery — `endpoint_type` is the notify type such as `email_report`/`webhook`/`portal`, `status` is `sent`/`failed`/`skipped`, and `result_text` describes the destination and outcome). Notify rows are receipts, not attempts, and must likewise be ignored for terminal-state decisions. `transferred_pages`/`total_pages` report pages transferred out of the document total (SpanDSP's hangup-time `Fax-Document-Total-Pages`; outbound jobs also carry the intake TIFF page count on the `submission` row):
 
 ```json
 [
@@ -735,6 +735,7 @@ curl -X GET "http://<HOST>:8080/fax/status?uuid=550e8400-e29b-41d4-a716-44665544
     "end_ts": "2025-12-23T12:52:10Z",
     "hangup_cause": "NORMAL_CLEARING",
     "transferred_pages": 3,
+    "total_pages": 3,
     "success": true,
     "result_text": "OK",
     "t38_status": "negotiated"
