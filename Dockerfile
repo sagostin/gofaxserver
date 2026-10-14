@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y \
     autoconf \
     pkg-config \
     build-essential \
+    nftables \
+    ipset \
+    libcap2-bin \
     libpng-dev \
     libtiff-dev \
     libjpeg-dev \
@@ -70,6 +73,12 @@ COPY --from=builder /app/main .
 # compose files. Pre-create it owned by appuser so a fresh named volume
 # inherits the right ownership.
 RUN mkdir -p /var/lib/gofaxserver/tmp && chown -R appuser:appuser /var/lib/gofaxserver
+
+# IP sentry (security.enabled): the firewall binaries need CAP_NET_ADMIN as a
+# file capability so the non-root appuser can program host netfilter rules —
+# the container must ALSO be started with `cap_add: NET_ADMIN` (host
+# networking means the container shares the host's network namespace).
+RUN setcap cap_net_admin+ep /usr/sbin/nft && setcap cap_net_admin+ep /usr/sbin/ipset
 
 # Switch to non-root user
 USER appuser

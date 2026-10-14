@@ -20,5 +20,11 @@ ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/gofaxserver /tmp /etc/freeswitch/gateways
 
+# IP sentry (security.enabled=true in config.json): uncomment to let the
+# service program nftables/ipset rules for dynamic SIP brute-force banning.
+# Also install the nftables (or ipset) package on the host.
+#AmbientCapabilities=CAP_NET_ADMIN
+#CapabilityBoundingSet=CAP_NET_ADMIN
+
 [Install]
 WantedBy=multi-user.target

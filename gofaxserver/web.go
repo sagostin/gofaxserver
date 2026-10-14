@@ -93,6 +93,12 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Post("/freeswitch/rescan", s.handleRescanFSProfile)
 		admin.Post("/freeswitch/profile/restart", s.handleRestartFSProfile)
 
+		// SIP brute-force sentry (dynamic IP banning).
+		admin.Get("/security/status", s.handleSecurityStatus)
+		admin.Get("/security/blocked-ips", s.handleListBlockedIPs)
+		admin.Post("/security/blocked-ips", s.handleBanIP)
+		admin.Delete("/security/blocked-ips/{ip}", s.handleUnbanIP)
+
 		// Dialplan rule management (active when dialplan.source = "db").
 		admin.Get("/dialplan", s.handleGetDialplan)
 		admin.Post("/dialplan/rules", s.handleCreateDialplanRule)

@@ -60,6 +60,9 @@ type Server struct {
 	GatewayACLResolved map[string][]string `json:"gateway_acl_resolved,omitempty"`
 	UpstreamFsGateways []string            `json:"upstream_fs_gateways"` // upstream gateway names defined in the global endpoints config/DB
 	FaxTracker         *FaxTracker         `json:"fax_tracker,omitempty"`
+	// IPSentry is the SIP brute-force sentry (dynamic IP banning). Nil when
+	// disabled via the security config section.
+	IPSentry *IPSentry `json:"ip_sentry,omitempty"`
 	// faxPolicies holds the active fax policy rules; swapped atomically on
 	// reload. Access via ResolveFaxPolicy().
 	faxPolicies atomic.Pointer[[]FaxPolicyRule]
@@ -272,6 +275,21 @@ func (s *Server) Start() {
 	// start the temp-file janitor (removes orphaned fax files from temp_dir;
 	// see tempclean.go)
 	go s.startTempJanitor()
+
+	// start the SIP brute-force sentry AFTER endpoints are loaded: banning
+	// decisions consult the gateway ACLs, and persisted bans are re-applied
+	// to the firewall here (no-op when security.enabled = false).
+	if sentry, err := newIPSentry(s); err != nil {
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Server.StartUp",
+			fmt.Sprintf("failed to start IP sentry: %v", err),
+			logrus.ErrorLevel,
+			nil,
+		))
+	} else if sentry != nil {
+		s.IPSentry = sentry
+		sentry.Start()
+	}
 
 	s.LogManager.SendLog(s.LogManager.BuildLog(
 		"Server",

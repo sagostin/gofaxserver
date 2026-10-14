@@ -185,6 +185,7 @@ Notes:
 - `gateway_config_dir` enables API-driven provisioning: rendered gateway XML is written there and FreeSWITCH is reloaded over ESL. Leave empty to disable. `gateway_config_chown` optionally chowns files, `gateway_profile` selects the Sofia profile to rescan (default `fax`), `gateway_monitor_seconds` is the registration poll interval and the re-resolution cadence for hostname-valued gateway ACL entries (default 60, negative disables both). See [docs/GATEWAYS.md](docs/GATEWAYS.md).
 - `dialplan.source` is `"config"` (rules from this file, shown above) or `"db"` (rules from the `dialplan_rules` table, editable via `/admin/dialplan*` and hot-reloaded by `/admin/reload`). Omit the whole `dialplan` section to use the built-in defaults.
 - `faxing.policy` configures the [fax policy engine](#fax-policy) (T.38/ECM/V.17 rules + adaptive learning). The whole section is optional — sensible defaults apply when absent. The old `freeswitch.softmodem_fallback` key is deprecated and ignored.
+- `security` configures the SIP brute-force sentry: source IPs that repeatedly fail the gateway ACL check are banned at the host firewall (nftables/ipset) with escalating durations, and auto-unbanned if the IP later becomes a gateway endpoint. Disabled by default — see [docs/SECURITY.md](docs/SECURITY.md).
 - PostgreSQL SSL mode and timezone can be overridden via `POSTGRES_SSLMODE` and `POSTGRES_TIMEZONE` environment variables (defaults: `disable`, `America/Vancouver`).
 
 ## API Reference

@@ -745,3 +745,64 @@ func (c *Client) GetFaxStatus(username, password, uuid string) ([]FaxStatusRow, 
 	err := c.do(http.MethodGet, "/fax/status?uuid="+uuid, username, password, nil, "", &out)
 	return out, err
 }
+
+// --- security sentry (SIP brute-force IP banning) ---
+
+// SecurityMetrics mirrors gofaxserver's sentry status payload.
+type SecurityMetrics struct {
+	Enabled          bool   `json:"enabled"`
+	Backend          string `json:"backend"`
+	FailThreshold    int    `json:"fail_threshold"`
+	FailWindow       string `json:"fail_window"`
+	ActiveBans       int    `json:"active_bans"`
+	TrackedIPs       int    `json:"tracked_ips"`
+	FailuresSeen     int64  `json:"failures_seen"`
+	BlockedHits      int64  `json:"blocked_hits"`
+	BansCreated      int64  `json:"bans_created"`
+	BansExpired      int64  `json:"bans_expired"`
+	ReconcileUnbans  int64  `json:"reconcile_unbans"`
+	ManualBans       int64  `json:"manual_bans"`
+	ManualUnbans     int64  `json:"manual_unbans"`
+	EnforceErrors    int64  `json:"enforce_errors"`
+	WhitelistSkipped int64  `json:"whitelist_skipped"`
+}
+
+// BlockedIP mirrors gofaxserver's ban record. Nil expires_at = permanent.
+type BlockedIP struct {
+	ID           uint    `json:"id"`
+	IP           string  `json:"ip"`
+	Reason       string  `json:"reason"`
+	Source       string  `json:"source"`
+	FailCount    int     `json:"fail_count"`
+	OffenseCount int     `json:"offense_count"`
+	BannedAt     string  `json:"banned_at"`
+	ExpiresAt    *string `json:"expires_at,omitempty"`
+	Active       bool    `json:"active"`
+	UnbannedAt   *string `json:"unbanned_at,omitempty"`
+	UnbanReason  string  `json:"unban_reason,omitempty"`
+}
+
+func (c *Client) SecurityStatus() (*SecurityMetrics, error) {
+	out := &SecurityMetrics{}
+	err := c.doAdmin(http.MethodGet, "/admin/security/status", nil, out)
+	return out, err
+}
+
+func (c *Client) ListBlockedIPs(all bool) ([]BlockedIP, error) {
+	path := "/admin/security/blocked-ips"
+	if all {
+		path += "?all=true"
+	}
+	var out []BlockedIP
+	err := c.doAdmin(http.MethodGet, path, nil, &out)
+	return out, err
+}
+
+func (c *Client) BanIP(ip, reason, duration string) error {
+	return c.doAdmin(http.MethodPost, "/admin/security/blocked-ips",
+		map[string]string{"ip": ip, "reason": reason, "duration": duration}, nil)
+}
+
+func (c *Client) UnbanIP(ip string) error {
+	return c.doAdmin(http.MethodDelete, "/admin/security/blocked-ips/"+ip, nil, nil)
+}

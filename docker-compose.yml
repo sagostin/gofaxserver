@@ -45,6 +45,11 @@ services:
       # XML from, and must match freeswitch.gateway_config_dir in config.json.
       # - /etc/freeswitch/gateways:/etc/freeswitch/gateways
     network_mode: host
+    # NET_ADMIN lets the IP sentry (security.enabled in config.json) program
+    # host nftables/ipset rules. Host networking shares the host's network
+    # namespace, so bans drop SIP brute-force traffic in the host kernel.
+    cap_add:
+      - NET_ADMIN
     restart: always
     # Wait for a HEALTHY database: on first boot postgres takes a few seconds
     # to init its data dir, and gofaxserver does not retry a failed startup

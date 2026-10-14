@@ -179,7 +179,20 @@ func (s *Server) loadEndpoints() error {
 	s.mu.Lock()
 	s.GatewayACLResolved = resolved
 	s.mu.Unlock()
+
+	// Endpoint changes may legitimize a previously banned source IP (e.g. a
+	// customer's PBX was added after it tripped the brute-force sentry).
+	s.reconcileBans()
 	return nil
+}
+
+// reconcileBans releases sentry bans whose IP now matches a gateway ACL.
+// Nil-safe: a no-op while the sentry is disabled or not yet started
+// (loadEndpoints runs before sentry init during Server.Start).
+func (s *Server) reconcileBans() {
+	if s.IPSentry != nil {
+		s.IPSentry.Reconcile()
+	}
 }
 
 // addEndpointToDB persists a new endpoint to the database and then adds it to the in-memory map.

@@ -24,6 +24,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"time"
 )
 
 var (
@@ -116,10 +117,92 @@ type config struct {
 		FromName    string `json:"from_name,omitempty"`
 	} `json:"smtp"`
 	PSK string `json:"psk"`
+	// Security configures the SIP brute-force sentry (dynamic IP banning).
+	// See SecurityConfig. Absent section = disabled.
+	Security SecurityConfig `json:"security"`
 	// Dialplan is optional. When the section is absent, built-in default
 	// transformation rules are used. When present (even with an empty rules
 	// list), the configured rules fully replace the defaults.
 	Dialplan *DialplanConfig `json:"dialplan,omitempty"`
+}
+
+// SecurityConfig tunes the SIP brute-force sentry: it watches failed-ACL
+// inbound attempts and bans offending source IPs at the host firewall
+// (nftables/ipset) for escalating durations. Bans are auto-revoked when the
+// IP becomes a known gateway endpoint (or DNS-resolves to one).
+type SecurityConfig struct {
+	// Enabled turns the sentry on (default false — safe rollout).
+	Enabled bool `json:"enabled"`
+	// Backend selects enforcement: "nft" (default when enabled), "ipset",
+	// or "log-only" (detection + logging, no firewall changes).
+	Backend string `json:"backend"`
+	// FailThreshold is the number of failed-ACL attempts within FailWindow
+	// that triggers a ban (default 5).
+	FailThreshold int `json:"fail_threshold"`
+	// FailWindow is the sliding window for counting failures (Go duration
+	// string, default "60s").
+	FailWindow string `json:"fail_window"`
+	// BanDurations are the escalating ban lengths per offense (Go duration
+	// strings, default ["10m","1h","24h"]). An IP banned more times than
+	// there are entries is banned permanently.
+	BanDurations []string `json:"ban_durations"`
+	// WhitelistCIDRs are networks that are never banned (office IPs,
+	// carrier ranges). Individual IPs may be written without a mask.
+	WhitelistCIDRs []string `json:"whitelist_cidrs"`
+	// JanitorSeconds is the interval for expiring bans and reconciling bans
+	// against the current gateway ACLs (default 60).
+	JanitorSeconds int `json:"janitor_seconds"`
+}
+
+// BackendName returns the configured enforcement backend (default "nft").
+func (c SecurityConfig) BackendName() string {
+	switch c.Backend {
+	case "nft", "ipset", "log-only":
+		return c.Backend
+	default:
+		return "nft"
+	}
+}
+
+// Threshold returns the failure threshold (default 5).
+func (c SecurityConfig) Threshold() int {
+	if c.FailThreshold > 0 {
+		return c.FailThreshold
+	}
+	return 5
+}
+
+// Window returns the failure counting window (default 60s).
+func (c SecurityConfig) Window() time.Duration {
+	if d, err := time.ParseDuration(c.FailWindow); err == nil && d > 0 {
+		return d
+	}
+	return time.Minute
+}
+
+// Durations returns the escalating ban durations (default 10m/1h/24h).
+func (c SecurityConfig) Durations() []time.Duration {
+	if len(c.BanDurations) == 0 {
+		return []time.Duration{10 * time.Minute, time.Hour, 24 * time.Hour}
+	}
+	out := make([]time.Duration, 0, len(c.BanDurations))
+	for _, s := range c.BanDurations {
+		if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			out = append(out, d)
+		}
+	}
+	if len(out) == 0 {
+		return []time.Duration{10 * time.Minute, time.Hour, 24 * time.Hour}
+	}
+	return out
+}
+
+// JanitorInterval returns the expiry/reconcile sweep interval (default 60s).
+func (c SecurityConfig) JanitorInterval() time.Duration {
+	if c.JanitorSeconds > 0 {
+		return time.Duration(c.JanitorSeconds) * time.Second
+	}
+	return time.Minute
 }
 
 // FaxPolicyConfig tunes the Postgres-backed fax policy engine which replaces

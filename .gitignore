@@ -18,6 +18,7 @@ packaging/*.deb
 .vscode
 .idea/
 .DS_Store
+.junie
 
 # --- Secrets / environment ---
 .env

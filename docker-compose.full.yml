@@ -112,6 +112,11 @@ services:
       # match faxing.temp_dir in config.json.
       - faxtmp:/var/lib/gofaxserver/tmp
     network_mode: host
+    # NET_ADMIN lets the IP sentry (security.enabled in config.json) program
+    # host nftables/ipset rules (host networking = host netns). The image
+    # setcaps nft/ipset so the non-root appuser can run them.
+    cap_add:
+      - NET_ADMIN
     restart: always
     depends_on:
       postgres:

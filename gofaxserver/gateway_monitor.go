@@ -178,4 +178,8 @@ func (s *Server) refreshGatewayACLResolution() {
 	s.mu.Lock()
 	s.GatewayACLResolved = resolved
 	s.mu.Unlock()
+
+	// A hostname-valued ACL entry may have re-resolved onto an IP the
+	// brute-force sentry banned earlier — release such bans.
+	s.reconcileBans()
 }

@@ -191,6 +191,12 @@ func (s *Server) BuildApp() *iris.Application {
 	admin.Post("/freeswitch/rescan", s.adminRescanFSProfile)
 	admin.Post("/freeswitch/profile/restart", s.adminRestartFSProfile)
 
+	// SIP brute-force sentry (upstream gofaxserver feature; no local mirror).
+	admin.Get("/security/status", s.adminSecurityStatus)
+	admin.Get("/security/blocked-ips", s.adminListBlockedIPs)
+	admin.Post("/security/blocked-ips", s.adminBanIP)
+	admin.Delete("/security/blocked-ips/{ip}", s.adminUnbanIP)
+
 	// Upstream pickers (feed scope dropdowns; direct tenants included).
 	admin.Get("/upstream/tenants", s.adminListUpstreamTenants)
 	admin.Get("/upstream/numbers", s.adminListUpstreamNumbers)

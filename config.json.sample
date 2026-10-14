@@ -61,6 +61,15 @@
     "username": "lokiuser",
     "password": "lokipassword"
   },
+  "security": {
+    "enabled": false,
+    "backend": "nft",
+    "fail_threshold": 5,
+    "fail_window": "60s",
+    "ban_durations": ["10m", "1h", "24h"],
+    "whitelist_cidrs": [],
+    "janitor_seconds": 60
+  },
   "web": {
     "listen": "0.0.0.0:8080",
     "api_key": "apikeyhere"

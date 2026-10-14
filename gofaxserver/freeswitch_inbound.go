@@ -182,9 +182,30 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		recipient = connectev.Get("Variable_sip_to_user")
 	}
 
+	// Fast-path: source IP banned by the brute-force sentry. The firewall
+	// normally drops these packets before they reach FreeSWITCH; this covers
+	// log-only mode and the gap before the kernel rule lands. Logging is
+	// sampled so a banned scanner cannot spam the logs/Loki.
+	if e.server.IPSentry != nil && e.server.IPSentry.IsBanned(sourceIP) {
+		if e.server.IPSentry.ShouldLogBlocked(sourceIP) {
+			logf(
+				logrus.WarnLevel,
+				"rejected call from banned ip %s (to: %s from: %s <%s>)",
+				map[string]interface{}{"uuid": channelUUID.String(), "ip": sourceIP},
+				sourceIP, recipient, cidNum, cidName,
+			)
+		}
+		exec("respond", "403", true)
+		_, _ = c.Send("exit")
+		return
+	}
+
 	// Validate against FS gateway ACLs
 	ep1, err := e.server.fsGatewayACL(sourceIP)
 	if err != nil {
+		if e.server.IPSentry != nil {
+			e.server.IPSentry.RecordFailure(sourceIP)
+		}
 		logf(
 			logrus.ErrorLevel,
 			"invalid call (to: %s from: %s <%s>) failed ACLs - ip: %s",

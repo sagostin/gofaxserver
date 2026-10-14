@@ -495,6 +495,27 @@ no impact on active calls. `restart` runs `sofia profile <gateway_profile>
 restart`, which drops all active calls on the profile, and therefore requires
 the `confirm=true` query parameter.
 
+### Security Sentry (SIP Brute-Force Banning)
+
+Dynamic IP banning driven by failed gateway-ACL attempts — see
+[SECURITY.md](SECURITY.md) for configuration, firewall privileges, and
+operational behavior. Returns 404 when `security.enabled=false` (except
+`status`, which always answers).
+
+```
+GET    /admin/security/status
+GET    /admin/security/blocked-ips[?all=true]
+POST   /admin/security/blocked-ips
+DELETE /admin/security/blocked-ips/{ip}
+```
+
+`status` returns enabled flag, backend, thresholds, and counters (active
+bans, failures seen, blocked hits, bans created/expired, reconcile unbans,
+firewall errors). `blocked-ips` lists active bans (`all=true` includes
+history). `POST` body: `{"ip": "203.0.113.10", "reason": "...", "duration":
+"24h"}` — empty duration means permanent. `DELETE` unbans immediately
+(404 when the IP is not banned).
+
 ### Gateway Templates
 
 Templates use Go `text/template` syntax (`{{.realm}}`, `{{if .register}}…{{end}}`).

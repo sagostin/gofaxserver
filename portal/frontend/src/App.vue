@@ -28,6 +28,7 @@ const links = computed<NavLink[]>(() => {
       { to: '/admin/active', label: 'Active Faxes' },
       { to: '/admin/jobs', label: 'All Jobs' },
       { to: '/admin/inbound', label: 'Inbound Faxes' },
+      { to: '/admin/security', label: 'Security' },
       { to: '/admin/audit', label: 'Audit' },
     ]
   }

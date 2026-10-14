@@ -82,6 +82,11 @@ func TestProtectedRoutesRejectAnonymous(t *testing.T) {
 	// Org maintenance routes
 	e.POST("/portal/api/admin/orgs/1/credentials/rotate").Expect().Status(401)
 	e.POST("/portal/api/admin/orgs/1/notify/resync").Expect().Status(401)
+	// Security sentry routes
+	e.GET("/portal/api/admin/security/status").Expect().Status(401)
+	e.GET("/portal/api/admin/security/blocked-ips").Expect().Status(401)
+	e.POST("/portal/api/admin/security/blocked-ips").WithJSON(map[string]string{"ip": "203.0.113.10"}).Expect().Status(401)
+	e.DELETE("/portal/api/admin/security/blocked-ips/203.0.113.10").Expect().Status(401)
 }
 
 func TestSPAServesUnderPortalPrefix(t *testing.T) {
