@@ -39,12 +39,12 @@ import (
 
 // sentryBackend enforces bans in the host firewall. All implementations
 // must be idempotent: Ban of an already-banned IP and Unban of an
-// unbanned IP must succeed (or fail harmlessly).
+// unbanned IP must succeed (or fail harmlessly). Ban/Sync self-heal by
+// re-running Bootstrap and retrying once when the firewall state is
+// missing (external flush, failed startup bootstrap).
 type sentryBackend interface {
 	Name() string
-	// Bootstrap creates the dedicated table/set and drop chain. May
-	// flush and recreate existing state; persisted bans are re-applied
-	// afterwards by the sentry.
+	// Bootstrap creates the dedicated table/set and drop chain if missing.
 	Bootstrap() error
 	// Ban blocks the IP until the given time (nil = permanent).
 	Ban(ip string, until *time.Time) error
@@ -106,12 +106,13 @@ func nftSetFor(ip string) string {
 // nftables backend
 // ---------------------------------------------------------------------------
 
-// nftBootstrapScript recreates the dedicated table. `destroy` (unlike
-// `delete`) succeeds when the table does not exist yet. The input chain
-// hooks at `filter - 10` so drops happen before ufw/other filter-priority
-// chains accept the packet.
-const nftBootstrapScript = `destroy table inet gofax_sentry
-table inet gofax_sentry {
+// nftBootstrapScript creates the dedicated table. It is only run when the
+// table is missing (see ensureTable), so no destroy/delete of prior state
+// is needed — and `destroy` is deliberately avoided because it requires
+// nftables >= 0.9.8 (absent on e.g. Ubuntu 20.04). The input chain hooks at
+// `filter - 10` so drops happen before ufw/other filter-priority chains
+// accept the packet.
+const nftBootstrapScript = `table inet gofax_sentry {
 	set blocklist4 {
 		type ipv4_addr
 		flags timeout
@@ -132,8 +133,28 @@ type nftBackend struct{}
 
 func (b *nftBackend) Name() string { return "nft" }
 
-func (b *nftBackend) Bootstrap() error {
+// ensureTable bootstraps only when the table is absent, making every caller
+// idempotent and immune to external firewall flushes.
+func (b *nftBackend) ensureTable() error {
+	if err := sentryRunner("nft", []string{"list", "table", "inet", "gofax_sentry"}, ""); err == nil {
+		return nil
+	}
 	return sentryRunner("nft", []string{"-f", "-"}, nftBootstrapScript)
+}
+
+func (b *nftBackend) Bootstrap() error { return b.ensureTable() }
+
+// withHeal runs op, and when it fails (e.g. the table vanished after a
+// firewall flush or a failed startup bootstrap), re-bootstraps and retries
+// exactly once.
+func (b *nftBackend) withHeal(op func() error) error {
+	if err := op(); err == nil {
+		return nil
+	}
+	if berr := b.ensureTable(); berr != nil {
+		return berr
+	}
+	return op()
 }
 
 func (b *nftBackend) Ban(ip string, until *time.Time) error {
@@ -142,7 +163,9 @@ func (b *nftBackend) Ban(ip string, until *time.Time) error {
 	if until != nil {
 		elem = fmt.Sprintf("%s timeout %s", ip, nftTimeout(time.Until(*until)))
 	}
-	return sentryRunner("nft", []string{"add", "element", "inet", "gofax_sentry", set, "{ " + elem + " }"}, "")
+	return b.withHeal(func() error {
+		return sentryRunner("nft", []string{"add", "element", "inet", "gofax_sentry", set, "{ " + elem + " }"}, "")
+	})
 }
 
 func (b *nftBackend) Unban(ip string) error {
@@ -153,6 +176,9 @@ func (b *nftBackend) Unban(ip string) error {
 
 func (b *nftBackend) Sync(active []*BlockedIP) int {
 	if len(active) == 0 {
+		if err := b.ensureTable(); err != nil {
+			return 1
+		}
 		return 0
 	}
 	var sb strings.Builder
@@ -165,7 +191,10 @@ func (b *nftBackend) Sync(active []*BlockedIP) int {
 		}
 		fmt.Fprintf(&sb, "add element inet gofax_sentry %s { %s }\n", nftSetFor(rec.IP), elem)
 	}
-	if err := sentryRunner("nft", []string{"-f", "-"}, sb.String()); err != nil {
+	err := b.withHeal(func() error {
+		return sentryRunner("nft", []string{"-f", "-"}, sb.String())
+	})
+	if err != nil {
 		return 1
 	}
 	return 0
@@ -197,6 +226,13 @@ func (b *ipsetBackend) Ban(ip string, until *time.Time) error {
 	timeout := "0" // 0 = never expires
 	if until != nil {
 		timeout = fmt.Sprintf("%d", int64(time.Until(*until).Seconds()))
+	}
+	// Self-heal: a flushed/destroyed set is recreated and the op retried.
+	if err := sentryRunner("ipset", []string{"add", "-exist", ipsetName, ip, "timeout", timeout}, ""); err == nil {
+		return nil
+	}
+	if berr := b.Bootstrap(); berr != nil {
+		return berr
 	}
 	return sentryRunner("ipset", []string{"add", "-exist", ipsetName, ip, "timeout", timeout}, "")
 }

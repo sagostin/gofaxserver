@@ -18,6 +18,8 @@
 package gofaxserver
 
 import (
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -361,5 +363,70 @@ func TestNftTimeoutAndSetSelection(t *testing.T) {
 	}
 	if nftSetFor("192.0.2.1") != "blocklist4" || nftSetFor("2001:db8::1") != "blocklist6" {
 		t.Fatal("nft set selection wrong")
+	}
+}
+
+// TestNftBanSelfHealsOnMissingTable reproduces the production failure where
+// the gofax_sentry table was never created (startup bootstrap failed): the
+// first Ban errors with "No such file or directory", the backend must
+// re-bootstrap and retry, and the ban must ultimately succeed.
+func TestNftBanSelfHealsOnMissingTable(t *testing.T) {
+	tableExists := false
+	var calls []string
+	old := sentryRunner
+	sentryRunner = func(name string, args []string, stdin string) error {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		switch {
+		case name == "nft" && len(args) >= 3 && args[0] == "list":
+			if !tableExists {
+				return errors.New("No such file or directory")
+			}
+			return nil
+		case name == "nft" && len(args) == 2 && args[0] == "-f":
+			if !tableExists {
+				tableExists = true // bootstrap script creates the table
+			}
+			return nil
+		case name == "nft" && args[0] == "add":
+			if !tableExists {
+				return errors.New("Error: No such file or directory")
+			}
+			return nil
+		}
+		return nil
+	}
+	t.Cleanup(func() { sentryRunner = old })
+
+	b := &nftBackend{}
+	exp := time.Now().Add(time.Hour)
+	if err := b.Ban("72.142.150.115", &exp); err != nil {
+		t.Fatalf("Ban must self-heal on missing table: %v", err)
+	}
+	if !tableExists {
+		t.Fatal("bootstrap never ran")
+	}
+	// Expect: failed add → list (miss) → -f bootstrap → retried add.
+	var adds, bootstraps int
+	for _, c := range calls {
+		if strings.HasPrefix(c, "nft add element") {
+			adds++
+		}
+		if c == "nft -f -" {
+			bootstraps++
+		}
+	}
+	if adds != 2 || bootstraps != 1 {
+		t.Fatalf("expected 2 add attempts + 1 bootstrap, got %d/%d: %v", adds, bootstraps, calls)
+	}
+
+	// Second ban with the table present: single add, no bootstrap.
+	calls = nil
+	if err := b.Ban("198.51.100.9", nil); err != nil {
+		t.Fatalf("Ban with existing table: %v", err)
+	}
+	for _, c := range calls {
+		if c == "nft -f -" {
+			t.Fatal("bootstrap must not re-run when the table exists")
+		}
 	}
 }
