@@ -29,6 +29,21 @@ export interface FaxLeg {
   ecm?: boolean
   ecm_requested?: boolean
   v17_disabled?: boolean
+  local_id?: string
+  // Session completion metadata (last-page stats + remote station info)
+  bad_rows?: number
+  longest_bad_row_run?: number
+  encoding?: number
+  encoding_name?: string
+  image_size?: number
+  image_resolution?: string
+  file_image_resolution?: string
+  image_pixel_size?: string
+  file_image_pixel_size?: string
+  remote_country?: string
+  remote_vendor?: string
+  remote_model?: string
+  trace_file?: string
 }
 </script>
 
@@ -115,6 +130,8 @@ function summary(l: FaxLeg): string {
   if (pages) facts.push(pages)
   const rate = fmtRate(l)
   if (rate) facts.push(rate)
+  if (l.encoding_name) facts.push(l.encoding_name)
+  if (l.bad_rows) facts.push(`${l.bad_rows} bad rows`)
   if (l.t38_status) facts.push(`T.38 ${l.t38_status}`)
   else if (l.used_t38) facts.push('T.38')
   if (l.hangup_cause && l.hangup_cause !== submissionMarker) facts.push(l.hangup_cause)
@@ -147,6 +164,16 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
   else if (l.ecm_requested) rows.push({ k: 'ECM', v: 'requested' })
   if (l.v17_disabled) rows.push({ k: 'V.17', v: 'disabled' })
   if (l.remote_id) rows.push({ k: 'Remote ID', v: l.remote_id })
+  if (l.local_id) rows.push({ k: 'Local ID', v: l.local_id })
+  // Session completion metadata (last-page stats + remote station info)
+  if (l.encoding_name || l.encoding) rows.push({ k: 'Encoding', v: l.encoding_name || String(l.encoding) })
+  if (l.bad_rows) rows.push({ k: 'Bad rows', v: l.longest_bad_row_run ? `${l.bad_rows} (longest run ${l.longest_bad_row_run})` : String(l.bad_rows) })
+  if (l.image_size) rows.push({ k: 'Image size', v: `${l.image_size.toLocaleString()} bytes` })
+  if (l.image_resolution) rows.push({ k: 'Resolution', v: l.file_image_resolution && l.file_image_resolution !== l.image_resolution ? `${l.image_resolution} (file ${l.file_image_resolution})` : l.image_resolution })
+  if (l.image_pixel_size) rows.push({ k: 'Pixel size', v: l.file_image_pixel_size && l.file_image_pixel_size !== l.image_pixel_size ? `${l.image_pixel_size} (file ${l.file_image_pixel_size})` : l.image_pixel_size })
+  const remoteInfo = [l.remote_vendor, l.remote_model, l.remote_country].filter(Boolean).join(' ')
+  if (remoteInfo) rows.push({ k: 'Remote station', v: remoteInfo })
+  if (l.trace_file) rows.push({ k: 'Trace file', v: l.trace_file })
   if (l.hangup_cause && l.hangup_cause !== submissionMarker) rows.push({ k: 'Hangup cause', v: l.hangup_cause })
   if (l.result_text) rows.push({ k: 'Result', v: l.result_text })
   if (l.status && l.status !== submissionMarker) rows.push({ k: 'Status', v: l.status })

@@ -87,6 +87,26 @@ type FaxJobResult struct {
 	V17Disabled      bool       `json:"v17_disabled"` // was V.17 disabled
 	PageResults      string     `json:"page_results"`
 
+	// Session-level completion metadata (last-page stats + remote station
+	// info), harvested from the fax result variables at rx/tx completion.
+	// Zero-valued for bridged calls and sessions pre-dating these columns.
+	BadRows             uint   `json:"bad_rows"`
+	LongestBadRowRun    uint   `json:"longest_bad_row_run"`
+	Encoding            int    `json:"encoding"`
+	EncodingName        string `json:"encoding_name"`
+	ImageSize           uint   `json:"image_size"`
+	ImageResolution     string `json:"image_resolution"`      // "WxH" meters-per-pixel
+	FileImageResolution string `json:"file_image_resolution"` // resolution as stored in the TIFF
+	ImagePixelSize      string `json:"image_pixel_size"`      // "WxH" pixels
+	FileImagePixelSize  string `json:"file_image_pixel_size"`
+	RemoteCountry       string `json:"remote_country"`
+	RemoteVendor        string `json:"remote_vendor"`
+	RemoteModel         string `json:"remote_model"`
+	TraceFile           string `json:"trace_file"`
+	// ResultMetadata is the verbatim JSON dump of every fax result variable
+	// harvested from the channel at completion (gofaxlib.FaxResult.ResultVars).
+	ResultMetadata string `json:"result_metadata"`
+
 	// NEW: bridge / transcoding metadata
 	IsBridge        bool          `json:"is_bridge"`
 	BridgeDirection string        `json:"bridge_direction"` // "pbx_to_upstream" / "upstream_to_pbx"
@@ -322,6 +342,34 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		record.NegotiateCount = job.Result.NegotiateCount
 		record.T38Status = job.Result.T38Status
 		record.V17Disabled = job.Result.V17Disabled
+
+		// Session completion metadata (last-page stats + remote station info)
+		record.BadRows = job.Result.BadRows
+		record.LongestBadRowRun = job.Result.LongestBadRowRun
+		record.Encoding = job.Result.Encoding
+		record.EncodingName = job.Result.EncodingName
+		record.ImageSize = job.Result.ImageSize
+		record.RemoteCountry = job.Result.RemoteCountry
+		record.RemoteVendor = job.Result.RemoteVendor
+		record.RemoteModel = job.Result.RemoteModel
+		record.TraceFile = job.Result.TraceFile
+		if job.Result.ImageResolution != nil {
+			record.ImageResolution = job.Result.ImageResolution.String()
+		}
+		if job.Result.FileImageResolution != nil {
+			record.FileImageResolution = job.Result.FileImageResolution.String()
+		}
+		if job.Result.ImagePixelSize != nil {
+			record.ImagePixelSize = job.Result.ImagePixelSize.String()
+		}
+		if job.Result.FileImagePixelSize != nil {
+			record.FileImagePixelSize = job.Result.FileImagePixelSize.String()
+		}
+		if len(job.Result.ResultVars) > 0 {
+			if data, err := json.Marshal(job.Result.ResultVars); err == nil {
+				record.ResultMetadata = string(data)
+			}
+		}
 
 		if pageR, err := json.Marshal(job.Result.PageResults); err == nil {
 			record.PageResults = string(pageR)

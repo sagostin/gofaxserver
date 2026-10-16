@@ -67,6 +67,7 @@ type PageResult struct {
 	Page             uint       `json:"page,omitempty"`
 	BadRows          uint       `json:"bad_rows,omitempty"`
 	LongestBadRowRun uint       `json:"longest_bad_row_run,omitempty"`
+	Encoding         int        `json:"encoding,omitempty"`
 	EncodingName     string     `json:"encoding_name,omitempty"`
 	ImagePixelSize   Resolution `json:"image_pixel_size"`
 	FilePixelSize    Resolution `json:"file_pixel_size"`
@@ -105,6 +106,30 @@ type FaxResult struct {
 	V17Disabled      bool   `json:"v17_disabled,omitempty"` // was V.17 disabled
 	bridge           bool
 	PageResults      []PageResult `json:"page_results,omitempty"`
+
+	// Session-level completion metadata, harvested from the fax result
+	// variables mod_spandsp sets on the channel when rxfax/txfax finishes
+	// (see harvestResultVars). The per-page stats mirror the last
+	// transferred page; the remote station details are reported by the far
+	// end at T.30 phase B negotiation (empty when not provided).
+	BadRows             uint        `json:"bad_rows,omitempty"`
+	LongestBadRowRun    uint        `json:"longest_bad_row_run,omitempty"`
+	Encoding            int         `json:"encoding,omitempty"`
+	EncodingName        string      `json:"encoding_name,omitempty"`
+	ImageSize           uint        `json:"image_size,omitempty"`
+	ImageResolution     *Resolution `json:"image_resolution,omitempty"`
+	FileImageResolution *Resolution `json:"file_image_resolution,omitempty"`
+	ImagePixelSize      *Resolution `json:"image_pixel_size,omitempty"`
+	FileImagePixelSize  *Resolution `json:"file_image_pixel_size,omitempty"`
+	RemoteCountry       string      `json:"remote_country,omitempty"`
+	RemoteVendor        string      `json:"remote_vendor,omitempty"`
+	RemoteModel         string      `json:"remote_model,omitempty"`
+	TraceFile           string      `json:"trace_file,omitempty"`
+
+	// ResultVars is the verbatim dump of every fax result variable seen on
+	// the channel at completion (names without the "Variable_" prefix),
+	// persisted as the results entry's metadata JSON.
+	ResultVars map[string]string `json:"result_vars,omitempty"`
 }
 
 // NewFaxResult creates a new FaxResult structure
@@ -137,6 +162,15 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 			f.EndTs = time.Now()
 			f.HangupCause = ev.Get("Hangup-Cause")
 		}
+
+	case "CHANNEL_HANGUP":
+		// Full channel-variable dump: carries every fax result variable
+		// (Variable_fax_*) mod_spandsp set when rxfax/txfax completed.
+		// Fires before the CHANNEL_CALLSTATE HANGUP event both event loops
+		// use as their exit signal, so this is the authoritative final
+		// snapshot. Deliberately does NOT touch HangupCause/EndTs — loop
+		// control stays with CHANNEL_CALLSTATE exactly as before.
+		f.harvestResultVars(ev)
 
 	case "CUSTOM":
 		// Faxing results have changed
@@ -195,6 +229,17 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 			if v17 := ev.Get("Variable_fax_v17_disabled"); v17 == "1" {
 				f.V17Disabled = true
 			}
+			// Remote station details, reported at T.30 phase B negotiation
+			// (opportunistic: also harvested from the hangup variable dump)
+			if country := ev.Get("Variable_fax_remote_country"); country != "" {
+				f.RemoteCountry = country
+			}
+			if vendor := ev.Get("Variable_fax_remote_vendor"); vendor != "" {
+				f.RemoteVendor = vendor
+			}
+			if model := ev.Get("Variable_fax_remote_model"); model != "" {
+				f.RemoteModel = model
+			}
 			if rate, err := strconv.Atoi(ev.Get("Fax-Transfer-Rate")); err == nil {
 				f.TransferRate = uint(rate)
 			}
@@ -232,6 +277,9 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 				pr.BadRows = uint(badrows)
 			}
 			pr.EncodingName = ev.Get("Fax-Encoding-Name")
+			if enc, err := strconv.Atoi(ev.Get("Fax-Encoding")); err == nil {
+				pr.Encoding = enc
+			}
 			if imgsize, err := parseResolution(ev.Get("Fax-Image-Pixel-Size")); err == nil {
 				pr.ImagePixelSize = *imgsize
 			}
@@ -282,8 +330,197 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 			if rate, err := strconv.Atoi(ev.Get("Fax-Transfer-Rate")); err == nil {
 				f.TransferRate = uint(rate)
 			}
+			// Last-page stats. Only a subset of mod_spandsp builds attaches
+			// these to the completion event — the CHANNEL_HANGUP variable
+			// dump (harvestResultVars) is the guaranteed source; parse them
+			// here too so either path populates the session metadata.
+			if badrows, err := strconv.Atoi(ev.Get("Fax-Bad-Rows")); err == nil {
+				f.BadRows = uint(badrows)
+			}
+			if badrowrun, err := strconv.Atoi(ev.Get("Fax-Longest-Bad-Row-Run")); err == nil {
+				f.LongestBadRowRun = uint(badrowrun)
+			}
+			if enc, err := strconv.Atoi(ev.Get("Fax-Encoding")); err == nil {
+				f.Encoding = enc
+			}
+			if encName := ev.Get("Fax-Encoding-Name"); encName != "" {
+				f.EncodingName = encName
+			}
+			if size, err := strconv.Atoi(ev.Get("Fax-Image-Size")); err == nil {
+				f.ImageSize = uint(size)
+			}
+			if res, err := parseResolution(ev.Get("Fax-Image-Resolution")); err == nil {
+				f.ImageResolution = res
+			}
+			if res, err := parseResolution(ev.Get("Fax-File-Image-Resolution")); err == nil {
+				f.FileImageResolution = res
+			}
+			if res, err := parseResolution(ev.Get("Fax-Image-Pixel-Size")); err == nil {
+				f.ImagePixelSize = res
+			}
+			if res, err := parseResolution(ev.Get("Fax-File-Image-Pixel-Size")); err == nil {
+				f.FileImagePixelSize = res
+			}
 
 		}
 	}
 
+}
+
+// faxResultVarNames is the whitelist of fax result variables mod_spandsp
+// sets on the channel when rxfax/txfax completes. Only these are harvested —
+// the channel also carries *input* variables (fax_enable_t38, fax_ident,
+// fax_use_ecm, ...) that must not be misread as results.
+var faxResultVarNames = []string{
+	"fax_success",
+	"fax_result_code",
+	"fax_result_text",
+	"fax_filename",
+	"fax_document_transferred_pages",
+	"fax_document_total_pages",
+	"fax_image_resolution",
+	"fax_file_image_resolution",
+	"fax_image_pixel_size",
+	"fax_file_image_pixel_size",
+	"fax_image_size",
+	"fax_bad_rows",
+	"fax_longest_bad_row_run",
+	"fax_encoding",
+	"fax_encoding_name",
+	"fax_transfer_rate",
+	"fax_ecm_used",
+	"fax_ecm_requested",
+	"fax_t38_status",
+	"fax_v17_disabled",
+	"fax_local_station_id",
+	"fax_remote_station_id",
+	"fax_remote_country",
+	"fax_remote_vendor",
+	"fax_remote_model",
+	"fax_trace_file",
+}
+
+// harvestResultVars reads the fax result variables (Variable_fax_* headers)
+// off an event carrying the channel-variable dump — CHANNEL_HANGUP in both
+// the inbound and outbound paths. Merge-only: values already populated by the
+// spandsp custom events are never unset (Success/Ecm only ever flip to true;
+// negotiated identifiers are backfilled, not overwritten). For bridged calls
+// no fax app ran, so no result variables exist and this is a no-op.
+func (f *FaxResult) harvestResultVars(ev *eventsocket.Event) {
+	found := false
+	for _, name := range faxResultVarNames {
+		v := ev.Get("Variable_" + name)
+		if v == "" {
+			continue
+		}
+		found = true
+		if f.ResultVars == nil {
+			f.ResultVars = make(map[string]string)
+		}
+		f.ResultVars[name] = v
+
+		switch name {
+		case "fax_success":
+			if v == "1" {
+				f.Success = true
+			}
+		case "fax_result_code":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.ResultCode = n
+			}
+		case "fax_result_text":
+			f.ResultText = v
+		case "fax_document_transferred_pages":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.TransferredPages = uint(n)
+			}
+		case "fax_document_total_pages":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.TotalPages = uint(n)
+			}
+		case "fax_image_resolution":
+			if r, err := parseResolution(v); err == nil {
+				f.ImageResolution = r
+			}
+		case "fax_file_image_resolution":
+			if r, err := parseResolution(v); err == nil {
+				f.FileImageResolution = r
+			}
+		case "fax_image_pixel_size":
+			if r, err := parseResolution(v); err == nil {
+				f.ImagePixelSize = r
+			}
+		case "fax_file_image_pixel_size":
+			if r, err := parseResolution(v); err == nil {
+				f.FileImagePixelSize = r
+			}
+		case "fax_image_size":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.ImageSize = uint(n)
+			}
+		case "fax_bad_rows":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.BadRows = uint(n)
+			}
+		case "fax_longest_bad_row_run":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.LongestBadRowRun = uint(n)
+			}
+		case "fax_encoding":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.Encoding = n
+			}
+		case "fax_encoding_name":
+			f.EncodingName = v
+		case "fax_transfer_rate":
+			if n, err := strconv.Atoi(v); err == nil {
+				f.TransferRate = uint(n)
+			}
+		case "fax_ecm_used":
+			if v == "on" {
+				f.Ecm = true
+			}
+		case "fax_ecm_requested":
+			// "1"/"0" normally; "true"/"false" in gateway mode
+			if v == "1" || v == "true" {
+				f.EcmRequested = true
+			}
+		case "fax_t38_status":
+			if f.T38Status == "" {
+				f.T38Status = v
+			}
+		case "fax_v17_disabled":
+			if v == "1" {
+				f.V17Disabled = true
+			}
+		case "fax_local_station_id":
+			if f.LocalID == "" {
+				f.LocalID = v
+			}
+		case "fax_remote_station_id":
+			if f.RemoteID == "" {
+				f.RemoteID = v
+			}
+		case "fax_remote_country":
+			f.RemoteCountry = v
+		case "fax_remote_vendor":
+			f.RemoteVendor = v
+		case "fax_remote_model":
+			f.RemoteModel = v
+		case "fax_trace_file":
+			f.TraceFile = v
+		}
+	}
+
+	if found {
+		f.logManager.SendLog(f.logManager.BuildLog(
+			"FaxResult",
+			"Harvested fax result variables: success=%v bad_rows=%v encoding=%v pages=%v/%v",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"uuid":        f.UUID.String(),
+				"result_vars": f.ResultVars,
+			},
+			f.Success, f.BadRows, f.EncodingName, f.TransferredPages, f.TotalPages))
+	}
 }

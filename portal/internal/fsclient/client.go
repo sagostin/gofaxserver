@@ -350,17 +350,38 @@ type FaxResultRow struct {
 	HangupCause      string     `json:"hangup_cause"`
 	TotalPages       uint       `json:"total_pages"`
 	TransferredPages uint       `json:"transferred_pages"`
+	ECM              bool       `json:"ecm"`
+	EcmRequested     bool       `json:"ecm_requested"`
 	RemoteID         string     `json:"remote_id"`
+	LocalID          string     `json:"local_id"`
 	ResultText       string     `json:"result_text"`
 	Success          bool       `json:"success"`
 	TransferRate     uint       `json:"transfer_rate"`
 	T38Status        string     `json:"t38_status"`
+	V17Disabled      bool       `json:"v17_disabled"`
 	IsBridge         bool       `json:"is_bridge"`
 	BridgeDirection  string     `json:"bridge_direction"`
 	BridgeGateway    string     `json:"bridge_gateway"`
 	BridgeT38        bool       `json:"bridge_t38"`
 	UsedT38          bool       `json:"used_t38"`
 	CreatedAt        time.Time  `json:"created_at"`
+
+	// Session-level completion metadata (last-page stats + remote station
+	// info), harvested from the fax result variables at rx/tx completion.
+	BadRows             uint   `json:"bad_rows"`
+	LongestBadRowRun    uint   `json:"longest_bad_row_run"`
+	Encoding            int    `json:"encoding"`
+	EncodingName        string `json:"encoding_name"`
+	ImageSize           uint   `json:"image_size"`
+	ImageResolution     string `json:"image_resolution"`
+	FileImageResolution string `json:"file_image_resolution"`
+	ImagePixelSize      string `json:"image_pixel_size"`
+	FileImagePixelSize  string `json:"file_image_pixel_size"`
+	RemoteCountry       string `json:"remote_country"`
+	RemoteVendor        string `json:"remote_vendor"`
+	RemoteModel         string `json:"remote_model"`
+	TraceFile           string `json:"trace_file"`
+	ResultMetadata      string `json:"result_metadata"`
 }
 
 // FaxResultGroup is one fax job (correlated by job_uuid) with all of its

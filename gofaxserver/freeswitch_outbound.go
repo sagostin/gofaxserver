@@ -471,7 +471,12 @@ func (t *eventClient) start() {
 		t.errorChan <- NewFaxError(err.Error(), true)
 		return
 	}
-	if _, err = t.conn.Send("event plain CHANNEL_CALLSTATE CUSTOM spandsp::txfaxnegociateresult spandsp::txfaxpageresult spandsp::txfaxresult"); err != nil {
+	// CHANNEL_HANGUP carries the full channel-variable dump — the fax result
+	// variables (Variable_fax_*) harvested into the session metadata (see
+	// gofaxlib.FaxResult.harvestResultVars). It fires before the
+	// CHANNEL_CALLSTATE HANGUP the loop below exits on, so the harvest
+	// always lands before the result is finalized.
+	if _, err = t.conn.Send("event plain CHANNEL_CALLSTATE CHANNEL_HANGUP CUSTOM spandsp::txfaxnegociateresult spandsp::txfaxpageresult spandsp::txfaxresult"); err != nil {
 		t.logManager.SendLog(t.logManager.BuildLog(
 			"EventClient",
 			"Failed to subscribe to events: %v",
