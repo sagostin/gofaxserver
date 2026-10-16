@@ -73,3 +73,61 @@ func TestEndpointGatewayDialstringOutboundTaggedEmpty(t *testing.T) {
 		t.Errorf("expected empty dialstring, got %q", got)
 	}
 }
+
+func TestResolveUpstreamBridgeGateway(t *testing.T) {
+	cases := []struct {
+		name     string
+		current  string
+		attempts []bridgeAttempt
+		want     string
+	}{
+		{"answered bridge keeps winning gateway", "telcobridges1",
+			[]bridgeAttempt{{Gateway: "telcobridges1", HangupCause: "NORMAL_CLEARING"}}, "telcobridges1"},
+		{"failed single attempt resolves to it", "upstream",
+			[]bridgeAttempt{{Gateway: "telcobridges2", HangupCause: "USER_BUSY"}}, "telcobridges2"},
+		{"failover attributes the last (final-response) gateway", "upstream",
+			[]bridgeAttempt{
+				{Gateway: "telcobridges1", HangupCause: "NO_ROUTE_DESTINATION"},
+				{Gateway: "telcobridges2", HangupCause: "USER_BUSY"},
+			}, "telcobridges2"},
+		{"no attempts keeps the placeholder", "upstream", nil, "upstream"},
+	}
+	for _, c := range cases {
+		if got := resolveUpstreamBridgeGateway(c.current, c.attempts); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestGetTenantByGateway(t *testing.T) {
+	s := &Server{
+		Tenants: map[uint]*Tenant{
+			12: {ID: 12, Name: "TOPS"},
+			25: {ID: 25, Name: "monasheeopt"},
+		},
+		TenantNumbers: map[string]*TenantNumber{
+			"2505501123": {ID: 7, TenantID: 25, Number: "2505501123"},
+		},
+		TenantEndpoints: map[uint][]*Endpoint{
+			12: {{Type: "tenant", TypeID: 12, EndpointType: "gateway", Endpoint: "pbx_tops:1.2.3.4"}},
+		},
+		NumberEndpoints: map[string][]*Endpoint{
+			"2505501123": {{Type: "number", TypeID: 7, EndpointType: "gateway", Endpoint: "pbx_monasheeopt"}},
+		},
+	}
+
+	// Tenant-scoped gateway endpoint (with :ip ACL suffix).
+	if tenant, err := s.getTenantByGateway("pbx_tops"); err != nil || tenant.ID != 12 {
+		t.Errorf("pbx_tops → %v, %v; want tenant 12", tenant, err)
+	}
+	// Number-scoped gateway endpoint resolves through its tenant number.
+	if tenant, err := s.getTenantByGateway("pbx_monasheeopt"); err != nil || tenant.ID != 25 {
+		t.Errorf("pbx_monasheeopt → %v, %v; want tenant 25", tenant, err)
+	}
+	// Carrier / unknown gateways must never resolve to a tenant.
+	for _, gw := range []string{"telcobridges1", "upstream", "pbx_unknown"} {
+		if tenant, err := s.getTenantByGateway(gw); err == nil || tenant != nil {
+			t.Errorf("%s → %v, nil; want no match", gw, tenant)
+		}
+	}
+}

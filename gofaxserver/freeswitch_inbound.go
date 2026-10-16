@@ -128,6 +128,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	bridgeDirection := ""
 	bridgeGateway := ""
 	bridgeBLegUUID := "" // bridged b-leg's channel UUID, learned at CHANNEL_BRIDGE
+	var bridgeAttempts []bridgeAttempt
 	var bridgeStart time.Time
 	var bridgeEnd time.Time
 
@@ -322,6 +323,15 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			dsGateways := endpointGatewayDialstringTagged(e.server.UpstreamFsGateways, dstNum)
 			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
 
+			// Subscribe to the tagged upstream b-legs before dialing: the
+			// gateway tag rides each attempted leg from channel creation, so
+			// even failed attempts emit events (per-gateway hangup causes) —
+			// the only attribution signal when no leg ever answers. ESL
+			// filters are ORed, so the a-leg filter is unaffected.
+			for _, gw := range e.server.UpstreamFsGateways {
+				send(fmt.Sprintf("filter Variable_%s %s", bridgeGatewayTagVar, gw))
+			}
+
 			bridgeStart = time.Now()
 			exec("bridge", exportStr+dsGateways, true)
 
@@ -453,9 +463,22 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 
 	if srcTenant, _ := e.server.getTenantByNumber(srcNum); srcTenant != nil {
 		faxjob.SrcTenantID = srcTenant.ID
+	} else if srcTenant, _ := e.server.getTenantByGateway(gateway); srcTenant != nil {
+		// Caller number not registered to any tenant (e.g. an unregistered
+		// caller ID on a per-tenant PBX trunk): the arrival gateway is the
+		// tenant signal. Global upstream gateways match nothing here.
+		faxjob.SrcTenantID = srcTenant.ID
 	}
 	if dstTenant, _ := e.server.getTenantByNumber(dstNum); dstTenant != nil {
 		faxjob.DstTenantID = dstTenant.ID
+	} else if enableBridge && bridgeGateway != "" && bridgeGateway != "upstream" {
+		// Downstream bridge to a per-tenant PBX whose callee number isn't
+		// registered: the bridge target gateway identifies the tenant.
+		// (Upstream bridges keep the "upstream" placeholder here and have an
+		// external destination by definition.)
+		if dstTenant, _ := e.server.getTenantByGateway(bridgeGateway); dstTenant != nil {
+			faxjob.DstTenantID = dstTenant.ID
+		}
 	}
 
 	e.server.FaxTracker.Begin(faxjob)
@@ -479,13 +502,21 @@ EventLoop:
 			if ev.Get("Content-Type") == "text/disconnect-notice" {
 				logf(logrus.WarnLevel, "Received disconnect message", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge})
 				// keep loop; result handler may still need to finish/stamp
-			} else if enableBridge && bridgeBLegUUID != "" && ev.Get("Unique-ID") == bridgeBLegUUID {
-				// Event for the bridged b-leg: feed only the per-leg T.38
-				// harvester. It must never touch result or loop control —
-				// the b-leg normally hangs up first, and its
+			} else if enableBridge && ev.Get("Unique-ID") != "" && ev.Get("Unique-ID") != channelUUID.String() {
+				// Event for a bridge b-leg (upstream attempt legs are
+				// subscribed pre-dial via their gateway tag; the answered
+				// leg is also subscribed at CHANNEL_BRIDGE): feed the
+				// per-leg T.38 harvester and record upstream gateway
+				// attempts. B-leg events must never touch result or loop
+				// control — the b-leg normally hangs up first, and its
 				// CHANNEL_CALLSTATE HANGUP would otherwise end the loop
 				// early with the wrong leg's hangup data.
 				result.AddBridgeBLegEvent(ev)
+				if ev.Get("Event-Name") == "CHANNEL_HANGUP" {
+					if gw := ev.Get("Variable_" + bridgeGatewayTagVar); gw != "" {
+						bridgeAttempts = append(bridgeAttempts, bridgeAttempt{Gateway: gw, HangupCause: ev.Get("Hangup-Cause")})
+					}
+				}
 			} else {
 				result.AddEvent(ev)
 
@@ -570,6 +601,23 @@ EventLoop:
 				bridgeGateway = gw
 				e.server.FaxTracker.MarkBridging(faxjob.UUID, bridgeDirection, bridgeGateway)
 			}
+		}
+	}
+
+	// Failed upstream bridges never answered, so neither CHANNEL_BRIDGE nor
+	// the export_vars/uuid_getvar fallbacks above ever fired. Attribute the
+	// gateway whose response ended the call instead: the last attempted
+	// tagged b-leg (its hangup cause is the call's final hangup cause).
+	if enableBridge && bridgeDirection == "upstream" {
+		if resolved := resolveUpstreamBridgeGateway(bridgeGateway, bridgeAttempts); resolved != bridgeGateway {
+			bridgeGateway = resolved
+			e.server.FaxTracker.MarkBridging(faxjob.UUID, bridgeDirection, bridgeGateway)
+			logf(logrus.InfoLevel, "Upstream bridge gateway attributed from failed attempts: %s",
+				map[string]interface{}{
+					"uuid":     channelUUID.String(),
+					"gateway":  bridgeGateway,
+					"attempts": bridgeAttempts,
+				}, bridgeGateway)
 		}
 	}
 

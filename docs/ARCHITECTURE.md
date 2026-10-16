@@ -264,8 +264,9 @@ A denormalized record of every fax attempt — one row per attempt, written from
 - `attempt_number`, `endpoint_id`, `endpoint_type` — which endpoint and which retry (submissions use attempt 0)
 - `gateway` — actual FreeSWITCH gateway: the winning gateway for transmissions (captured from `variable_gofax_gw` on the channel), the arrival gateway (`SourceInfo.Source`) for receptions/bridges
 - `start_ts`, `end_ts`, `hangup_cause`, `transferred_pages`, `success`, `result_text`, `t38_status`, `v17_disabled` — outcome
-- `is_bridge`, `bridge_direction`, `bridge_gateway`, `bridge_t38` — bridge metadata
-- `used_t38`, `softmodem_fallback` — T.38 decision tracking
+- `is_bridge`, `bridge_direction`, `bridge_gateway`, `bridge_t38` — bridge metadata (`bridge_gateway` is the answered gateway, or — for failed upstream bridges that never answered — the gateway whose response ended the call, resolved from the per-attempt `gofax_bridge_gw` b-leg tags)
+- `bridge_t38_a_leg`, `bridge_t38_b_leg` — per-leg T.38 confirmation for bridged calls, harvested from each leg's final SDP at hangup (`"negotiated"` or empty; positive detection only, since bridged calls run no local fax app)
+- `used_t38`, `softmodem_fallback` — T.38 policy tracking (`used_t38`/`bridge_t38` are the *decision* — T.38 armed per policy — not observed negotiation; observed use is `t38_status` for fax sessions or the `bridge_t38_*_leg` fields for bridges)
 - `applied_policies` — JSON array of fax policy rule IDs that applied to this call
 
 Submission legs are lifecycle rows, not call outcomes: they start as `result_text: "queued"` (`success: false`) when the job is accepted and flip to `result_text: "processed"` (`success: true`, `end_ts` set) when the queue worker picks the job up. They keep the synthetic hangup cause `WEBHOOK` so consumers (e.g. the portal poller) ignore them for terminal-state decisions.

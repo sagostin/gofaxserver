@@ -416,6 +416,43 @@ func (s *Server) getEndpointByName(name string) (*Endpoint, error) {
 	return nil, errors.New("unable to find endpoint by name")
 }
 
+// getTenantByGateway resolves the tenant that owns a gateway endpoint:
+// tenant-scoped gateway endpoints map directly; number-scoped ones map
+// through their tenant number. Global (upstream) gateways match nothing, so
+// carrier trunks never resolve to a tenant. Used as a fallback when
+// number-based tenant lookup fails — e.g. an unregistered caller ID
+// arriving on a per-tenant PBX trunk, where the arrival gateway is the only
+// reliable tenant signal.
+func (s *Server) getTenantByGateway(gateway string) (*Tenant, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	matches := func(ep *Endpoint) bool {
+		return ep.EndpointType == "gateway" && strings.Split(ep.Endpoint, ":")[0] == gateway
+	}
+	for tenantID, eps := range s.TenantEndpoints {
+		for _, ep := range eps {
+			if matches(ep) {
+				if t, ok := s.Tenants[tenantID]; ok {
+					return t, nil
+				}
+			}
+		}
+	}
+	for number, eps := range s.NumberEndpoints {
+		for _, ep := range eps {
+			if matches(ep) {
+				if tn, ok := s.TenantNumbers[number]; ok {
+					if t, ok := s.Tenants[tn.TenantID]; ok {
+						return t, nil
+					}
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("no tenant found for gateway %s", gateway)
+}
+
 func endpointGatewayDialstring(endpoints []string, dstNum string) string {
 	var dsGateways string
 
@@ -434,6 +471,29 @@ func endpointGatewayDialstring(endpoints []string, dstNum string) string {
 // b-leg exports it to the a-leg on answer (export_vars), so the winning
 // gateway shows up as variable_gofax_bridge_gw on the a-leg's events.
 const bridgeGatewayTagVar = "gofax_bridge_gw"
+
+// bridgeAttempt records one dialed upstream b-leg of a bridged call: the
+// gateway it went out on (from the leg's gofax_bridge_gw tag, set at channel
+// creation so even failed attempts carry it) and the hangup cause that leg
+// produced. Failed bridges never answer, so CHANNEL_BRIDGE-based attribution
+// never fires — the attempts list is how the responding gateway is
+// identified in that case.
+type bridgeAttempt struct {
+	Gateway     string
+	HangupCause string
+}
+
+// resolveUpstreamBridgeGateway returns the gateway to attribute an upstream
+// bridge to. An answered bridge has already resolved its winning gateway
+// (current != "upstream") and is left alone; a failed bridge attributes to
+// the last attempted gateway — the one whose response became the call's
+// final hangup cause. No attempts recorded → the placeholder is kept.
+func resolveUpstreamBridgeGateway(current string, attempts []bridgeAttempt) string {
+	if current != "upstream" || len(attempts) == 0 {
+		return current
+	}
+	return attempts[len(attempts)-1].Gateway
+}
 
 // outboundGatewayTagVar is the per-leg channel variable that records which
 // gateway an outbound (txfax) call leg was dialed through. Unlike the bridge
