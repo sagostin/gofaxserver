@@ -127,6 +127,7 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 	isBridge := false
 	bridgeDirection := ""
 	bridgeGateway := ""
+	bridgeBLegUUID := "" // bridged b-leg's channel UUID, learned at CHANNEL_BRIDGE
 	var bridgeStart time.Time
 	var bridgeEnd time.Time
 
@@ -478,8 +479,26 @@ EventLoop:
 			if ev.Get("Content-Type") == "text/disconnect-notice" {
 				logf(logrus.WarnLevel, "Received disconnect message", map[string]interface{}{"uuid": channelUUID.String(), "bridge": enableBridge})
 				// keep loop; result handler may still need to finish/stamp
+			} else if enableBridge && bridgeBLegUUID != "" && ev.Get("Unique-ID") == bridgeBLegUUID {
+				// Event for the bridged b-leg: feed only the per-leg T.38
+				// harvester. It must never touch result or loop control —
+				// the b-leg normally hangs up first, and its
+				// CHANNEL_CALLSTATE HANGUP would otherwise end the loop
+				// early with the wrong leg's hangup data.
+				result.AddBridgeBLegEvent(ev)
 			} else {
 				result.AddEvent(ev)
+
+				// Once bridged, subscribe to the b-leg's events too so its
+				// hangup variable dump (final SDP) reaches the per-leg T.38
+				// harvester. ESL filters are ORed across filter commands,
+				// so the a-leg filter stays intact.
+				if enableBridge && bridgeBLegUUID == "" && ev.Get("Event-Name") == "CHANNEL_BRIDGE" {
+					if bleg := ev.Get("Other-Leg-Unique-Id"); bleg != "" {
+						bridgeBLegUUID = bleg
+						send(fmt.Sprintf("filter Unique-ID %s", bleg))
+					}
+				}
 
 				// Upstream-direction bridges dial ALL upstream gateways as a
 				// failover list: learn which one actually answered. The gateway

@@ -114,12 +114,18 @@ type FaxJobResult struct {
 	BridgeStartTs   *time.Time    `json:"bridge_start_ts"` // pointer to allow NULL
 	BridgeEndTs     *time.Time    `json:"bridge_end_ts"`   // pointer to allow NULL
 	BridgeDuration  time.Duration `json:"bridge_duration"`
-	BridgeT38       bool          `json:"bridge_t38"` // was T.38 gateway actually enabled?
-	SoftmodemSrc    bool          `json:"softmodem_src"`
-	SoftmodemDst    bool          `json:"softmodem_dst"`
+	BridgeT38       bool          `json:"bridge_t38"` // was T.38 armed on the bridge per policy (intent, not observed use)
+	// Per-leg T.38 confirmation for bridged calls, harvested from each
+	// leg's final SDP at hangup (gofaxlib.FaxResult.BridgeALegT38 /
+	// BridgeBLegT38). "" = not confirmed; "negotiated" = T.38 proven on
+	// that leg. Positive detection only — never a false "not used" claim.
+	BridgeT38ALeg string `json:"bridge_t38_a_leg"` // arrival leg (the Gateway side)
+	BridgeT38BLeg string `json:"bridge_t38_b_leg"` // bridged/outbound leg (the BridgeGateway side)
+	SoftmodemSrc  bool   `json:"softmodem_src"`
+	SoftmodemDst  bool   `json:"softmodem_dst"`
 
 	// T.38 decision tracking (for all call types)
-	UsedT38           bool `json:"used_t38"`           // was T.38 actually used for this call
+	UsedT38           bool `json:"used_t38"`           // T.38 armed per policy decision (intent — observed negotiation is T38Status, or BridgeT38ALeg/BridgeT38BLeg for bridged calls)
 	SoftmodemFallback bool `json:"softmodem_fallback"` // was softmodem fallback override active
 
 	// AppliedPolicies is a JSON array of fax policy rule IDs that applied to
@@ -342,6 +348,10 @@ func (q *Queue) storeQueueFaxResult(qFR QueueFaxResult) error {
 		record.NegotiateCount = job.Result.NegotiateCount
 		record.T38Status = job.Result.T38Status
 		record.V17Disabled = job.Result.V17Disabled
+
+		// Per-leg T.38 confirmation (bridged calls only; empty otherwise)
+		record.BridgeT38ALeg = job.Result.BridgeALegT38
+		record.BridgeT38BLeg = job.Result.BridgeBLegT38
 
 		// Session completion metadata (last-page stats + remote station info)
 		record.BadRows = job.Result.BadRows

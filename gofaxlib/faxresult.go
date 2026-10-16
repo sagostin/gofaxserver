@@ -130,6 +130,15 @@ type FaxResult struct {
 	// the channel at completion (names without the "Variable_" prefix),
 	// persisted as the results entry's metadata JSON.
 	ResultVars map[string]string `json:"result_vars,omitempty"`
+
+	// Bridge per-leg T.38 confirmation. Bridged calls run no local fax app,
+	// so no spandsp negotiation events exist; instead the final SDP in each
+	// leg's hangup variable dump is inspected (see harvestBridgeLegT38).
+	// Values: "" (not observed / not confirmed) or "negotiated". Positive
+	// detection only — a call that used T.38 then re-INVITEd back to audio
+	// before hangup shows "" here, never a false negative claim.
+	BridgeALegT38 string `json:"bridge_a_leg_t38,omitempty"` // arrival leg (the Gateway side)
+	BridgeBLegT38 string `json:"bridge_b_leg_t38,omitempty"` // bridged/outbound leg (the BridgeGateway side)
 }
 
 // NewFaxResult creates a new FaxResult structure
@@ -171,6 +180,11 @@ func (f *FaxResult) AddEvent(ev *eventsocket.Event) {
 		// snapshot. Deliberately does NOT touch HangupCause/EndTs — loop
 		// control stays with CHANNEL_CALLSTATE exactly as before.
 		f.harvestResultVars(ev)
+		if f.bridge {
+			// Bridged calls run no fax app, so T.38 use can only be
+			// confirmed from the final SDP in the hangup variable dump.
+			f.harvestBridgeLegT38(ev, &f.BridgeALegT38)
+		}
 
 	case "CUSTOM":
 		// Faxing results have changed
@@ -523,4 +537,62 @@ func (f *FaxResult) harvestResultVars(ev *eventsocket.Event) {
 			},
 			f.Success, f.BadRows, f.EncodingName, f.TransferredPages, f.TotalPages))
 	}
+}
+
+// detectT38InSDP reports whether an SDP body negotiates T.38: an image
+// media line carried over UDPTL (or TCP T.38). Case-insensitive.
+func detectT38InSDP(sdp string) bool {
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.ToLower(strings.TrimSpace(line))
+		if !strings.HasPrefix(line, "m=image") {
+			continue
+		}
+		if strings.Contains(line, "udptl") || strings.Contains(line, "t38") {
+			return true
+		}
+	}
+	return false
+}
+
+// harvestBridgeLegT38 inspects the final SDP in a bridged leg's hangup
+// variable dump (Variable_switch_r_sdp / Variable_switch_l_sdp) and records
+// "negotiated" when the leg ended in T.38. Positive detection only: no SDP
+// (or a final audio-only SDP) leaves the field empty — many endpoints
+// re-INVITE back to audio after the fax completes, so a final audio SDP
+// does not prove the fax itself did not use T.38. Merge-only: a confirmed
+// negotiation is never unset.
+func (f *FaxResult) harvestBridgeLegT38(ev *eventsocket.Event, dst *string) {
+	if *dst != "" {
+		return
+	}
+	remote := ev.Get("Variable_switch_r_sdp")
+	local := ev.Get("Variable_switch_l_sdp")
+	if remote == "" && local == "" {
+		return
+	}
+	if !detectT38InSDP(remote) && !detectT38InSDP(local) {
+		return
+	}
+	*dst = "negotiated"
+	f.logManager.SendLog(f.logManager.BuildLog(
+		"FaxResult",
+		"Bridge leg ended with T.38 negotiated SDP",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"uuid":     f.UUID.String(),
+			"leg_uuid": ev.Get("Unique-ID"),
+		}))
+}
+
+// AddBridgeBLegEvent feeds an event belonging to the bridged b-leg (the
+// outbound side of a bridged call) into the per-leg T.38 harvester. Only
+// CHANNEL_HANGUP is consumed — it carries the full channel-variable dump,
+// including the leg's final SDP. No-op for non-bridge results; never
+// touches the a-leg's result fields or the event loops' control state
+// (HangupCause/EndTs stay owned by the a-leg's CHANNEL_CALLSTATE).
+func (f *FaxResult) AddBridgeBLegEvent(ev *eventsocket.Event) {
+	if !f.bridge || ev.Get("Event-Name") != "CHANNEL_HANGUP" {
+		return
+	}
+	f.harvestBridgeLegT38(ev, &f.BridgeBLegT38)
 }

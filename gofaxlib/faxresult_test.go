@@ -283,3 +283,154 @@ func TestPageResultEncoding(t *testing.T) {
 		t.Errorf("page Encoding = %d/%q", f.PageResults[0].Encoding, f.PageResults[0].EncodingName)
 	}
 }
+
+// ----------------------- bridge per-leg T.38 detection --------------------
+
+func newTestBridgeFaxResult() *FaxResult {
+	return NewFaxResult(uuid.New(), NewLogManager(&LokiClient{}), true)
+}
+
+const audioSDP = "v=0\r\n" +
+	"o=FreeSWITCH 1699000000 1699000001 IN IP4 10.0.0.1\r\n" +
+	"s=FreeSWITCH\r\n" +
+	"c=IN IP4 10.0.0.1\r\n" +
+	"t=0 0\r\n" +
+	"m=audio 31926 RTP/AVP 0 8 101\r\n" +
+	"a=rtpmap:0 PCMU/8000\r\n" +
+	"a=rtpmap:101 telephone-event/8000\r\n"
+
+const t38UDPTLSDP = "v=0\r\n" +
+	"o=FreeSWITCH 1699000000 1699000002 IN IP4 10.0.0.1\r\n" +
+	"s=FreeSWITCH\r\n" +
+	"c=IN IP4 10.0.0.1\r\n" +
+	"t=0 0\r\n" +
+	"m=image 4002 udptl t38\r\n" +
+	"a=T38FaxVersion:0\r\n" +
+	"a=T38MaxBitRate:14400\r\n"
+
+func TestDetectT38InSDP(t *testing.T) {
+	cases := []struct {
+		name string
+		sdp  string
+		want bool
+	}{
+		{"empty", "", false},
+		{"audio only", audioSDP, false},
+		{"udptl image", t38UDPTLSDP, true},
+		{"uppercase UDPTL", "m=image 4002 UDPTL T38\r\n", true},
+		{"tcp t38", "m=image 4002 tcp t38\r\n", true},
+		{"audio with t38 attribute but no image m-line", "m=audio 1000 RTP/AVP 0\r\na=T38FaxVersion:0\r\n", false},
+	}
+	for _, c := range cases {
+		if got := detectT38InSDP(c.sdp); got != c.want {
+			t.Errorf("%s: detectT38InSDP = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestBridgeHangupHarvestsALegT38(t *testing.T) {
+	f := newTestBridgeFaxResult()
+	f.AddEvent(hangupEvent(map[string]string{
+		"switch_r_sdp":   t38UDPTLSDP,
+		"switch_l_sdp":   t38UDPTLSDP,
+		"fax_enable_t38": "true", // input variable, must not leak anywhere
+	}))
+
+	if f.BridgeALegT38 != "negotiated" {
+		t.Errorf("BridgeALegT38 = %q, want negotiated", f.BridgeALegT38)
+	}
+	// SDP harvest must not touch fax result state or loop control.
+	if f.ResultVars != nil {
+		t.Errorf("ResultVars = %v, want nil", f.ResultVars)
+	}
+	if f.T38Status != "" {
+		t.Errorf("T38Status = %q, want empty (no fax app ran)", f.T38Status)
+	}
+	if f.HangupCause != "" || !f.EndTs.IsZero() {
+		t.Error("loop-control fields touched by CHANNEL_HANGUP harvest")
+	}
+}
+
+func TestBridgeHangupAudioSDPLeavesT38Empty(t *testing.T) {
+	f := newTestBridgeFaxResult()
+	f.AddEvent(hangupEvent(map[string]string{
+		"switch_r_sdp": audioSDP,
+		"switch_l_sdp": audioSDP,
+	}))
+	if f.BridgeALegT38 != "" {
+		t.Errorf("BridgeALegT38 = %q, want empty (audio final SDP proves nothing)", f.BridgeALegT38)
+	}
+}
+
+func TestBridgeHangupNoSDPLeavesT38Empty(t *testing.T) {
+	f := newTestBridgeFaxResult()
+	f.AddEvent(hangupEvent(map[string]string{
+		"sip_to_user": "1234",
+	}))
+	if f.BridgeALegT38 != "" {
+		t.Errorf("BridgeALegT38 = %q, want empty (no SDP variables)", f.BridgeALegT38)
+	}
+}
+
+func TestNonBridgeHangupIgnoresSDP(t *testing.T) {
+	// Softmodem/reception results must never get bridge per-leg fields,
+	// even if the hangup dump happens to carry SDP variables.
+	f := newTestFaxResult()
+	f.AddEvent(hangupEvent(map[string]string{
+		"switch_r_sdp":   t38UDPTLSDP,
+		"fax_t38_status": "negotiated",
+	}))
+	if f.BridgeALegT38 != "" || f.BridgeBLegT38 != "" {
+		t.Errorf("bridge leg fields set on non-bridge result: %q/%q", f.BridgeALegT38, f.BridgeBLegT38)
+	}
+	if f.T38Status != "negotiated" {
+		t.Errorf("T38Status = %q, want negotiated", f.T38Status)
+	}
+}
+
+func TestBridgeLegT38MergeOnly(t *testing.T) {
+	f := newTestBridgeFaxResult()
+	f.BridgeALegT38 = "negotiated"
+	// A later dump whose SDP is audio-only (e.g. re-INVITE back to audio
+	// after the fax) must never unset the confirmed negotiation.
+	f.AddEvent(hangupEvent(map[string]string{
+		"switch_r_sdp": audioSDP,
+		"switch_l_sdp": audioSDP,
+	}))
+	if f.BridgeALegT38 != "negotiated" {
+		t.Errorf("BridgeALegT38 = %q, want negotiated (merge-only)", f.BridgeALegT38)
+	}
+}
+
+func TestAddBridgeBLegEvent(t *testing.T) {
+	f := newTestBridgeFaxResult()
+
+	// Non-hangup b-leg events are ignored.
+	f.AddBridgeBLegEvent(customEvent("spandsp::rxfaxresult", map[string]string{
+		"Fax-Success": "1",
+	}))
+	if f.BridgeBLegT38 != "" || f.Success {
+		t.Error("non-hangup b-leg event mutated the result")
+	}
+
+	// B-leg hangup dump with T.38 SDP confirms the bridge leg.
+	f.AddBridgeBLegEvent(hangupEvent(map[string]string{
+		"switch_l_sdp": t38UDPTLSDP,
+	}))
+	if f.BridgeBLegT38 != "negotiated" {
+		t.Errorf("BridgeBLegT38 = %q, want negotiated", f.BridgeBLegT38)
+	}
+	// A-leg field untouched by b-leg events.
+	if f.BridgeALegT38 != "" {
+		t.Errorf("BridgeALegT38 = %q, want empty", f.BridgeALegT38)
+	}
+
+	// Non-bridge results ignore b-leg events entirely.
+	plain := newTestFaxResult()
+	plain.AddBridgeBLegEvent(hangupEvent(map[string]string{
+		"switch_l_sdp": t38UDPTLSDP,
+	}))
+	if plain.BridgeBLegT38 != "" {
+		t.Errorf("non-bridge BridgeBLegT38 = %q, want empty", plain.BridgeBLegT38)
+	}
+}

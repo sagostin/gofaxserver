@@ -79,7 +79,7 @@ type FaxJob struct {
 	SoftmodemDst    bool
 
 	// T.38 decision tracking (for all call types)
-	UsedT38           bool `json:"used_t38"`           // was T.38 actually used for this call
+	UsedT38           bool `json:"used_t38"`           // T.38 armed per policy decision (intent — observed negotiation is Result.T38Status, or Result.BridgeALegT38/BridgeBLegT38 for bridged calls)
 	SoftmodemFallback bool `json:"softmodem_fallback"` // was softmodem fallback override active
 
 	// Fax policy engine tracking

@@ -16,6 +16,11 @@ export interface FaxLeg {
   result_text: string
   t38_status: string
   used_t38: boolean
+  // Per-leg T.38 confirmation on bridged legs, harvested from each leg's
+  // final SDP at hangup: '' = not confirmed, 'negotiated' = T.38 proven on
+  // that leg. used_t38 alone is only the policy decision (T.38 armed).
+  bridge_t38_a_leg?: string // arrival leg (the gateway side)
+  bridge_t38_b_leg?: string // bridged/outbound leg (the bridge_gateway side)
   is_bridge: boolean
   bridge_direction: string
   bridge_gateway: string
@@ -150,8 +155,20 @@ function summary(l: FaxLeg): string {
   if (l.encoding_name) facts.push(l.encoding_name)
   if (l.bad_rows) facts.push(`${l.bad_rows} bad rows`)
   if (isRescaled(l)) facts.push('rescaled')
-  if (l.t38_status) facts.push(`T.38 ${l.t38_status}`)
-  else if (l.used_t38) facts.push('T.38')
+  // T.38: confirmed negotiation beats intent. t38_status comes from the
+  // spandsp fax session (softmodem/transmission legs); bridged legs carry
+  // per-leg SDP confirmation instead (bridge_t38_a_leg / bridge_t38_b_leg).
+  // used_t38 alone only means T.38 was armed per policy, so it renders as
+  // "enabled", never as proof of use.
+  if (l.t38_status) {
+    facts.push(`T.38 ${l.t38_status}`)
+  } else {
+    const negotiated: string[] = []
+    if (l.bridge_t38_a_leg === 'negotiated') negotiated.push('arrival leg')
+    if (l.bridge_t38_b_leg === 'negotiated') negotiated.push('bridge leg')
+    if (negotiated.length) facts.push(`T.38 negotiated (${negotiated.join(' + ')})`)
+    else if (l.used_t38) facts.push('T.38 enabled')
+  }
   if (l.hangup_cause && l.hangup_cause !== submissionMarker) facts.push(l.hangup_cause)
   if (l.result_text && l.result_text !== l.hangup_cause) facts.push(l.result_text)
   if (l.status && l.status !== l.result_text && l.status !== submissionMarker) facts.push(l.status)
@@ -176,7 +193,18 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
   if (pages) rows.push({ k: 'Pages', v: pages })
   const rate = fmtRate(l)
   if (rate) rows.push({ k: 'Rate', v: rate })
-  if (l.t38_status) rows.push({ k: 'T.38', v: l.t38_status })
+  if (l.is_bridge) {
+    // Per-leg T.38: 'negotiated' is confirmed from the leg's final SDP;
+    // 'enabled' is the policy decision on the leg gofax armed (downstream
+    // bridges arm the arrival leg, upstream bridges arm the bridge leg).
+    if (l.used_t38 || l.bridge_t38_a_leg || l.bridge_t38_b_leg) {
+      const armed = l.bridge_direction === 'upstream' ? 'b' : 'a'
+      const legLabel = (leg: 'a' | 'b', v?: string): string =>
+        v === 'negotiated' ? 'negotiated' : l.used_t38 && leg === armed ? 'enabled' : '—'
+      rows.push({ k: 'T.38 arrival leg', v: legLabel('a', l.bridge_t38_a_leg) })
+      rows.push({ k: 'T.38 bridge leg', v: legLabel('b', l.bridge_t38_b_leg) })
+    }
+  } else if (l.t38_status) rows.push({ k: 'T.38', v: l.t38_status })
   else if (l.used_t38) rows.push({ k: 'T.38', v: 'enabled' })
   if (l.ecm) rows.push({ k: 'ECM', v: 'used' })
   else if (l.ecm_requested) rows.push({ k: 'ECM', v: 'requested' })
