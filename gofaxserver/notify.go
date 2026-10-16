@@ -509,28 +509,20 @@ func (q *Queue) processNotifyDestinations(f *FaxJob) ([]NotifyDestination, error
 		deduped = filtered
 	}
 
-	// Bridged calls never carry real fax status (no pages, no result text —
-	// the outcome is inferred from the SIP hangup), so email notifications
-	// for them are noise. Portal status pushes and webhooks still fire: the
-	// portal needs the outcome to complete its job record, and webhooks are
-	// deliberate operator configuration.
+	// Bridged calls never carry real fax content or status (no local file,
+	// no pages, no result text — the outcome is inferred from the SIP
+	// hangup), so every notify destination is noise: emails and webhook_form
+	// need a fax file that never exists, and the portal tracks bridge
+	// outcomes through its own fsclient poller rather than status pushes.
+	// Suppressing here (before dispatch) means zero destinations, which
+	// short-circuits processNotifyDestinationsAsync before it generates the
+	// report PDF or records any notify delivery rows. The bridge outcome
+	// itself is still stored via the router's result path.
 	if f.IsBridge {
-		filtered := make([]NotifyDestination, 0, len(deduped))
-		var dropped []string
-		for _, d := range deduped {
-			switch d.Type {
-			case "email", "email_report", "email_full", "email_full_failure":
-				dropped = append(dropped, d.Type)
-			default:
-				filtered = append(filtered, d)
-			}
-		}
-		if len(dropped) > 0 {
-			logf(logrus.InfoLevel, "bridged call: suppressing email notify destinations", map[string]interface{}{
-				"dropped": dropped,
-			})
-		}
-		deduped = filtered
+		logf(logrus.InfoLevel, "bridged call: suppressing all notify destinations", map[string]interface{}{
+			"dropped": destinationTypeCounts(deduped),
+		})
+		return nil, nil
 	}
 
 	logf(logrus.InfoLevel, "notify destination resolution complete", map[string]interface{}{
@@ -1045,6 +1037,24 @@ func (q *Queue) processNotifyDestinationsAsync(nFR NotifyFaxResults, destination
 			case "webhook_form":
 				{
 					// Ensure temporary PDF is removed after sending.
+
+					// webhook_form attaches the first-page PDF, so without a
+					// preview file there is nothing useful to POST. This
+					// happens for jobs with no local fax file (bridged calls
+					// are already filtered out upstream, but a failed
+					// reception with zero pages can also lack a file) or when
+					// ImageMagick preview generation failed. Skip gracefully
+					// instead of recording a failed delivery.
+					if firstPageTiffPDF == "" {
+						detail = fmt.Sprintf("webhook_form -> %s: skipped, no first-page PDF available", dest.Destination)
+						q.server.LogManager.SendLog(q.server.LogManager.BuildLog(
+							"Notify",
+							"skipping webhook_form: no first-page PDF available",
+							logrus.InfoLevel,
+							map[string]interface{}{"uuid": nFR.FaxJob.UUID.String(), "destination": dest.Destination},
+						))
+						break
+					}
 
 					payload, err := json.Marshal(nFR)
 					if err != nil {

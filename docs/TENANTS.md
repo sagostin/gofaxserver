@@ -260,6 +260,7 @@ email_report->support@customer.com,webhook_form->https://n8n.example.com/webhook
 - `webhook_form` sends a multipart form POST with the first page of the fax as a PDF attachment (useful for n8n workflows).
 - `portal` sends a compact JSON status push to `portal.url + /portal/api/notify/<destination>`, where the destination is the portal org's service-account username (the portal manages this entry itself via its number assignments — see [PORTAL.md](PORTAL.md)). Carries no file data; requires `portal.url` (and `portal.api_key` when the portal has `inbound_api_key` set) in `config.json`.
 - The legacy `email->` type is treated as an alias for `email_report`. Other unknown types are logged (Warn) and dropped — only the documented types above are dispatched.
+- **Bridged calls** (fax passthrough via a `bridge` endpoint) never produce a local fax file or real fax status, so *all* notify destinations are suppressed for them — the call outcome is still stored and tracked, but nothing is dispatched. `webhook_form` additionally skips gracefully whenever no first-page PDF exists (e.g. preview generation failed).
 - Every dispatch (sent, failed, or skipped — e.g. an `email_full_failure` suppressed because an attempt succeeded) is persisted as a `notify` row in `fax_job_results`, correlated by `job_uuid` and visible in the admin fax-results listing alongside the job's call legs. Notify rows never affect the job's outcome.
 
 ### Multiple Recipients

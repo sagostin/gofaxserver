@@ -501,13 +501,14 @@ func TestProcessNotifyDestinationsTenantEmailFullOverridesNumberReport(t *testin
 	}
 }
 
-// Bridged calls carry no real fax status, so email destinations are dropped
-// while portal and webhook destinations still fire.
-func TestProcessNotifyDestinationsBridgeSuppressesEmail(t *testing.T) {
+// Bridged calls carry no fax file or real fax status, so ALL notify
+// destinations are suppressed — emails and webhook_form need a file that
+// never exists, and the portal tracks bridges via its own poller.
+func TestProcessNotifyDestinationsBridgeSuppressesAll(t *testing.T) {
 	q := newNotifyTestQueue(
 		map[uint]*Tenant{1: {ID: 1, Name: "acme", Notify: "email_full_failure->ops@acme.com"}},
 		map[string]*TenantNumber{
-			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->user@acme.com,email_full->ops@acme.com,portal->svc_acme,webhook->https://hooks/x"},
+			"5551234567": {ID: 9, TenantID: 1, Number: "5551234567", Notify: "email_report->user@acme.com,email_full->ops@acme.com,portal->svc_acme,webhook->https://hooks/x,webhook_form->https://hooks/y"},
 		},
 	)
 	job := notifyJob(1, 0, "5551234567", "8005559999")
@@ -516,14 +517,8 @@ func TestProcessNotifyDestinationsBridgeSuppressesEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, d := range dests {
-		switch d.Type {
-		case "email", "email_report", "email_full", "email_full_failure":
-			t.Fatalf("bridged call must not dispatch email destinations, got %+v", dests)
-		}
-	}
-	if findDest(dests, "portal") == nil || findDest(dests, "webhook") == nil {
-		t.Fatalf("portal and webhook destinations must survive bridge suppression, got %+v", dests)
+	if len(dests) != 0 {
+		t.Fatalf("bridged call must suppress all notify destinations, got %+v", dests)
 	}
 }
 

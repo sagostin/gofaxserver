@@ -644,8 +644,9 @@ EventLoop:
 
 		// Route bridged calls through the queue like any other job: the
 		// router normalizes numbers/tenants, and processFax stores the
-		// outcome, completes tracking, and dispatches notify-only (no
-		// delivery) — one notify path for all job types.
+		// outcome and completes tracking. Bridged calls dispatch no
+		// notifications (no fax file or real fax status exists), so
+		// notify dispatch is fully suppressed downstream.
 		faxjob.NotifyOnly = true
 		e.server.FaxJobRouting <- faxjob
 		return
