@@ -35,3 +35,4 @@ bin/
 # --- Logs & misc ---
 *.log
 *.swp
+.gstack/

@@ -119,7 +119,10 @@ function fmtSize(bytes: number): string {
         </div>
         <button class="secondary" type="submit">Search</button>
       </form>
-      <table v-if="faxes.length">
+      <table class="fixed-cols" v-if="faxes.length">
+        <colgroup>
+          <col style="width:160px" /><col /><col /><col /><col style="width:60px" /><col style="width:70px" /><col style="width:280px" /><col style="width:170px" />
+        </colgroup>
         <thead>
           <tr><th>Received</th><th>Org</th><th>From</th><th>To</th><th>Pages</th><th>Size</th><th>Job UUID</th><th></th></tr>
         </thead>

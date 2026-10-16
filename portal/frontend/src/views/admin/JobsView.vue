@@ -200,7 +200,10 @@ async function copyUuid(u: string) {
         <button class="secondary" type="submit">Apply</button>
       </form>
 
-      <table style="margin-top:10px">
+      <table class="fixed-cols" style="margin-top:10px">
+        <colgroup>
+          <col style="width:150px" /><col style="width:140px" /><col style="width:80px" /><col /><col /><col style="width:90px" /><col style="width:50px" /><col style="width:60px" /><col style="width:80px" />
+        </colgroup>
         <thead>
           <tr><th>Last activity</th><th>Type</th><th>Source</th><th>From → To</th><th>Tenant (src → dst)</th><th>Outcome</th><th>Att.</th><th>Pages</th><th></th></tr>
         </thead>

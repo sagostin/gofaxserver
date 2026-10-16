@@ -52,6 +52,10 @@ button.danger { background: var(--danger); color: #fff; }
 button:disabled { opacity: .5; cursor: default; }
 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
+/* Fixed layout: column widths come from the colgroup/first row only, so an
+   expanded colspan row (FaxLegList) can never stretch the table past its
+   container and force horizontal scrolling. */
+table.fixed-cols { table-layout: fixed; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
 

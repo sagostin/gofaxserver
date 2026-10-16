@@ -98,10 +98,18 @@ async function save() {
   busy.value = true
   try {
     const payload: any = { ...editing.value }
+    // Server-managed fields: empty strings for created_at/updated_at fail
+    // Go's time.Time JSON decoding upstream ("invalid payload"), and
+    // id/origin are forced server-side on create.
+    delete payload.created_at
+    delete payload.updated_at
+    if (!payload.expires_at) payload.expires_at = null
     if (expiryHours.value && expiryHours.value > 0) {
       payload.expires_at = new Date(Date.now() + expiryHours.value * 3600 * 1000).toISOString()
     }
     if (isNew.value) {
+      delete payload.id
+      delete payload.origin
       await api('/admin/fax-policies', { json: payload })
     } else {
       await api(`/admin/fax-policies/${editing.value.id}`, { method: 'PUT', json: payload })

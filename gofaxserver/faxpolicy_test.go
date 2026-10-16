@@ -144,6 +144,43 @@ func TestResolveFaxPolicyAppliesToCallType(t *testing.T) {
 	}
 }
 
+func TestResolveFaxPolicyBridgeT38Off(t *testing.T) {
+	withFaxDefaults(t)
+	s := serverWithRules(FaxPolicyRule{
+		ID: 1, Scope: PolicyScopeDst, DstNumber: "222",
+		Effect: PolicyEffectT38Off, AppliesTo: CallTypeBridge,
+		Origin: PolicyOriginManual, Enabled: true,
+	})
+
+	// Bridged call: rule forces T.38 off and decides (no flip-flop probing).
+	p := s.ResolveFaxPolicy("111", "222", CallTypeBridge)
+	if p.EnableT38 || p.RequestT38 {
+		t.Fatalf("bridge-scoped t38_off should disable t38 for bridged calls, got %+v", p)
+	}
+	if !p.T38Decided || !p.T38ForcedOff {
+		t.Fatalf("expected decided+forced off for bridged call, got %+v", p)
+	}
+	// Softmodem call to the same number: untouched.
+	p2 := s.ResolveFaxPolicy("111", "222", CallTypeSoftmodem)
+	if !p2.EnableT38 || p2.T38Decided {
+		t.Fatalf("softmodem call should be unaffected by bridge-scoped rule, got %+v", p2)
+	}
+}
+
+func TestResolveFaxPolicyBothAppliesToBridge(t *testing.T) {
+	withFaxDefaults(t)
+	s := serverWithRules(FaxPolicyRule{
+		ID: 1, Scope: PolicyScopeDst, DstNumber: "222",
+		Effect: PolicyEffectT38Off, AppliesTo: "both",
+		Origin: PolicyOriginManual, Enabled: true,
+	})
+
+	p := s.ResolveFaxPolicy("111", "222", CallTypeBridge)
+	if p.EnableT38 || p.RequestT38 || !p.T38Decided || !p.T38ForcedOff {
+		t.Fatalf("applies_to=both t38_off should force t38 off for bridged calls, got %+v", p)
+	}
+}
+
 func TestResolveFaxPolicyAutoDstMatchesSrcSide(t *testing.T) {
 	withFaxDefaults(t)
 	s := serverWithRules(FaxPolicyRule{

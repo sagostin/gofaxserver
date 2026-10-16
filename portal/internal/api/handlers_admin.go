@@ -1681,7 +1681,7 @@ func (s *Server) adminCreateFaxPolicyRule(ctx iris.Context) {
 	var rule fsclient.FaxPolicyRule
 	if err := ctx.ReadJSON(&rule); err != nil {
 		ctx.StatusCode(400)
-		ctx.JSON(map[string]string{"error": "invalid payload"})
+		ctx.JSON(map[string]string{"error": "invalid payload: " + err.Error()})
 		return
 	}
 	created, err := s.FX.CreateFaxPolicyRule(rule)
@@ -1703,7 +1703,7 @@ func (s *Server) adminUpdateFaxPolicyRule(ctx iris.Context) {
 	var rule fsclient.FaxPolicyRule
 	if err := ctx.ReadJSON(&rule); err != nil {
 		ctx.StatusCode(400)
-		ctx.JSON(map[string]string{"error": "invalid payload"})
+		ctx.JSON(map[string]string{"error": "invalid payload: " + err.Error()})
 		return
 	}
 	rule.ID = id
