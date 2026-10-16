@@ -75,6 +75,17 @@ func (q *Queue) Start() {
 type FaxJobWithFile struct {
 	FaxJob
 	FileData string `json:"file_data"`
+
+	// Call-outcome metadata of the pre-queue leg (the inbound reception).
+	// Delivery consumers (webhooks, portal inbox) use these to flag
+	// PARTIAL receptions: the call failed (success=false) but produced
+	// usable content (partial=true) that is being delivered anyway.
+	// Blank for outbound (submission) jobs.
+	CallSuccess     bool   `json:"call_success"`
+	CallPartial     bool   `json:"call_partial,omitempty"`
+	CallTotalPages  uint   `json:"call_total_pages,omitempty"`
+	CallHangupCause string `json:"call_hangup_cause,omitempty"`
+	CallResultText  string `json:"call_result_text,omitempty"`
 }
 
 // helper: detect "global upstream gateway" group (keep list intact)
@@ -187,8 +198,11 @@ func (q *Queue) processFax(f *FaxJob) {
 	}
 
 	// ----------------- Notify-only jobs skip endpoint delivery entirely
-	// Failed inbound receptions and bridged calls are routed through the
-	// queue purely for notification dispatch: no delivery is attempted.
+	// Zero-page failed inbound receptions and bridged calls are routed
+	// through the queue purely for notification dispatch: no delivery is
+	// attempted (there is no usable content). PARTIAL receptions (failed
+	// with >=1 page) are NOT notify-only — they deliver the partial
+	// content to endpoints while remaining marked failed.
 	// The router's progress tick already queued this job's result for
 	// storage, so this must NOT sendResult — that would store a duplicate
 	// row. The outcome is recorded for the notify report by the
@@ -621,8 +635,15 @@ func (q *Queue) processFax(f *FaxJob) {
 						// like the portal inbox need the reception's pages, not
 						// the blank delivery-attempt result that replaces
 						// ff.Result above.
+						payload := FaxJobWithFile{FaxJob: ff, FileData: webhookFileB64}
 						if f.Result != nil && !isPlaceholderResult(f) {
 							ff.NPages = int(f.Result.TransferredPages)
+							payload.FaxJob = ff
+							payload.CallSuccess = f.Result.Success
+							payload.CallPartial = !f.Result.Success && f.Result.TransferredPages > 0
+							payload.CallTotalPages = f.Result.TotalPages
+							payload.CallHangupCause = f.Result.HangupCause
+							payload.CallResultText = f.Result.ResultText
 						}
 
 						epTy, epLbl, epVal := endpointBriefOr(ep, epType)
@@ -638,11 +659,12 @@ func (q *Queue) processFax(f *FaxJob) {
 								return false, false
 							}
 
-							// Build body
-							body, mErr := json.Marshal(FaxJobWithFile{
-								FaxJob:   ff,
-								FileData: webhookFileB64,
-							})
+							// Build body. Refresh the embedded job copy each
+							// attempt (ff's Result/CallUUID are re-stamped per
+							// attempt below); only the call-outcome metadata is
+							// fixed at build time.
+							payload.FaxJob = ff
+							body, mErr := json.Marshal(payload)
 							if mErr != nil {
 								logAttempt(logrus.ErrorLevel, "failed to marshal "+epType+" payload", map[string]interface{}{
 									"uuid": f.UUID.String(), "endpoint": endpointSummary(ep), "attempt": attempt, "error": mErr.Error(),
@@ -780,15 +802,9 @@ func (q *Queue) processFax(f *FaxJob) {
 	}
 	wg.Wait()
 
-	// Determine if all attempts failed by checking results map
-	allAttemptsFailed := true
-	for _, attempt := range notifyFaxResults.Results {
-		if attempt.Result != nil && attempt.Result.Success {
-			allAttemptsFailed = false
-			break
-		}
-	}
-	notifyFaxResults.AllAttemptsFailed = allAttemptsFailed
+	// Determine if all attempts failed for notify purposes
+	// (email_full_failure gating).
+	notifyFaxResults.AllAttemptsFailed = computeAllAttemptsFailed(f, notifyFaxResults.Results)
 
 	// ----------------- Build first-page preview & notify destinations
 	defer func(path string) {
@@ -834,7 +850,8 @@ func (q *Queue) processFax(f *FaxJob) {
 	// gateway pair, immediate hangups, non-fax calls) carry no usable content
 	// and are pure noise as notifications — the outcome is still stored and
 	// the temp files cleaned up, but nothing is dispatched. PARTIAL
-	// receptions (≥1 page transferred before the failure) DO notify.
+	// receptions (≥1 page transferred before the failure) are not
+	// notify-only: they deliver to endpoints above AND notify here.
 	if f.NotifyOnly && !f.IsBridge && f.Result != nil && !f.Result.Success && f.Result.TransferredPages == 0 {
 		logAttempt(logrus.InfoLevel, "zero-page failed reception; skipping notify dispatch", map[string]interface{}{
 			"uuid": f.UUID.String(), "hangup_cause": f.Result.HangupCause,
@@ -854,6 +871,27 @@ func (q *Queue) processFax(f *FaxJob) {
 
 	// Mark complete AFTER notifications are dispatched
 	complete("notify-dispatched")
+}
+
+// computeAllAttemptsFailed reports whether the job's outcome is a total
+// failure, for notify purposes (email_full_failure gating). For inbound
+// receptions (gateway-sourced, non-bridge) the pre-queue CALL outcome is
+// authoritative: a partial reception that delivered successfully to
+// endpoints is still a failed call, so delivery-leg successes must not
+// clear the flag. Outbound jobs have no call-outcome leg, so any
+// successful attempt clears it (previous behavior for all job types).
+// Pure function so it is unit-testable without a queue.
+func computeAllAttemptsFailed(f *FaxJob, results map[string]*FaxJob) bool {
+	if f != nil && f.Result != nil && !f.IsBridge &&
+		f.SourceInfo.SourceType == "gateway" && !isPlaceholderResult(f) {
+		return !f.Result.Success
+	}
+	for _, attempt := range results {
+		if attempt.Result != nil && attempt.Result.Success {
+			return false
+		}
+	}
+	return true
 }
 
 // Summarize a single endpoint for logs.

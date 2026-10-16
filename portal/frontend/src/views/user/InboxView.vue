@@ -11,6 +11,8 @@ interface InboxItem {
   number: string
   number_name: string
   pages: number
+  partial?: boolean
+  total_pages?: number
   file_bytes: number
   received_at: string
 }
@@ -65,7 +67,15 @@ function fileUrl(id: number): string {
             <td>{{ fmt(f.received_at) }}</td>
             <td>{{ f.caller_name ? `${f.caller_name} (${f.caller_number})` : f.caller_number || '—' }}</td>
             <td>{{ f.number_name ? `${f.number_name} (${f.number})` : f.number || f.callee_number }}</td>
-            <td>{{ f.pages || '—' }}</td>
+            <td>
+              <template v-if="f.partial">
+                <span :title="`Call ended abnormally — only ${f.pages} of ${f.total_pages || '?'} pages received`">
+                  {{ f.total_pages ? `${f.pages}/${f.total_pages}` : (f.pages || '—') }}
+                  <span class="badge partial">partial</span>
+                </span>
+              </template>
+              <template v-else>{{ f.pages || '—' }}</template>
+            </td>
             <td>{{ fmtSize(f.file_bytes) }}</td>
             <td class="actions-cell">
               <a :href="fileUrl(f.id)" target="_blank" rel="noopener"><button>View PDF</button></a>

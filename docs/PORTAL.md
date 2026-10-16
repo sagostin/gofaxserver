@@ -119,7 +119,13 @@ or deleting the number, removes it again). When a fax arrives for that
 number, gofaxserver converts it to PDF and POSTs it to
 `<portal.url>/portal/api/inbound/<svc_username>` — the same JSON payload and
 retry/backoff semantics as `webhook` endpoints (`FaxJobWithFile`: flattened
-job fields + base64 PDF, `X-File-SHA256`/`X-File-Bytes` headers). The portal
+job fields + base64 PDF, `X-File-SHA256`/`X-File-Bytes` headers). The
+payload also carries the reception's call outcome (`call_success`,
+`call_partial`, `call_total_pages`, `call_hangup_cause`, `call_result_text`):
+**partial receptions** (the call dropped after ≥1 page transferred) are
+delivered like complete faxes but flagged `call_partial=true`, and the
+portal inbox shows them with a `partial` badge and a pages ratio (e.g.
+10/15). The portal
 URL and an optional pre-shared key live in gofaxserver's config:
 
 ```json

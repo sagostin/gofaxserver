@@ -784,10 +784,18 @@ EventLoop:
 
 	if !result.Success {
 		level = logrus.ErrorLevel
-		// Failed receptions go through the router + queue as notify-only
-		// jobs so failure destinations (e.g. email_full_failure) fire via
-		// the single notify path in processFax. The queue also stores the
-		// result, completes tracking, and removes the (partial) fax file.
+	}
+	if !result.Success && result.TransferredPages == 0 {
+		// Zero-page failed receptions (the losing leg of a
+		// simultaneous-ring gateway pair, immediate hangups, non-fax
+		// calls) go through the router + queue as notify-only jobs:
+		// there is no usable content to deliver. The queue stores the
+		// result, completes tracking, and removes the (empty) fax file.
+		//
+		// PARTIAL receptions (>=1 page transferred before the call
+		// dropped or otherwise failed) are routed normally: endpoints
+		// receive the partial content, while Result.Success stays false
+		// so the job is tracked, stored and reported as failed.
 		faxjob.NotifyOnly = true
 	}
 	e.server.FaxJobRouting <- faxjob

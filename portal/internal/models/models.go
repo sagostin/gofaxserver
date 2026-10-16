@@ -139,6 +139,11 @@ type InboundFax struct {
 	CallerName   string `json:"caller_name"`
 	CalleeNumber string `gorm:"index" json:"callee_number"`
 	Pages        int    `json:"pages"`
+	// Partial / TotalPages flag faxes whose call ended abnormally after
+	// some pages transferred: the content was delivered anyway, but the
+	// reception itself failed (Pages of TotalPages pages received).
+	Partial    bool `json:"partial"`
+	TotalPages int  `json:"total_pages,omitempty"`
 	// FileEnc is the sealed PDF; never serialized.
 	FileEnc    []byte    `gorm:"not null" json:"-"`
 	FileSHA256 string    `json:"-"`

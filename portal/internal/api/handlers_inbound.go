@@ -50,6 +50,11 @@ type inboundPayload struct {
 	Pages        int       `json:"npages"`
 	Ts           time.Time `json:"ts"`
 	FileData     string    `json:"file_data"`
+	// Call-outcome metadata: partial receptions (call dropped after some
+	// pages transferred) are delivered anyway but flagged so the inbox
+	// can show them as incomplete.
+	CallPartial    bool `json:"call_partial"`
+	CallTotalPages uint `json:"call_total_pages"`
 }
 
 // handleInboundFax receives a delivered fax from gofaxserver and stores it
@@ -161,6 +166,8 @@ func (s *Server) handleInboundFax(ctx iris.Context) {
 		CallerName:   p.CallerName,
 		CalleeNumber: p.CalleeNumber,
 		Pages:        p.Pages,
+		Partial:      p.CallPartial,
+		TotalPages:   int(p.CallTotalPages),
 		FileEnc:      sealed,
 		FileSHA256:   sumHex,
 		FileBytes:    int64(len(pdf)),
@@ -184,7 +191,8 @@ func (s *Server) handleInboundFax(ctx iris.Context) {
 
 	s.audit(ctx, "FAX_RECEIVE", p.UUID, map[string]any{
 		"org_id": org.ID, "svc_username": svcUsername, "callee": p.CalleeNumber,
-		"caller": p.CallerNumber, "pages": p.Pages, "bytes": len(pdf), "number_matched": numberID != nil,
+		"caller": p.CallerNumber, "pages": p.Pages, "partial": p.CallPartial,
+		"bytes": len(pdf), "number_matched": numberID != nil,
 	})
 	ctx.StatusCode(iris.StatusCreated)
 	ctx.JSON(map[string]any{"ok": true, "id": fax.ID})
@@ -256,7 +264,7 @@ func (s *Server) handleListInbox(ctx iris.Context) {
 	offset := ctx.URLParamIntDefault("offset", 0)
 	faxes := []models.InboundFax{}
 	q := s.DB.Select("id", "job_uuid", "org_id", "number_id", "caller_number", "caller_name",
-		"callee_number", "pages", "file_sha256", "file_bytes", "received_at", "created_at", "updated_at").
+		"callee_number", "pages", "partial", "total_pages", "file_sha256", "file_bytes", "received_at", "created_at", "updated_at").
 		Where("org_id = ? AND number_id IN ?", orgID, numberIDs).
 		Order("received_at DESC").Limit(limit).Offset(offset)
 	if err := q.Find(&faxes).Error; err != nil {
@@ -274,7 +282,7 @@ func (s *Server) handleGetInbound(ctx iris.Context) {
 	}
 	fax := &models.InboundFax{}
 	if err := s.DB.Select("id", "job_uuid", "org_id", "number_id", "caller_number", "caller_name",
-		"callee_number", "pages", "file_sha256", "file_bytes", "received_at", "created_at", "updated_at").
+		"callee_number", "pages", "partial", "total_pages", "file_sha256", "file_bytes", "received_at", "created_at", "updated_at").
 		First(fax, ctx.Params().GetUintDefault("id", 0)).Error; err != nil || !s.userCanSeeInbound(userID, orgID, fax) {
 		ctx.StatusCode(iris.StatusNotFound)
 		ctx.JSON(map[string]string{"error": "fax not found"})
@@ -357,7 +365,7 @@ func (s *Server) adminListInbound(ctx iris.Context) {
 
 	faxes := []models.InboundFax{}
 	q := base.Select("id", "job_uuid", "org_id", "number_id", "caller_number", "caller_name",
-		"callee_number", "pages", "file_sha256", "file_bytes", "received_at", "created_at", "updated_at").
+		"callee_number", "pages", "partial", "total_pages", "file_sha256", "file_bytes", "received_at", "created_at", "updated_at").
 		Order("received_at DESC").Limit(limit).Offset(offset)
 	if err := q.Find(&faxes).Error; err != nil {
 		ctx.StatusCode(iris.StatusInternalServerError)

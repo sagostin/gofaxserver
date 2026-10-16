@@ -64,6 +64,7 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 .badge.sending { background: #dbeafe; color: #1e40af; }
 .badge.success { background: #dcfce7; color: var(--ok); }
 .badge.failed { background: #fee2e2; color: var(--danger); }
+.badge.partial { background: #fef3c7; color: #92400e; }
 .badge.active { background: #dcfce7; color: var(--ok); }
 .badge.inactive { background: #e5e7eb; color: #374151; }
 /* Fax leg result-type badges */

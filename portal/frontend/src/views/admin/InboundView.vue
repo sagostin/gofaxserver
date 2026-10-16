@@ -15,6 +15,8 @@ interface InboundItem {
   number: string
   number_name: string
   pages: number
+  partial?: boolean
+  total_pages?: number
   file_bytes: number
   received_at: string
 }
@@ -136,7 +138,15 @@ function fmtSize(bytes: number): string {
                 {{ f.number_name ? `${f.number_name} (${f.number})` : f.number || f.callee_number }}
                 <span v-if="!f.number_id" class="badge inactive" title="Number not mirrored in portal; visible to admins only">unmatched</span>
               </td>
-              <td>{{ f.pages || '—' }}</td>
+              <td>
+                <template v-if="f.partial">
+                  <span :title="`Call ended abnormally — only ${f.pages} of ${f.total_pages || '?'} pages received`">
+                    {{ f.total_pages ? `${f.pages}/${f.total_pages}` : (f.pages || '—') }}
+                    <span class="badge partial">partial</span>
+                  </span>
+                </template>
+                <template v-else>{{ f.pages || '—' }}</template>
+              </td>
               <td>{{ fmtSize(f.file_bytes) }}</td>
               <td class="muted" style="font-size:11px">{{ f.job_uuid }}</td>
               <td class="actions-cell">

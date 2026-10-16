@@ -73,9 +73,13 @@ type PortalStatusPayload struct {
 }
 
 // buildPortalStatusPayload collapses all per-attempt results into one final
-// outcome: the successful attempt wins if there is one, otherwise the latest
-// attempt describes the failure. Pages (transferred and total) are the max
-// across attempts.
+// outcome. For inbound jobs the pre-queue call-outcome leg (the reception /
+// bridged call, stamped by snapshotCallOutcome) is authoritative: a partial
+// reception that delivered successfully to endpoints still reports FAILED —
+// delivery legs describe document transport, not the fax call itself. For
+// outbound jobs (no call-outcome leg) the successful attempt wins if there
+// is one, otherwise the latest attempt describes the failure. Pages
+// (transferred and total) are the max across attempts.
 func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 	p := PortalStatusPayload{
 		AllAttemptsFailed: nfr.AllAttemptsFailed,
@@ -87,7 +91,7 @@ func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 		p.CalleeNumber = nfr.FaxJob.CalleeNumber
 	}
 
-	var successJob, lastJob *FaxJob
+	var callJob, successJob, lastJob *FaxJob
 	for _, job := range nfr.Results {
 		if job == nil || job.Result == nil {
 			continue
@@ -97,6 +101,15 @@ func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 		}
 		if job.Result.TotalPages > p.TotalPages {
 			p.TotalPages = job.Result.TotalPages
+		}
+		// The call-outcome snapshot carries a synthetic endpoint purely
+		// for the report's type column ("reception" / "bridge") — see
+		// snapshotCallOutcome in queue.go.
+		if callJob == nil && len(job.Endpoints) > 0 {
+			switch job.Endpoints[0].EndpointType {
+			case "reception", "bridge":
+				callJob = job
+			}
 		}
 		if job.Result.Success && successJob == nil {
 			successJob = job
@@ -109,6 +122,9 @@ func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 	chosen := lastJob
 	if successJob != nil {
 		chosen = successJob
+	}
+	if callJob != nil {
+		chosen = callJob
 	}
 	if chosen != nil {
 		p.Success = chosen.Result.Success

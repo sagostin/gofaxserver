@@ -68,6 +68,43 @@ func TestInboundPayloadDecodesUpstreamShape(t *testing.T) {
 	if p.FileData != "JVBERi0xLjQK" {
 		t.Errorf("file_data mismatch: %q", p.FileData)
 	}
+	if p.CallPartial || p.CallTotalPages != 0 {
+		t.Error("call-outcome metadata must default to zero values for clean receptions")
+	}
+}
+
+// TestInboundPayloadDecodesPartialReception guards the partial-reception
+// contract: gofaxserver flags faxes whose call ended abnormally after some
+// pages transferred (call_partial=true, call_total_pages=document total) so
+// the inbox can show them as incomplete.
+func TestInboundPayloadDecodesPartialReception(t *testing.T) {
+	raw := `{
+		"uuid": "3f7c1f2e-0000-4a1b-9c2d-0123456789ab",
+		"call_uuid": "aaaa1f2e-0000-4a1b-9c2d-0123456789ab",
+		"number": "+16045551212",
+		"cidnum": "+17785559876",
+		"npages": 10,
+		"ts": "2026-09-23T12:34:56Z",
+		"file_data": "JVBERi0xLjQK",
+		"call_success": false,
+		"call_partial": true,
+		"call_total_pages": 15,
+		"call_hangup_cause": "NORMAL_CLEARING",
+		"call_result_text": "Call dropped"
+	}`
+	var p inboundPayload
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !p.CallPartial {
+		t.Error("call_partial must decode")
+	}
+	if p.CallTotalPages != 15 {
+		t.Errorf("call_total_pages mismatch: %d", p.CallTotalPages)
+	}
+	if p.Pages != 10 {
+		t.Errorf("pages (npages) mismatch: %d", p.Pages)
+	}
 }
 
 // TestInboundRejectsBadAPIKey exercises the pre-shared-key gate; it must

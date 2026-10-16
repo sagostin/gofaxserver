@@ -694,3 +694,116 @@ func TestEmailSubjectBodyPagesRatio(t *testing.T) {
 		t.Errorf("unexpected subject: %q", subject)
 	}
 }
+
+// callOutcomeJob builds a result stamped the way snapshotCallOutcome stamps
+// the pre-queue call outcome (inbound reception / bridged call): a synthetic
+// endpoint purely for the report's type column.
+func callOutcomeJob(label string, success bool, pages uint, resultText, hangupCause string, end time.Time) *FaxJob {
+	j := attemptJob(success, pages, resultText, hangupCause, end)
+	j.Endpoints = []*Endpoint{{EndpointType: label}}
+	return j
+}
+
+// TestBuildPortalStatusPayloadCallOutcomeAuthoritative: a partial reception
+// (failed, but pages transferred) that delivered successfully to endpoints
+// must still collapse to FAILED — delivery legs describe document transport,
+// not the fax call itself.
+func TestBuildPortalStatusPayloadCallOutcomeAuthoritative(t *testing.T) {
+	now := time.Now()
+	reception := callOutcomeJob("reception", false, 10, "Call dropped", "NORMAL_CLEARING", now.Add(-time.Minute))
+	reception.Result.TotalPages = 15
+	delivery := attemptJob(true, 0, "status 201", "", now)
+	delivery.Endpoints = []*Endpoint{{EndpointType: "webhook"}}
+
+	nfr := NotifyFaxResults{
+		FaxJob:            emailJob("gateway", "2507620300", "2365461209", ""),
+		AllAttemptsFailed: true,
+		Results:           map[string]*FaxJob{"call": reception, "delivery": delivery},
+	}
+	p := nfr.buildPortalStatusPayload()
+	if p.Success {
+		t.Error("partial reception must report failed even when a delivery leg succeeded")
+	}
+	if p.HangupCause != "NORMAL_CLEARING" || p.ResultText != "Call dropped" {
+		t.Errorf("expected fields from the reception leg, got %+v", p)
+	}
+	if p.TransferredPages != 10 || p.TotalPages != 15 {
+		t.Errorf("pages should come from the reception leg (10/15), got %d/%d", p.TransferredPages, p.TotalPages)
+	}
+
+	subject, body := nfr.emailSubjectBody("email_full_failure")
+	if subject != "Fax from 2507620300 FAILED (NORMAL_CLEARING)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+	if !strings.Contains(body, "Pages:     10/15") {
+		t.Errorf("body missing partial pages ratio:\n%s", body)
+	}
+}
+
+// TestBuildPortalStatusPayloadSuccessfulReceptionFailedDelivery: a clean
+// reception stays SUCCESS even when endpoint delivery afterwards failed —
+// same outcome as the legacy success-wins logic.
+func TestBuildPortalStatusPayloadSuccessfulReceptionFailedDelivery(t *testing.T) {
+	now := time.Now()
+	reception := callOutcomeJob("reception", true, 4, "OK", "NORMAL_CLEARING", now.Add(-time.Minute))
+	delivery := attemptJob(false, 0, "status 500", "", now)
+	delivery.Endpoints = []*Endpoint{{EndpointType: "webhook"}}
+
+	nfr := NotifyFaxResults{
+		FaxJob:  emailJob("gateway", "2507620300", "2365461209", ""),
+		Results: map[string]*FaxJob{"call": reception, "delivery": delivery},
+	}
+	p := nfr.buildPortalStatusPayload()
+	if !p.Success {
+		t.Error("successful reception must report success even when a delivery leg failed")
+	}
+	if p.TransferredPages != 4 {
+		t.Errorf("pages mismatch: %d", p.TransferredPages)
+	}
+}
+
+// TestComputeAllAttemptsFailedInboundPartial: for inbound receptions the
+// pre-queue call outcome is authoritative — a partial reception that
+// delivered successfully to endpoints still counts as fully failed, so
+// email_full_failure keeps firing.
+func TestComputeAllAttemptsFailedInboundPartial(t *testing.T) {
+	inbound := func(success bool, pages uint) *FaxJob {
+		return &FaxJob{
+			Result:     &gofaxlib.FaxResult{Success: success, TransferredPages: pages},
+			SourceInfo: FaxSourceInfo{SourceType: "gateway"},
+		}
+	}
+	deliveryOK := map[string]*FaxJob{"d": attemptJob(true, 0, "status 201", "", time.Now())}
+
+	if !computeAllAttemptsFailed(inbound(false, 10), deliveryOK) {
+		t.Error("partial reception with successful delivery must still be all-failed")
+	}
+	if computeAllAttemptsFailed(inbound(true, 10), map[string]*FaxJob{}) {
+		t.Error("successful reception must not be all-failed")
+	}
+	if !computeAllAttemptsFailed(inbound(false, 0), map[string]*FaxJob{}) {
+		t.Error("zero-page failed reception must be all-failed")
+	}
+
+	// Outbound jobs (no call-outcome leg): any successful attempt clears it.
+	outbound := &FaxJob{
+		Result:     &gofaxlib.FaxResult{HangupCause: "WEBHOOK"},
+		SourceInfo: FaxSourceInfo{SourceType: "webhook"},
+	}
+	if computeAllAttemptsFailed(outbound, deliveryOK) {
+		t.Error("outbound job with a successful attempt must not be all-failed")
+	}
+	if !computeAllAttemptsFailed(outbound, map[string]*FaxJob{"t": attemptJob(false, 0, "NO ANSWER", "NO_ANSWER", time.Now())}) {
+		t.Error("outbound job with only failed attempts must be all-failed")
+	}
+
+	// Bridged calls fall back to the results loop (no authoritative call leg).
+	bridge := &FaxJob{
+		IsBridge:   true,
+		Result:     &gofaxlib.FaxResult{Success: false},
+		SourceInfo: FaxSourceInfo{SourceType: "gateway"},
+	}
+	if !computeAllAttemptsFailed(bridge, map[string]*FaxJob{"b": attemptJob(false, 0, "", "NO_ROUTE_DESTINATION", time.Now())}) {
+		t.Error("failed bridge with no successful legs must be all-failed")
+	}
+}

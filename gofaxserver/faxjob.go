@@ -87,11 +87,13 @@ type FaxJob struct {
 	AppliedPolicyIDs []uint `json:"applied_policy_ids,omitempty"` // fax policy rules applied to this call
 
 	// NotifyOnly marks jobs routed through the queue purely for notification
-	// dispatch (failed inbound receptions, bridged calls). The router still
-	// performs its normal number transformation / tenant resolution, but
-	// processFax skips endpoint delivery and only runs the notify tail —
-	// keeping one notify path for all job types instead of ad-hoc dispatch
-	// scattered across call sites.
+	// dispatch (zero-page failed inbound receptions, bridged calls). The
+	// router still performs its normal number transformation / tenant
+	// resolution, but processFax skips endpoint delivery and only runs the
+	// notify tail — keeping one notify path for all job types instead of
+	// ad-hoc dispatch scattered across call sites. PARTIAL receptions
+	// (failed with >=1 page transferred) are NOT notify-only: endpoints
+	// receive the partial content while the job stays marked failed.
 	NotifyOnly bool `json:"notify_only,omitempty"`
 }
 
