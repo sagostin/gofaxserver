@@ -627,6 +627,7 @@ func (t *eventClient) start() {
 		"fax_disable_v17":              strconv.FormatBool(t.faxjob.DisableV17),
 		"fax_enable_t38":               strconv.FormatBool(enableT38),
 		"fax_enable_t38_request":       strconv.FormatBool(requestT38),
+		"fax_enable_image_resizing":    strconv.FormatBool(gofaxlib.ImageResizingEnabled()),
 		"fax_verbose":                  strconv.FormatBool(gofaxlib.Config.FreeSwitch.Verbose),
 	}
 

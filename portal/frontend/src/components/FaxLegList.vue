@@ -116,6 +116,23 @@ function bridgePath(l: FaxLeg): string {
   return `${arrival} → ${outbound} (${dir})`
 }
 
+// isRescaled reports whether spandsp downscaled the page image to fit the
+// receiver's negotiated capabilities (fax_enable_image_resizing): the file's
+// resolution or pixel size differs from what was actually put on the wire.
+function isRescaled(l: FaxLeg): boolean {
+  if (l.file_image_resolution && l.image_resolution && l.file_image_resolution !== l.image_resolution) return true
+  if (l.file_image_pixel_size && l.image_pixel_size && l.file_image_pixel_size !== l.image_pixel_size) return true
+  return false
+}
+
+// rescaledDetail renders the file → negotiated transition for the badge/row.
+function rescaledDetail(l: FaxLeg): string {
+  if (l.file_image_resolution && l.image_resolution && l.file_image_resolution !== l.image_resolution) {
+    return `file ${l.file_image_resolution} → sent ${l.image_resolution}`
+  }
+  return `file ${l.file_image_pixel_size} → sent ${l.image_pixel_size}`
+}
+
 // summary assembles the one-line fact list for a leg, skipping empty fields.
 function summary(l: FaxLeg): string {
   const facts: string[] = []
@@ -132,6 +149,7 @@ function summary(l: FaxLeg): string {
   if (rate) facts.push(rate)
   if (l.encoding_name) facts.push(l.encoding_name)
   if (l.bad_rows) facts.push(`${l.bad_rows} bad rows`)
+  if (isRescaled(l)) facts.push('rescaled')
   if (l.t38_status) facts.push(`T.38 ${l.t38_status}`)
   else if (l.used_t38) facts.push('T.38')
   if (l.hangup_cause && l.hangup_cause !== submissionMarker) facts.push(l.hangup_cause)
@@ -169,6 +187,7 @@ function detailRows(l: FaxLeg): { k: string; v: string; copy?: string }[] {
   if (l.encoding_name || l.encoding) rows.push({ k: 'Encoding', v: l.encoding_name || String(l.encoding) })
   if (l.bad_rows) rows.push({ k: 'Bad rows', v: l.longest_bad_row_run ? `${l.bad_rows} (longest run ${l.longest_bad_row_run})` : String(l.bad_rows) })
   if (l.image_size) rows.push({ k: 'Image size', v: `${l.image_size.toLocaleString()} bytes` })
+  if (isRescaled(l)) rows.push({ k: 'Rescaled', v: rescaledDetail(l) })
   if (l.image_resolution) rows.push({ k: 'Resolution', v: l.file_image_resolution && l.file_image_resolution !== l.image_resolution ? `${l.image_resolution} (file ${l.file_image_resolution})` : l.image_resolution })
   if (l.image_pixel_size) rows.push({ k: 'Pixel size', v: l.file_image_pixel_size && l.file_image_pixel_size !== l.image_pixel_size ? `${l.image_pixel_size} (file ${l.file_image_pixel_size})` : l.image_pixel_size })
   const remoteInfo = [l.remote_vendor, l.remote_model, l.remote_country].filter(Boolean).join(' ')

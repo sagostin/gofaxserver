@@ -74,6 +74,15 @@ type config struct {
 		FailedResponseMap            map[string]bool `json:"failed_response_map"`
 		RetryDelay                   string          `json:"retry_delay"`
 		RetryAttempts                string          `json:"retry_attempts"`
+		// EnableImageResizing maps to mod_spandsp's enable-image-resizing
+		// ("image rescaling compression", spandsp.conf.xml default false). On
+		// txfax it lets spandsp downscale the page image (width and/or
+		// resolution) to fit the receiver's DIS instead of failing the
+		// negotiation. It only acts where FreeSWITCH terminates the fax, so
+		// it is set on the outbound txfax path only (near-no-op on rxfax;
+		// no-op on bridged/t38_gateway calls). Default true; disable per
+		// destination with a var_override fax policy rule.
+		EnableImageResizing *bool `json:"enable_image_resizing"`
 		// Policy configures the Postgres-backed fax policy engine (T.38 /
 		// ECM / V.17 rules and adaptive learning). See FaxPolicyConfig.
 		Policy FaxPolicyConfig `json:"policy"`
@@ -330,6 +339,12 @@ func LoadConfig(filename string) {
 	for _, val := range Config.Faxing.FailedResponse {
 		Config.Faxing.FailedResponseMap[val] = true
 	}
+}
+
+// ImageResizingEnabled reports whether spandsp may rescale the page image to
+// fit the receiver's negotiated capabilities on txfax (default true).
+func ImageResizingEnabled() bool {
+	return boolOrDefault(Config.Faxing.EnableImageResizing, true)
 }
 
 func FailedHangUpCause(hangUpCause string) bool {
