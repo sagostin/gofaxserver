@@ -24,6 +24,7 @@ interface GwStatus {
   file: string
   state: string
   exists_on_disk: boolean
+  aliases?: Ep[]
 }
 
 interface UnmanagedFile {
@@ -114,8 +115,15 @@ const managedEndpointIDs = computed(() => {
 
 // Gateway-kind endpoints with no managing GatewayConfig — candidates for
 // "provision from existing endpoint" (e.g. rows from an imported DB).
+// Alias endpoints are excluded: they intentionally point at an already
+// provisioned gateway (value prefix = managed gateway name).
+const managedGatewayNames = computed(() => new Set(gateways.value.map(g => g.gateway.name)))
 const unmanagedEndpoints = computed(() =>
-  endpoints.value.filter(e => e.endpoint_type === 'gateway' && !managedEndpointIDs.value.has(e.id))
+  endpoints.value.filter(e =>
+    e.endpoint_type === 'gateway' &&
+    !managedEndpointIDs.value.has(e.id) &&
+    !managedGatewayNames.value.has(e.endpoint.split(':')[0])
+  )
 )
 
 function parsedParams(gs: GwStatus): Record<string, any> {
@@ -207,8 +215,50 @@ function edit(gs: GwStatus) {
   params.value = parsedParams(gs)
 }
 
+// --- alias (number → existing gateway) assignment ---
+const aliasFor = ref<GwStatus | null>(null)
+const aliasForm = ref({ scope_source: 'portal', type_id: 0, priority: 0, bridge: false })
+const aliasScopeOptions = computed(() => scope.options('number', aliasForm.value.scope_source))
+
+// gofax number id → dial string, for labelling alias rows.
+const numberLabels = computed(() => {
+  const m = new Map<number, string>()
+  for (const n of scope.upstreamNumbers.value) m.set(n.id, n.number)
+  return m
+})
+
+function startAlias(gs: GwStatus) {
+  aliasFor.value = gs
+  aliasForm.value = { scope_source: 'portal', type_id: 0, priority: 0, bridge: false }
+}
+
+async function createAlias() {
+  if (!aliasFor.value) return
+  error.value = ''
+  busy.value = true
+  try {
+    await api(`/admin/gateways/${aliasFor.value.gateway.name}/endpoints`, {
+      json: { type_id: aliasForm.value.type_id, priority: aliasForm.value.priority, bridge: aliasForm.value.bridge, scope_source: aliasForm.value.scope_source },
+    })
+    aliasFor.value = null
+    await load()
+  } catch (e: any) { error.value = e.message } finally { busy.value = false }
+}
+
+async function removeAlias(al: Ep) {
+  const label = numberLabels.value.get(al.type_id) || `#${al.type_id}`
+  if (!confirm(`Remove alias endpoint #${al.id} (${label} → ${al.endpoint})? The number keeps its other endpoints.`)) return
+  error.value = ''
+  try { await api(`/admin/endpoints/${al.id}`, { method: 'DELETE' }); await load() }
+  catch (e: any) { error.value = e.message }
+}
+
 async function remove(gs: GwStatus) {
-  if (!confirm(`Deprovision gateway ${gs.gateway.name}? This removes the FreeSWITCH XML, tears the gateway down, and deletes the linked endpoint.`)) return
+  if ((gs.aliases || []).length) {
+    error.value = `Gateway ${gs.gateway.name} has ${gs.aliases!.length} alias endpoint(s) — remove them before deprovisioning.`
+    return
+  }
+  if (!confirm(`Deprovision gateway ${gs.gateway.name}? This removes the FreeSWITCH XML and tears the gateway down. The linked endpoint row is KEPT (now unmanaged) so the gateway can be reprovisioned later — deliveries routed to it will fail until it is reprovisioned or deleted.`)) return
   error.value = ''
   try {
     await api(`/admin/gateways/${gs.gateway.name}?confirm=true`, { method: 'DELETE' })
@@ -378,7 +428,7 @@ async function provisionFromEndpoint() {
       <h3>Provisioned gateways <span class="muted">(live from gofaxserver + FreeSWITCH)</span></h3>
       <table>
         <thead>
-          <tr><th>Name</th><th>Template</th><th>Realm</th><th>FS state</th><th>XML on disk</th><th>Endpoint</th><th></th></tr>
+          <tr><th>Name</th><th>Template</th><th>Realm</th><th>FS state</th><th>XML on disk</th><th>Endpoint</th><th>Aliases</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="gs in gateways" :key="gs.gateway.id">
@@ -394,14 +444,57 @@ async function provisionFromEndpoint() {
               <button v-if="!gs.exists_on_disk" class="secondary" style="margin-left:6px" @click="repair(gs)">Re-render</button>
             </td>
             <td>{{ gs.gateway.endpoint_id ? '#' + gs.gateway.endpoint_id : '—' }}</td>
+            <td>
+              <template v-if="(gs.aliases || []).length">
+                <div v-for="al in gs.aliases" :key="al.id" style="white-space:nowrap">
+                  #{{ al.id }} → {{ numberLabels.get(al.type_id) || al.type_id }}
+                  <span class="muted">(pri {{ al.priority }}<template v-if="al.bridge">, bridge</template>)</span>
+                  <button class="danger" style="margin-left:4px;padding:0 6px" title="Remove alias" @click="removeAlias(al)">×</button>
+                </div>
+              </template>
+              <span v-else class="muted">—</span>
+            </td>
             <td class="actions-cell">
+              <button class="secondary" @click="startAlias(gs)">Assign to number…</button>
               <button class="secondary" @click="edit(gs)">Edit</button>
               <button class="danger" @click="remove(gs)">Deprovision</button>
             </td>
           </tr>
-          <tr v-if="!gateways.length"><td colspan="7" class="muted">No gateways provisioned yet.</td></tr>
+          <tr v-if="!gateways.length"><td colspan="8" class="muted">No gateways provisioned yet.</td></tr>
         </tbody>
       </table>
+
+      <div v-if="aliasFor" style="margin-top:12px">
+        <h4>Assign gateway {{ aliasFor.gateway.name }} to a number</h4>
+        <p class="muted" style="margin-top:0">
+          Creates a number-scoped alias endpoint pointing at this gateway — the number's inbound
+          faxes fan out to it in parallel with the number's other endpoints (e.g. portal delivery).
+          The gateway itself is not re-provisioned. Keep <em>bridge</em> off for receive-and-forward;
+          bridge=true bridges the call instead of receiving it, so no file reaches the portal.
+        </p>
+        <form class="inline" @submit.prevent="createAlias">
+          <div>
+            <label>Scope source</label>
+            <select v-model="aliasForm.scope_source" @change="aliasForm.type_id = 0">
+              <option value="portal">portal (numbers)</option>
+              <option value="direct">direct (gofaxserver number)</option>
+            </select>
+          </div>
+          <div>
+            <label>Number</label>
+            <select v-model.number="aliasForm.type_id" required>
+              <option :value="0" disabled>select…</option>
+              <option v-for="o in aliasScopeOptions" :key="o.id" :value="o.id">{{ o.label }}</option>
+            </select>
+          </div>
+          <div><label>Priority</label><input v-model.number="aliasForm.priority" /></div>
+          <div style="align-self:center"><label style="font-size:13px;color:var(--text)"><input type="checkbox" v-model="aliasForm.bridge" /> bridge</label></div>
+        </form>
+        <div style="margin-top:12px">
+          <button :disabled="busy || !aliasForm.type_id" @click="createAlias">Create alias endpoint</button>
+          <button class="secondary" style="margin-left:8px" @click="aliasFor = null">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <div v-if="unmanagedEndpoints.length" class="panel">

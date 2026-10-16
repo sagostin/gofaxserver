@@ -155,9 +155,74 @@ Rules are managed via `GET/POST/PUT/DELETE /admin/fax-policies` (see
 
 ---
 
-## Priority-Based Routing
+## Endpoint Resolution & Delivery Semantics
 
-Endpoints support priority for failover:
+### Scope resolution: number shadows tenant (group-level, never merged)
+
+`getEndpointsForNumber` (`gofaxserver/tenants.go:215`) resolves the endpoint set
+for a destination number in exactly two steps:
+
+1. If the **number** has any valid endpoints (`type=number`, priority ≠ 666) →
+   use those, and **only** those. Tenant endpoints are not consulted, appended,
+   or merged — the number scope shadows the tenant scope as a whole.
+2. Only if the number has **zero** valid endpoints → fall back to the **tenant**
+   endpoints (`type=tenant`, priority ≠ 666).
+3. If neither scope yields anything → the Router falls back to the global
+   upstream gateway group (priority 999).
+
+**Practical consequence:** if a number has a `portal` endpoint for portal
+delivery and the tenant has a `gateway` endpoint, inbound faxes to that number
+are delivered to the portal only — the tenant's gateway is invisible for that
+number. To deliver to **both**, assign both endpoints to the same scope
+(typically the number).
+
+### Delivery: parallel across endpoint types, failover within a type
+
+The Queue (`gofaxserver/queue.go:processFax`) groups the resolved endpoint set
+by `endpoint_type` and runs **each type in its own goroutine, concurrently** —
+with independent retry loops and independent success/failure reporting. One
+type failing does not block, delay, or fail another type.
+
+Within a single type:
+
+- Priority tiers are tried in ascending order (999 always last).
+- Within a priority tier, endpoints are tried **sequentially as failover**:
+  the first success stops the tier; if all endpoints in the tier fail, the
+  next priority tier is tried.
+
+**Implications:**
+
+| Configuration | Behavior |
+|---|---|
+| `portal` + `gateway` endpoint on the same number | Both fire in parallel: portal gets its `/inbound` POST, the gateway gets an outbound transmission of the received TIFF (receive-and-forward). |
+| Two `webhook` endpoints, same type + priority | Failover, **not** broadcast — only the first one that succeeds receives the fax. Same-type fan-out does not exist. |
+| `gateway` endpoint with `bridge=true` | Inbound calls from an upstream gateway are bridged *before* `rxfax` runs — no TIFF is produced, so portal/webhook/email delivery is impossible for that call. Use `bridge=false` for receive-and-forward. |
+| `priority=666` on a number endpoint | Filtered out of inbound delivery entirely; if it is the number's only endpoint, the tenant scope takes over (see `getEndpointsForBridge` for the outbound-bridge-source exception). |
+
+**Example — receive to portal AND forward to a PBX gateway:**
+
+```bash
+# Portal delivery endpoint on the number
+curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
+  -H "Authorization: Basic ..." \
+  -d '{"type": "number", "type_id": <TENANT_NUMBER_ID>,
+       "endpoint_type": "portal", "endpoint": "<svc_username>", "priority": 0}'
+
+# Gateway forwarding alias on the SAME number, pointing at the already
+# provisioned gateway — no re-provisioning (see GATEWAYS.md → alias endpoints)
+curl -X POST http://<FAX_SERVER>:8080/admin/gateway/pbx_<NAME>/endpoints \
+  -H "Authorization: Basic ..." \
+  -d '{"type_id": <TENANT_NUMBER_ID>, "priority": 0, "bridge": false}'
+```
+
+Because they are different `endpoint_type`s, priorities do not order them
+relative to each other — they always run concurrently.
+
+---
+
+## Priority-Based Routing (within one endpoint type)
+
+Endpoints of the same type support priority for failover:
 
 ```json
 {
@@ -190,7 +255,7 @@ curl -X POST http://<FAX_SERVER>:8080/admin/endpoint \
   }'
 ```
 
-Number-specific endpoints take precedence over tenant endpoints (`tenants.go:196-231` — number scope is checked first).
+Number-specific endpoints take precedence over tenant endpoints **as a group** — if the number has any valid (non-666) endpoints, the tenant's endpoints are ignored entirely for that number, not merged in. See [Endpoint Resolution & Delivery Semantics](#endpoint-resolution--delivery-semantics) above.
 
 ---
 

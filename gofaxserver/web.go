@@ -86,6 +86,7 @@ func (s *Server) loadWebPaths(app *iris.Application) {
 		admin.Delete("/gateways/unmanaged/{name}", s.handleDeleteUnmanagedGateway)
 		admin.Post("/gateway", s.handleProvisionGateway)
 		admin.Put("/gateway/{name}", s.handleUpdateGateway)
+		admin.Post("/gateway/{name}/endpoints", s.handleCreateGatewayAlias)
 		admin.Post("/gateway/{name}/repair", s.handleRepairGateway)
 		admin.Delete("/gateway/{name}", s.handleDeprovisionGateway)
 
@@ -525,6 +526,26 @@ func (s *Server) handleUpdateEndpoint(ctx iris.Context) {
 		ctx.StatusCode(http.StatusConflict)
 		ctx.JSON(iris.Map{"error": fmt.Sprintf("endpoint is managed by gateway %q; update it via PUT /admin/gateway/%s", gwName, gwName)})
 		return
+	}
+	// Alias endpoints are unmanaged, but their value is derived from the
+	// provisioned gateway they point at — lock the value so it cannot drift
+	// (scope/priority/bridge stay editable). Once the gateway is deprovisioned
+	// the endpoint decouples and its value becomes editable again.
+	var existing Endpoint
+	if err := s.DB.First(&existing, ep.ID); err != nil {
+		ctx.StatusCode(http.StatusNotFound)
+		ctx.JSON(iris.Map{"error": "endpoint not found"})
+		return
+	}
+	if existing.EndpointType == "gateway" && ep.Endpoint != existing.Endpoint {
+		gwName, _, _ := strings.Cut(existing.Endpoint, ":")
+		var cnt int64
+		s.DB.Model(&GatewayConfig{}).Where("name = ?", gwName).Count(&cnt)
+		if cnt > 0 {
+			ctx.StatusCode(http.StatusConflict)
+			ctx.JSON(iris.Map{"error": fmt.Sprintf("endpoint value is derived from provisioned gateway %q; update it via PUT /admin/gateway/%s", gwName, gwName)})
+			return
+		}
 	}
 	if err := s.updateEndpoint(&ep); err != nil {
 		ctx.StatusCode(http.StatusInternalServerError)

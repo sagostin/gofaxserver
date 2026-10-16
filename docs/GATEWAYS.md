@@ -148,12 +148,52 @@ Registered (SIP-auth) gateways are supported by the same templates:
 
 Other operations:
 
-- `GET /admin/gateways` — list provisioned gateways with live `sofia status gateway` state, plus an `unmanaged` array of XML files on disk with no DB record (see below)
-- `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision). The linked endpoint's scope, priority and bridge flag are preserved — only its `name:ip-or-hostname` value tracks realm/`endpoint_ip` changes, and the in-memory ACL (incl. DNS resolution) is reloaded immediately
-- `DELETE /admin/gateway/{name}` — `sofia killgw`, remove XML, rescan, delete linked endpoint
+- `GET /admin/gateways` — list provisioned gateways with live `sofia status gateway` state, per-gateway `aliases` (number-scoped endpoints routing onto it, see below), plus an `unmanaged` array of XML files on disk with no DB record (see below)
+- `PUT /admin/gateway/{name}` — re-render/update (gateways cannot be renamed; delete and re-provision). The linked endpoint's scope, priority and bridge flag are preserved — only its `name:ip-or-hostname` value tracks realm/`endpoint_ip` changes (alias endpoints' values track it too), and the in-memory ACL (incl. DNS resolution) is reloaded immediately
+- `DELETE /admin/gateway/{name}` — `sofia killgw`, remove XML, rescan. **Refused with 409 while alias endpoints reference the gateway.** The linked endpoint row is **retained** (it becomes unmanaged/editable): routing config survives deprovisioning so the gateway can be reprovisioned onto the same endpoint via `POST /admin/gateways/from-endpoint`. Until then the endpoint dangles — deliveries routed to it fail and its ACL entry stays. Delete it manually (`DELETE /admin/endpoint/{id}`) if the gateway is gone for good
+- `POST /admin/gateway/{name}/endpoints` — create an **alias endpoint**: a number-scoped endpoint routing onto this already-provisioned gateway (see Gateway alias endpoints below)
 - `POST /admin/gateway/{name}/repair` — re-render a managed gateway from its stored template+params (restores a file deleted or edited out-of-band)
-- `POST /admin/gateways/from-endpoint` — bring an existing unmanaged endpoint under gateway management: `{endpoint_id, template_id, params}`. The endpoint value (`name:ip`) supplies the gateway name and default `realm`; the template is rendered, written, loaded, and a `GatewayConfig` row is linked to the existing endpoint (no new endpoint is created). Useful for imported databases where routing rows already exist
+- `POST /admin/gateways/from-endpoint` — bring an existing unmanaged endpoint under gateway management: `{endpoint_id, template_id, params}`. The endpoint value (`name:ip`) supplies the gateway name and default `realm`; the template is rendered, written, loaded, and a `GatewayConfig` row is linked to the existing endpoint (no new endpoint is created). Useful for imported databases where routing rows already exist, and for re-attaching the endpoint retained by a deprovision
 - `GET|POST /admin/gateway/templates`, `PUT|DELETE /admin/gateway/templates/{id}` — manage templates
+
+### Gateway alias endpoints
+
+Because number-scoped endpoints **shadow** tenant-scoped ones as a group (see
+[TENANTS.md](TENANTS.md#endpoint-resolution--delivery-semantics)), a number
+with its own endpoints (e.g. portal delivery) never sees the tenant's gateway
+endpoint. Aliases close that gap without re-provisioning: an alias is a plain
+number-scoped `endpoint` row whose value is derived from an existing
+provisioned gateway:
+
+```bash
+curl -X POST http://<FAX_SERVER>:8080/admin/gateway/pbx_acme/endpoints \
+  -H "Authorization: Basic ..." \
+  -d '{ "type_id": <TENANT_NUMBER_ID>, "priority": 0, "bridge": false }'
+```
+
+- The gateway must be provisioned (404 otherwise); the `type_id` must be an
+  existing tenant number id (400 otherwise); an exact duplicate for the same
+  number+gateway is refused (409).
+- No FreeSWITCH interaction happens — the gateway XML, ACL entry and
+  dialstring target already exist.
+- The number's inbound faxes then fan out per endpoint type: a `portal`/`webhook`
+  endpoint and this `gateway` alias run concurrently, each with independent
+  retries (receive-and-forward). Keep `bridge=false` for that — `bridge=true`
+  bridges inbound calls instead of receiving them, so no file is produced for
+  portal/webhook delivery. `priority=666` aliases are excluded from inbound
+  delivery as usual.
+- Aliases are **unmanaged**: `DELETE /admin/endpoint/{id}` and re-scoping/
+  priority/bridge edits via `PUT` work. Only their *value* is locked while the
+  gateway exists — it is gateway-derived and tracks `PUT /admin/gateway/{name}`
+  realm/`endpoint_ip` changes automatically.
+- Status: `GET /admin/gateways` lists each gateway's `aliases`; the portal
+  shows them on the Gateways page ("Assign to number…") and badges them in the
+  Endpoints list.
+
+> Aliasing is currently **number-scoped only** by design (the primary endpoint
+> usually already covers the tenant scope). Tenant/global aliasing is a
+> documented future provision — the API shape accepts a scope-independent
+> payload so it can be added without breaking changes.
 
 ### FreeSWITCH profile control
 
@@ -178,6 +218,9 @@ Both are also exposed in the portal admin UI (Gateways page).
 Endpoints created by provisioning are protected: `PUT/DELETE
 /admin/endpoint/{id}` on a gateway-linked endpoint is refused with a pointer
 to the gateway API, so a gateway can't silently lose its endpoint row.
+Alias endpoints are *not* managed (they can be deleted and re-scoped), but
+their value is locked while the referenced gateway exists — it tracks gateway
+updates automatically.
 
 ### Configuration
 

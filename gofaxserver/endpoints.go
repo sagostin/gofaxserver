@@ -405,12 +405,26 @@ func (s *Server) fsGatewayACL(ip string) (string, error) {
 }
 
 // getEndpointByName gets the endpoint by given endpoint name - eg. pbx_test
+//
+// Multiple endpoints can route onto the same gateway (gateway alias
+// endpoints), so exact gateway-name matches (the part before ":") are
+// preferred over the legacy substring match; the substring pass remains as a
+// fallback for callers passing partial names. With several exact matches the
+// choice is arbitrary — aliases of one gateway are dialstring-identical, and
+// per-number bridge decisions use checkForBridge, not this function.
 func (s *Server) getEndpointByName(name string) (*Endpoint, error) {
+	var substringHit *Endpoint
 	for epName, ep := range s.Endpoints {
-		if strings.Contains(epName, name) {
+		gwName, _, _ := strings.Cut(ep.Endpoint, ":")
+		if gwName == name {
 			return ep, nil
 		}
-		continue
+		if substringHit == nil && strings.Contains(epName, name) {
+			substringHit = ep
+		}
+	}
+	if substringHit != nil {
+		return substringHit, nil
 	}
 
 	return nil, errors.New("unable to find endpoint by name")

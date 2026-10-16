@@ -16,13 +16,32 @@ interface Ep {
 
 const eps = ref<Ep[]>([])
 const managedBy = ref<Record<number, string>>({}) // endpoint_id -> gateway name
+const gatewayNames = ref<string[]>([])            // provisioned gateway names (alias sources)
 const error = ref('')
 const busy = ref(false)
 const form = ref({ type: 'tenant', scope_source: 'portal', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false })
+const aliasGateway = ref('') // when set + number scope + gateway kind: create via the alias API
 const confirmGlobal = ref(false)
 
 const scope = useScopeTargets()
 const scopeOptions = computed(() => scope.options(form.value.type, form.value.scope_source))
+
+// Alias creation is number-scoped only; other scopes use the manual value.
+const aliasMode = computed(() =>
+  form.value.endpoint_type === 'gateway' && form.value.type === 'number' && aliasGateway.value !== ''
+)
+
+// endpoint_id → gateway name for alias rows (unmanaged endpoints whose value
+// points at a provisioned gateway) so they are visually marked as aliases.
+const aliasOf = computed(() => {
+  const m: Record<number, string> = {}
+  for (const ep of eps.value) {
+    if (ep.endpoint_type !== 'gateway' || managedBy.value[ep.id]) continue
+    const name = ep.endpoint.split(':')[0]
+    if (gatewayNames.value.includes(name)) m[ep.id] = name
+  }
+  return m
+})
 
 async function load() {
   try {
@@ -33,10 +52,13 @@ async function load() {
     ])
     eps.value = list
     const map: Record<number, string> = {}
+    const names: string[] = []
     for (const gs of gw?.gateways || []) {
       if (gs.gateway.endpoint_id) map[gs.gateway.endpoint_id] = gs.gateway.name
+      names.push(gs.gateway.name)
     }
     managedBy.value = map
+    gatewayNames.value = names
   } catch (e: any) { error.value = e.message }
 }
 onMounted(load)
@@ -45,10 +67,17 @@ async function create() {
   error.value = ''
   busy.value = true
   try {
-    const body: Record<string, any> = { ...form.value }
-    if (form.value.type === 'global') { body.type_id = 0; delete body.scope_source }
-    await api('/admin/endpoints', { json: body })
+    if (aliasMode.value) {
+      await api(`/admin/gateways/${aliasGateway.value}/endpoints`, {
+        json: { type_id: form.value.type_id, priority: form.value.priority, bridge: form.value.bridge, scope_source: form.value.scope_source },
+      })
+    } else {
+      const body: Record<string, any> = { ...form.value }
+      if (form.value.type === 'global') { body.type_id = 0; delete body.scope_source }
+      await api('/admin/endpoints', { json: body })
+    }
     form.value = { type: 'tenant', scope_source: 'portal', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false }
+    aliasGateway.value = ''
     await load()
   } catch (e: any) { error.value = e.message } finally { busy.value = false }
 }
@@ -111,11 +140,23 @@ async function saveEdit() {
           <label>Endpoint kind</label>
           <select v-model="form.endpoint_type"><option>gateway</option><option>webhook</option><option>email</option><option>portal</option></select>
         </div>
-        <div><label>Value</label><input v-model="form.endpoint" placeholder="gw_name:IP | https://… | a@b.c" required /></div>
+        <div v-if="form.endpoint_type === 'gateway' && form.type === 'number'">
+          <label>Source</label>
+          <select v-model="aliasGateway">
+            <option value="">manual value…</option>
+            <option v-for="n in gatewayNames" :key="n" :value="n">alias of provisioned: {{ n }}</option>
+          </select>
+        </div>
+        <div v-if="!aliasMode"><label>Value</label><input v-model="form.endpoint" placeholder="gw_name:IP | https://… | a@b.c" required /></div>
         <div><label>Priority</label><input v-model.number="form.priority" /></div>
         <div style="align-self:center"><label style="font-size:13px;color:var(--text)"><input type="checkbox" v-model="form.bridge" /> bridge</label></div>
-        <button :disabled="busy">Add endpoint</button>
+        <button :disabled="busy">{{ aliasMode ? 'Add alias endpoint' : 'Add endpoint' }}</button>
       </form>
+      <p v-if="aliasMode" class="muted">
+        Alias: the number routes to provisioned gateway <strong>{{ aliasGateway }}</strong> alongside its other
+        endpoints (parallel per endpoint type) — no re-provisioning. Value is derived from the gateway and
+        tracked automatically on gateway updates.
+      </p>
       <p class="muted">Editing endpoints changes fax routing — prefer the CLI for carrier-level changes unless you know what you're doing.</p>
       <p v-if="error" class="error">{{ error }}</p>
     </div>
@@ -134,6 +175,7 @@ async function saveEdit() {
             <td>
               {{ ep.endpoint }}
               <span v-if="managedBy[ep.id]" class="muted" :title="`Managed by gateway ${managedBy[ep.id]} — edit via the Gateways tab`">⚙ {{ managedBy[ep.id] }}</span>
+              <span v-else-if="aliasOf[ep.id]" class="muted" :title="`Alias of provisioned gateway ${aliasOf[ep.id]} — value is gateway-derived and locked`">⚡ alias of {{ aliasOf[ep.id] }}</span>
             </td>
             <td>{{ ep.priority }}</td>
             <td>{{ ep.bridge ? 'yes' : '' }}</td>
@@ -156,7 +198,11 @@ async function saveEdit() {
       </p>
       <div class="field">
         <label>Value <span class="muted">(gw_name:IP · https://… · a@b.c)</span></label>
-        <input v-model="epForm.endpoint" required />
+        <input v-model="epForm.endpoint" required :disabled="!!aliasOf[editFor.id]" />
+        <p v-if="aliasOf[editFor.id]" class="muted" style="margin:4px 0 0">
+          Alias of gateway {{ aliasOf[editFor.id] }} — the value is derived from the gateway and changes with it;
+          only priority/bridge are editable here.
+        </p>
       </div>
       <div class="field">
         <label>Priority <span class="muted">(lower = preferred; 666 = no inbound)</span></label>

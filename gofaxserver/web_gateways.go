@@ -18,6 +18,7 @@
 package gofaxserver
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -250,10 +251,43 @@ func (s *Server) handleProvisionGatewayFromEndpoint(ctx iris.Context) {
 	ctx.JSON(gs)
 }
 
+// handleCreateGatewayAlias creates a number-scoped alias endpoint routing
+// onto an already-provisioned gateway (dual delivery: portal + PBX gateway).
+func (s *Server) handleCreateGatewayAlias(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	var spec GatewayAliasSpec
+	if err := ctx.ReadJSON(&spec); err != nil {
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.JSON(iris.Map{"error": "invalid payload: " + err.Error()})
+		return
+	}
+	ep, err := s.CreateGatewayAlias(name, spec)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrGatewayNotFound):
+			ctx.StatusCode(http.StatusNotFound)
+		case errors.Is(err, ErrGatewayAliasExists):
+			ctx.StatusCode(http.StatusConflict)
+		case errors.Is(err, ErrGatewayAliasInvalid):
+			ctx.StatusCode(http.StatusBadRequest)
+		default:
+			ctx.StatusCode(http.StatusInternalServerError)
+		}
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+	ctx.StatusCode(http.StatusCreated)
+	ctx.JSON(ep)
+}
+
 func (s *Server) handleDeprovisionGateway(ctx iris.Context) {
 	name := ctx.Params().Get("name")
 	if err := s.DeprovisionGateway(name); err != nil {
-		ctx.StatusCode(http.StatusInternalServerError)
+		if errors.Is(err, ErrGatewayHasAliases) {
+			ctx.StatusCode(http.StatusConflict)
+		} else {
+			ctx.StatusCode(http.StatusInternalServerError)
+		}
 		ctx.JSON(iris.Map{"error": err.Error()})
 		return
 	}

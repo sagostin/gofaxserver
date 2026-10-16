@@ -183,6 +183,7 @@ func (s *Server) BuildApp() *iris.Application {
 	gateways.Post("/adopt", s.adminAdoptGateway)
 	gateways.Post("/from-endpoint", s.adminProvisionGatewayFromEndpoint)
 	gateways.Delete("/unmanaged/{name}", s.adminDeleteUnmanagedGateway)
+	gateways.Post("/{name}/endpoints", s.adminCreateGatewayAlias)
 	gateways.Post("/{name}/repair", s.adminRepairGateway)
 	gateways.Put("/{name}", s.adminUpdateGateway)
 	gateways.Delete("/{name}", s.adminDeprovisionGateway)

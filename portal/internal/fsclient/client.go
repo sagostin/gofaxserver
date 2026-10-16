@@ -174,6 +174,9 @@ type GatewayStatus struct {
 	File    string        `json:"file"`
 	State   string        `json:"state"`
 	Exists  bool          `json:"exists_on_disk"`
+	// Aliases are number-scoped endpoints routing onto this gateway besides
+	// its linked endpoint (see CreateGatewayAlias).
+	Aliases []Endpoint `json:"aliases,omitempty"`
 }
 
 // GatewayProvisionSpec is the combined provision payload (XML + endpoint).
@@ -590,6 +593,22 @@ func (c *Client) UpdateGateway(name string, spec GatewayProvisionSpec) (*Gateway
 
 func (c *Client) DeprovisionGateway(name string) error {
 	return c.doAdmin(http.MethodDelete, "/admin/gateway/"+name, nil, nil)
+}
+
+// GatewayAliasSpec is the payload for creating a number-scoped alias endpoint
+// pointing at a provisioned gateway (dual delivery: portal + gateway).
+type GatewayAliasSpec struct {
+	TypeID   uint `json:"type_id"` // gofaxserver TenantNumber.ID
+	Priority uint `json:"priority"`
+	Bridge   bool `json:"bridge"`
+}
+
+// CreateGatewayAlias creates the alias via gofaxserver
+// (POST /admin/gateway/{name}/endpoints) and returns the new endpoint.
+func (c *Client) CreateGatewayAlias(name string, spec GatewayAliasSpec) (*Endpoint, error) {
+	out := &Endpoint{}
+	err := c.doAdmin(http.MethodPost, "/admin/gateway/"+name+"/endpoints", spec, out)
+	return out, err
 }
 
 // --- FreeSWITCH profile control ---

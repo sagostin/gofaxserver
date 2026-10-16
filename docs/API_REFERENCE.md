@@ -443,8 +443,9 @@ Same payload as provision, except `type`/`type_id`/`priority`/`bridge` may be
 omitted — the linked endpoint's scope, priority and bridge flag are preserved
 regardless; only its `name:ip-or-hostname` value tracks realm/`endpoint_ip`
 changes (the in-memory ACL and its DNS resolution are reloaded immediately).
-Gateways cannot be renamed — delete and re-provision instead. Adopted gateways
-(no linked endpoint) never gain one through update.
+Alias endpoints (below) track the value change too. Gateways cannot be
+renamed — delete and re-provision instead. Adopted gateways (no linked
+endpoint) never gain one through update.
 
 #### Deprovision Gateway
 
@@ -452,8 +453,52 @@ Gateways cannot be renamed — delete and re-provision instead. Adopted gateways
 DELETE /admin/gateway/{name}
 ```
 
-Kills the gateway (`sofia killgw fax <name>`), removes the XML, rescans the
-profile, and deletes the linked endpoint.
+Kills the gateway (`sofia killgw fax <name>`), removes the XML, and rescans
+the profile. **Refused with 409 while alias endpoints reference the gateway**
+(remove them first). The linked endpoint row is **retained** — it becomes an
+ordinary unmanaged endpoint, so routing config survives and the gateway can be
+reprovisioned onto it via `POST /admin/gateways/from-endpoint`. Until then the
+endpoint dangles: deliveries routed to it fail and its ACL entry stays. Delete
+it manually if the gateway is gone for good.
+
+#### Create Gateway Alias Endpoint
+
+```
+POST /admin/gateway/{name}/endpoints
+```
+
+Creates a **number-scoped** endpoint routing onto an already-provisioned
+gateway — the dual-delivery path (e.g. portal inbox + downstream PBX) without
+re-provisioning. Because number-scoped endpoints shadow tenant-scoped ones as
+a group, this is how a number with its own endpoints also reaches a gateway
+that lives on its tenant. No FreeSWITCH interaction occurs.
+
+**Payload:**
+
+```json
+{
+  "type_id": 7,
+  "priority": 0,
+  "bridge": false
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type_id` | uint | TenantNumber ID (the number that also routes to this gateway) |
+| `priority` | uint | Endpoint priority (`666` = no inbound delivery) |
+| `bridge` | bool | Bridge inbound calls instead of receiving them (no file → no portal/webhook delivery) |
+
+The endpoint value is derived server-side from the gateway (`name:ip`) and
+stays locked to it: gateway updates rewrite it, direct value edits via
+`PUT /admin/endpoint/{id}` are refused while the gateway exists. Aliases are
+otherwise ordinary unmanaged endpoints (delete/re-scope freely).
+
+**Errors:** 404 unknown gateway · 400 unknown/invalid number id · 409 the
+number already routes to this gateway.
+
+Tenant/global-scoped aliasing is a documented future provision and currently
+rejected.
 
 #### Provision Gateway From Existing Endpoint
 

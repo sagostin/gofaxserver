@@ -575,3 +575,24 @@ func TestDialplanSourceToggle(t *testing.T) {
 		t.Error("explicit config source")
 	}
 }
+
+func TestIsGatewayAliasValue(t *testing.T) {
+	cases := []struct {
+		gwName string
+		value  string
+		want   bool
+	}{
+		{"pbx_acme", "pbx_acme:192.0.2.10", true}, // canonical name:ip
+		{"pbx_acme", "pbx_acme", true},            // name-only (no IP known)
+		{"pbx_acme", "pbx_acme:pbx.example.com", true},
+		{"pbx_acme", "pbx_acme2:192.0.2.10", false}, // name is a prefix of a different gateway
+		{"pbx", "pbx_acme:192.0.2.10", false},       // shorter name must not prefix-match
+		{"pbx_acme", "other_gw:192.0.2.10", false},
+		{"pbx_acme", "", false},
+	}
+	for _, c := range cases {
+		if got := isGatewayAliasValue(c.gwName, c.value); got != c.want {
+			t.Errorf("isGatewayAliasValue(%q, %q) = %v, want %v", c.gwName, c.value, got, c.want)
+		}
+	}
+}

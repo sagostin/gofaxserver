@@ -1590,6 +1590,39 @@ func (s *Server) adminDeprovisionGateway(ctx iris.Context) {
 	ctx.JSON(map[string]bool{"ok": true})
 }
 
+// adminCreateGatewayAlias creates a number-scoped alias endpoint routing onto
+// an already-provisioned gateway — the dual-delivery path (e.g. portal inbox
+// AND a downstream PBX) without re-provisioning the gateway.
+func (s *Server) adminCreateGatewayAlias(ctx iris.Context) {
+	name := ctx.Params().Get("name")
+	var req struct {
+		fsclient.GatewayAliasSpec
+		ScopeSource string `json:"scope_source"`
+	}
+	if err := ctx.ReadJSON(&req); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": "invalid payload"})
+		return
+	}
+	spec := req.GatewayAliasSpec
+	tid, msg := s.resolveScopeTypeID("number", req.ScopeSource, spec.TypeID)
+	if msg != "" {
+		ctx.StatusCode(400)
+		ctx.JSON(map[string]string{"error": msg})
+		return
+	}
+	spec.TypeID = tid
+	ep, err := s.FX.CreateGatewayAlias(name, spec)
+	if err != nil {
+		ctx.StatusCode(502)
+		ctx.JSON(map[string]string{"error": "upstream alias create failed: " + err.Error()})
+		return
+	}
+	s.audit(ctx, "GATEWAY_ALIAS_CREATE", "gateway:"+name, map[string]interface{}{"endpoint_id": ep.ID, "gofax_number_id": spec.TypeID, "priority": spec.Priority, "bridge": spec.Bridge})
+	ctx.StatusCode(201)
+	ctx.JSON(ep)
+}
+
 // ---------- Dialplan rules ----------
 
 func (s *Server) adminGetDialplan(ctx iris.Context) {

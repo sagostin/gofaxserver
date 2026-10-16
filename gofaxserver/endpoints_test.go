@@ -131,3 +131,40 @@ func TestGetTenantByGateway(t *testing.T) {
 		}
 	}
 }
+
+func TestGetEndpointByNamePrefersExactGatewayName(t *testing.T) {
+	alias := &Endpoint{ID: 9, Type: "number", TypeID: 7, EndpointType: "gateway", Endpoint: "pbx_acme:192.0.2.10"}
+	managed := &Endpoint{ID: 3, Type: "tenant", TypeID: 12, EndpointType: "gateway", Endpoint: "pbx_acme:192.0.2.10"}
+	s := &Server{Endpoints: map[string]*Endpoint{
+		// A substring-colliding entry that must NOT win over an exact
+		// gateway-name match.
+		"global/pbx_acme_backup:198.51.100.5": {ID: 5, Type: "global", EndpointType: "gateway", Endpoint: "pbx_acme_backup:198.51.100.5"},
+		"number/pbx_acme:192.0.2.10":          alias,
+		"tenant/pbx_acme:192.0.2.10":          managed,
+	}}
+
+	ep, err := s.getEndpointByName("pbx_acme")
+	if err != nil {
+		t.Fatalf("exact name should resolve: %v", err)
+	}
+	// Either exact match is acceptable (aliases are dialstring-identical);
+	// the substring-only collision must never be returned.
+	if ep.ID != alias.ID && ep.ID != managed.ID {
+		t.Errorf("got endpoint %d (%s); want an exact pbx_acme match", ep.ID, ep.Endpoint)
+	}
+}
+
+func TestGetEndpointByNameSubstringFallback(t *testing.T) {
+	s := &Server{Endpoints: map[string]*Endpoint{
+		"tenant/pbx_acme:192.0.2.10": {ID: 3, Type: "tenant", TypeID: 12, EndpointType: "gateway", Endpoint: "pbx_acme:192.0.2.10"},
+	}}
+
+	// No exact gateway-name match for the partial name: legacy substring
+	// behavior still resolves.
+	if ep, err := s.getEndpointByName("pbx_ac"); err != nil || ep.ID != 3 {
+		t.Errorf("substring fallback → %v, %v; want endpoint 3", ep, err)
+	}
+	if _, err := s.getEndpointByName("nonexistent"); err == nil {
+		t.Error("unknown name must error")
+	}
+}

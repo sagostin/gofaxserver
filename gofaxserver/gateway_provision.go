@@ -107,6 +107,32 @@ type GatewayStatus struct {
 	File    string        `json:"file"`           // full path of the rendered XML
 	State   string        `json:"state"`          // best-effort parse of `sofia status gateway`
 	Exists  bool          `json:"exists_on_disk"` // XML file present in the gateway dir
+	// Aliases are number-scoped endpoints routing onto this gateway besides
+	// its linked endpoint (see CreateGatewayAlias). Populated by ListGateways.
+	Aliases []Endpoint `json:"aliases,omitempty"`
+}
+
+// Sentinels for the gateway alias API so handlers can map them to status codes.
+var (
+	// ErrGatewayNotFound — no provisioned gateway with that name.
+	ErrGatewayNotFound = errors.New("gateway not provisioned")
+	// ErrGatewayAliasInvalid — bad alias spec (unknown number, etc.).
+	ErrGatewayAliasInvalid = errors.New("invalid gateway alias")
+	// ErrGatewayAliasExists — the number already routes to this gateway.
+	ErrGatewayAliasExists = errors.New("gateway alias already exists")
+	// ErrGatewayHasAliases — deprovision refused while aliases reference it.
+	ErrGatewayHasAliases = errors.New("gateway has alias endpoints")
+)
+
+// GatewayAliasSpec is the payload for CreateGatewayAlias: a number-scoped
+// endpoint pointing at an already-provisioned gateway, so a number can fan
+// out to a gateway that (typically) already serves its tenant — without
+// re-provisioning. Scope is fixed to "number" for now; tenant/global aliasing
+// is a documented future provision (see docs/GATEWAYS.md).
+type GatewayAliasSpec struct {
+	TypeID   uint `json:"type_id"`  // TenantNumber.ID
+	Priority uint `json:"priority"` // 0 = highest; 666 = no inbound delivery
+	Bridge   bool `json:"bridge"`   // bridge inbound calls instead of rxfax (no file → no portal delivery)
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +470,137 @@ func (s *Server) gatewayManagingEndpoint(endpointID uint) (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
+// Gateway alias endpoints
+//
+// An alias is a plain number-scoped Endpoint row whose value points at an
+// already-provisioned gateway ("name:ip"). Aliases let a number fan out to a
+// gateway that already exists on its tenant (or elsewhere) — e.g. portal
+// delivery AND PBX forwarding — without re-provisioning the gateway. The
+// gateway's linked endpoint stays the only *managed* row; aliases are
+// unmanaged (deletable, re-scopable) but their value is gateway-derived:
+// UpdateGateway rewrites it on realm/IP changes, direct value edits are
+// refused by handleUpdateEndpoint, and DeprovisionGateway refuses to run
+// while aliases exist.
+// ---------------------------------------------------------------------------
+
+// isGatewayAliasValue reports whether an endpoint value routes onto the named
+// gateway: exactly "name" or "name:..." (the endpointValue format). Prefix
+// matching on "name:" avoids false positives from names that merely share a
+// prefix ("pbx" must not match "pbx_acme:10.0.0.1").
+func isGatewayAliasValue(gwName, value string) bool {
+	return value == gwName || strings.HasPrefix(value, gwName+":")
+}
+
+// gatewayAliasEndpoints returns the endpoints routing onto the given gateway
+// other than its linked (managed) endpoint.
+func (s *Server) gatewayAliasEndpoints(gw *GatewayConfig) ([]Endpoint, error) {
+	var eps []Endpoint
+	if err := s.DB.Where("endpoint_type = ?", "gateway").Find(&eps).Error; err != nil {
+		return nil, err
+	}
+	out := make([]Endpoint, 0, len(eps))
+	for _, ep := range eps {
+		if ep.ID == gw.EndpointID {
+			continue
+		}
+		if isGatewayAliasValue(gw.Name, ep.Endpoint) {
+			out = append(out, ep)
+		}
+	}
+	return out, nil
+}
+
+// gatewayEndpointValue derives the current "name:ip" value for a gateway —
+// from the linked endpoint when present (it tracks realm/endpoint_ip changes
+// via UpdateGateway), otherwise from the stored params' realm.
+func (s *Server) gatewayEndpointValue(gw *GatewayConfig) (string, error) {
+	if gw.EndpointID != 0 {
+		var ep Endpoint
+		if err := s.DB.First(&ep, gw.EndpointID).Error; err == nil && ep.Endpoint != "" {
+			return ep.Endpoint, nil
+		}
+	}
+	params, err := decodeParams(gw.Params)
+	if err != nil {
+		return "", fmt.Errorf("decode gateway params: %w", err)
+	}
+	return endpointValue(gw.Name, "", params), nil
+}
+
+// CreateGatewayAlias creates a number-scoped endpoint routing onto an
+// already-provisioned gateway. No FreeSWITCH interaction is needed: the
+// gateway XML, ACL and dialstring target already exist.
+func (s *Server) CreateGatewayAlias(name string, spec GatewayAliasSpec) (*Endpoint, error) {
+	if err := validateGatewayName(name); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrGatewayAliasInvalid, err)
+	}
+	var gw GatewayConfig
+	if err := s.DB.Where("name = ?", name).First(&gw).Error; err != nil {
+		return nil, fmt.Errorf("%w: %q", ErrGatewayNotFound, name)
+	}
+
+	// The target number must exist — both in the DB and in the loaded
+	// TenantNumbers map (addEndpointToDB resolves the number string from the
+	// in-memory map when placing the endpoint).
+	var tn TenantNumber
+	if err := s.DB.First(&tn, spec.TypeID).Error; err != nil {
+		return nil, fmt.Errorf("%w: tenant number id %d not found", ErrGatewayAliasInvalid, spec.TypeID)
+	}
+	s.mu.RLock()
+	_, loaded := s.TenantNumbers[tn.Number]
+	s.mu.RUnlock()
+	if !loaded {
+		return nil, fmt.Errorf("%w: tenant number id %d (%s) is not loaded; reload data first", ErrGatewayAliasInvalid, spec.TypeID, tn.Number)
+	}
+
+	value, err := s.gatewayEndpointValue(&gw)
+	if err != nil {
+		return nil, err
+	}
+
+	// Refuse exact duplicates: same number already routing to this gateway.
+	var dupes int64
+	s.DB.Model(&Endpoint{}).Where(
+		"type = ? AND type_id = ? AND endpoint_type = ? AND endpoint = ?",
+		"number", spec.TypeID, "gateway", value,
+	).Count(&dupes)
+	if dupes > 0 {
+		return nil, fmt.Errorf("%w: number %s already routes to gateway %q", ErrGatewayAliasExists, tn.Number, name)
+	}
+
+	ep := &Endpoint{
+		Type:         "number",
+		TypeID:       spec.TypeID,
+		EndpointType: "gateway",
+		Endpoint:     value,
+		Priority:     spec.Priority,
+		Bridge:       spec.Bridge,
+	}
+	if err := s.addEndpointToDB(ep); err != nil {
+		return nil, fmt.Errorf("persist alias endpoint: %w", err)
+	}
+	// Reload so the in-memory ACL and endpoint maps pick up the new row
+	// (addEndpointToDB updates the scope maps but not GatewayEndpointsACL).
+	if err := s.loadEndpoints(); err != nil {
+		return nil, fmt.Errorf("alias created but endpoint reload failed: %w", err)
+	}
+
+	s.LogManager.SendLog(s.LogManager.BuildLog(
+		"Gateway.Provision",
+		fmt.Sprintf("created alias endpoint %d: number %s routes to gateway %s", ep.ID, tn.Number, name),
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"gateway":     name,
+			"endpoint_id": ep.ID,
+			"number":      tn.Number,
+			"priority":    spec.Priority,
+			"bridge":      spec.Bridge,
+		},
+	))
+	return ep, nil
+}
+
+// ---------------------------------------------------------------------------
 // Provisioning
 // ---------------------------------------------------------------------------
 
@@ -688,14 +845,32 @@ func (s *Server) UpdateGateway(name string, spec GatewayProvisionSpec) (*Gateway
 	// priority and bridge flag — only the name:ip value may change (e.g. the
 	// peer moved). Adopted gateways (endpoint_id 0) never get an endpoint
 	// created here; provisioning is the only path that creates endpoints.
+	newValue := endpointValue(name, spec.EndpointIP, params)
 	if gw.EndpointID != 0 {
 		var ep Endpoint
 		if err := s.DB.First(&ep, gw.EndpointID).Error; err != nil {
 			return nil, fmt.Errorf("gateway file updated but linked endpoint %d read failed: %w", gw.EndpointID, err)
 		}
-		ep.Endpoint = endpointValue(name, spec.EndpointIP, params)
+		ep.Endpoint = newValue
 		if err := s.updateEndpoint(&ep); err != nil {
 			return nil, fmt.Errorf("gateway file updated but endpoint update failed: %w", err)
+		}
+	}
+	// Propagate the value change to alias endpoints (number-scoped endpoints
+	// routing onto this gateway) so a peer move does not strand them. Their
+	// scope/priority/bridge are untouched; the loadEndpoints below refreshes
+	// the in-memory maps and ACL.
+	aliases, err := s.gatewayAliasEndpoints(&gw)
+	if err != nil {
+		return nil, fmt.Errorf("gateway file updated but alias lookup failed: %w", err)
+	}
+	for _, al := range aliases {
+		if al.Endpoint == newValue {
+			continue
+		}
+		al.Endpoint = newValue
+		if err := s.DB.Save(&al).Error; err != nil {
+			return nil, fmt.Errorf("gateway file updated but alias endpoint %d update failed: %w", al.ID, err)
 		}
 	}
 	paramsJSON, err := encodeParams(params)
@@ -724,8 +899,14 @@ func (s *Server) UpdateGateway(name string, spec GatewayProvisionSpec) (*Gateway
 	return &GatewayStatus{Gateway: gw, File: path, State: fsGatewayState(name), Exists: true}, nil
 }
 
-// DeprovisionGateway removes the gateway XML, tears it down in FreeSWITCH,
-// and deletes the linked endpoint row.
+// DeprovisionGateway removes the gateway XML and tears it down in FreeSWITCH.
+// It refuses (ErrGatewayHasAliases) while alias endpoints reference the
+// gateway. The linked endpoint row is RETAINED (decoupled, becomes
+// unmanaged): routing config survives deprovisioning so the gateway can later
+// be reprovisioned onto the same endpoint via ProvisionGatewayFromEndpoint.
+// Until then the endpoint dangles — deliveries routed to it fail and its
+// "name:ip" ACL entry stays. Delete it manually if the gateway is gone for
+// good.
 func (s *Server) DeprovisionGateway(name string) error {
 	if err := validateGatewayName(name); err != nil {
 		return err
@@ -740,19 +921,30 @@ func (s *Server) DeprovisionGateway(name string) error {
 		return fmt.Errorf("gateway %q: %w", name, err)
 	}
 
+	aliases, err := s.gatewayAliasEndpoints(&gw)
+	if err != nil {
+		return fmt.Errorf("alias lookup for gateway %q: %w", name, err)
+	}
+	if len(aliases) > 0 {
+		ids := make([]uint, 0, len(aliases))
+		for _, al := range aliases {
+			ids = append(ids, al.ID)
+		}
+		return fmt.Errorf("%w: gateway %q has %d alias endpoint(s) (ids %v); remove them before deprovisioning",
+			ErrGatewayHasAliases, name, len(aliases), ids)
+	}
+
 	_ = os.Remove(filepath.Join(dir, name+".xml"))
 	if err := fsKillGateway(name); err != nil {
 		return fmt.Errorf("file removed but FreeSWITCH reload failed: %w", err)
 	}
 	if gw.EndpointID != 0 {
-		if err := s.removeEndpointFromDB(gw.EndpointID); err != nil {
-			s.LogManager.SendLog(s.LogManager.BuildLog(
-				"Gateway.Provision",
-				fmt.Sprintf("gateway %s removed but endpoint %d delete failed: %v", name, gw.EndpointID, err),
-				logrus.WarnLevel,
-				nil,
-			))
-		}
+		s.LogManager.SendLog(s.LogManager.BuildLog(
+			"Gateway.Provision",
+			fmt.Sprintf("gateway %s deprovisioned; linked endpoint %d retained (now unmanaged, routes will fail until reprovisioned or deleted)", name, gw.EndpointID),
+			logrus.WarnLevel,
+			map[string]interface{}{"gateway": name, "endpoint_id": gw.EndpointID},
+		))
 	}
 	if err := s.DB.Delete(&gw).Error; err != nil {
 		return fmt.Errorf("delete gateway config: %w", err)
@@ -911,6 +1103,9 @@ func (s *Server) ListGateways() (*GatewayOverview, error) {
 		tracked[gw.Name] = true
 		gw.Params = maskedParamsJSON(gw.Params)
 		gs := GatewayStatus{Gateway: gw, State: fsGatewayState(gw.Name)}
+		if aliases, err := s.gatewayAliasEndpoints(&gw); err == nil && len(aliases) > 0 {
+			gs.Aliases = aliases
+		}
 		if dirErr == nil {
 			gs.File = filepath.Join(dir, gw.Name+".xml")
 			if _, err := os.Stat(gs.File); err == nil {
