@@ -89,17 +89,50 @@ func pdfToTiff(docID uuid.UUID, fileExtension string, file multipart.File, fileH
 
 	// Determine output path for TIFF.
 	destFile := filepath.Join(gofaxlib.Config.Faxing.TempDir, fmt.Sprintf(tempFileFormat, docID))
-	// Convert the file to TIFF using ImageMagick's 'convert' command.
+	// Convert the file to TIFF using Ghostscript, invoked directly (no
+	// shell). Combined output is captured for diagnostics: gs is known to
+	// exit 0 while producing no output for some documents, so the exit code
+	// alone is NOT trusted — the output file is verified afterwards.
 	//cmdStr := fmt.Sprintf("magick %s -density 204x196 -resize '1728x2156!' -background white -alpha background -compress Group4 %s", tempFile, destFile)
-	cmdStr := fmt.Sprintf(
-		"gs -q -r204x196 -g1728x2156 -dNOPAUSE -dBATCH -dSAFER -dPDFFitPage -sDEVICE=tiffg3 -sOutputFile=%s -- %s",
-		destFile, tempFile,
+	cmd := exec.Command("gs",
+		"-q", "-r204x196", "-g1728x2156", "-dNOPAUSE", "-dBATCH", "-dSAFER",
+		"-dPDFFitPage", "-sDEVICE=tiffg3", "-sOutputFile="+destFile, "--", tempFile,
 	)
-	cmd := exec.Command("/bin/bash", "-c", cmdStr)
-	if err = cmd.Run(); err != nil {
-		return "", errors.New("failed to convert document: " + err.Error())
+	gsOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to convert document: %v, output: %s", err, truncateGSOutput(gsOutput))
+	}
+	if err := verifyTiffOutput(destFile, gsOutput); err != nil {
+		return "", err
 	}
 	os.Remove(tempFile)
 
 	return destFile, nil
+}
+
+// verifyTiffOutput guards against ghostscript exiting 0 without producing a
+// usable TIFF (observed in production: the doomed job then failed at dial
+// time with a cryptic "stat ...: no such file or directory"). A valid tiffg3
+// conversion always writes a non-empty file, so a missing or zero-byte output
+// means the document could not be rendered to fax format.
+func verifyTiffOutput(destFile string, gsOutput []byte) error {
+	info, err := os.Stat(destFile)
+	if err != nil {
+		return fmt.Errorf("conversion produced no output file: %v, gs output: %s", err, truncateGSOutput(gsOutput))
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("conversion produced an empty output file, gs output: %s", truncateGSOutput(gsOutput))
+	}
+	return nil
+}
+
+// truncateGSOutput keeps error messages bounded while preserving the tail of
+// ghostscript's output, where the relevant diagnostics usually are.
+func truncateGSOutput(out []byte) string {
+	const max = 500
+	s := strings.TrimSpace(string(out))
+	if len(s) > max {
+		return "…" + s[len(s)-max:]
+	}
+	return s
 }

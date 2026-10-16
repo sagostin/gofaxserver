@@ -68,7 +68,7 @@ func (c *Converter) renderPreviews(ctx context.Context, pdf []byte, pages int) (
 			return nil, fmt.Errorf("ghostscript page %d: %w", page, err)
 		}
 		if !bytes.HasPrefix(png, []byte("\x89PNG")) {
-			return nil, fmt.Errorf("ghostscript page %d: no PNG on stdout", page)
+			return nil, fmt.Errorf("ghostscript page %d: %w", page, ErrEmptyRender)
 		}
 		previews = append(previews, png)
 	}

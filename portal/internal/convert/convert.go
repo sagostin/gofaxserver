@@ -169,6 +169,13 @@ var ErrTooManyPages = errors.New("document has too many pages")
 // ErrUnsupportedType is returned for extensions outside the allowlist.
 var ErrUnsupportedType = errors.New("unsupported file type")
 
+// ErrEmptyRender marks ghostscript exiting 0 while producing no output for a
+// page. Unlike an exec-level failure (e.g. a missing gs binary), this is a
+// property of the DOCUMENT: gofaxserver's own gs conversion (tiffg3) fails
+// the same way at send time, so the fax is doomed and prepare must fail hard
+// instead of letting the user send an unrenderable document.
+var ErrEmptyRender = errors.New("document produced no rendered output (cannot be rendered to fax format)")
+
 // AllowedExts is the prepare-flow allowlist (superset of the raw-send one).
 var AllowedExts = map[string]bool{
 	".pdf": true, ".tif": true, ".tiff": true,
@@ -240,9 +247,15 @@ func (c *Converter) Convert(ctx context.Context, filename string, data []byte, o
 
 	res := &Result{PDF: pdf, Pages: pages, Cover: cover, FitMode: opts.FitMode}
 
-	// Fax-accurate B&W previews. Non-fatal: a missing gs binary must not
-	// block sending — the result simply carries no previews.
+	// Fax-accurate B&W previews. An empty render (gs exited 0 but produced
+	// nothing) is a hard failure: the document is unfaxable downstream.
+	// Other failures (e.g. a missing gs binary in this deployment) remain
+	// non-fatal — the result simply carries no previews and gofaxserver's
+	// own conversion decides faxability at send time.
 	if previews, perr := c.renderPreviews(ctx, pdf, pages); perr != nil {
+		if errors.Is(perr, ErrEmptyRender) {
+			return nil, perr
+		}
 		log.Printf("[convert] preview render failed: %v", perr)
 	} else {
 		res.Previews = previews

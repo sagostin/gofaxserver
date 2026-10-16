@@ -20,6 +20,7 @@ package convert
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -27,7 +28,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -266,6 +269,40 @@ func TestOfficeToPDFRejectsNonPDF(t *testing.T) {
 	c.cfg.GotenbergURL = srv.URL
 	if _, err := c.officeToPDF(context.Background(), "x.docx", []byte("junk")); err == nil {
 		t.Fatal("expected error for non-PDF output")
+	}
+}
+
+// TestConvertFailsHardOnEmptyRender: a gs run that exits 0 but emits nothing
+// marks the document unfaxable (gofaxserver's own gs conversion fails the
+// same way at send time) — Convert must fail with ErrEmptyRender instead of
+// returning a preview-less result the user can send.
+func TestConvertFailsHardOnEmptyRender(t *testing.T) {
+	dir := t.TempDir()
+	fakeGs := filepath.Join(dir, "gs")
+	// Exits 0 without writing anything to stdout.
+	if err := os.WriteFile(fakeGs, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	c := testConverter(t)
+	c.cfg.GhostscriptBin = fakeGs
+	_, err := c.Convert(context.Background(), "img.png", makeTestImage(t, 800, 1000), Options{})
+	if !errors.Is(err, ErrEmptyRender) {
+		t.Fatalf("expected ErrEmptyRender, got %v", err)
+	}
+}
+
+// TestConvertMissingGsStaysNonFatal: an exec-level failure (no gs binary in
+// this deployment) must NOT block sending — gofaxserver's own conversion
+// decides faxability at send time.
+func TestConvertMissingGsStaysNonFatal(t *testing.T) {
+	c := testConverter(t)
+	c.cfg.GhostscriptBin = filepath.Join(t.TempDir(), "no-such-binary")
+	res, err := c.Convert(context.Background(), "img.png", makeTestImage(t, 800, 1000), Options{})
+	if err != nil {
+		t.Fatalf("missing gs binary should be non-fatal, got %v", err)
+	}
+	if len(res.Previews) != 0 {
+		t.Errorf("expected no previews, got %d", len(res.Previews))
 	}
 }
 

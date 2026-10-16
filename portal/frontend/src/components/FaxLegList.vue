@@ -95,6 +95,12 @@ function fmtRate(l: FaxLeg): string {
 }
 
 function fmtPages(l: FaxLeg): string {
+  // Submission (intake) legs never transmit: total_pages is the converted
+  // document's page count from intake — render it without a misleading
+  // "0/N" transferred component.
+  if (l.result_type === 'submission') {
+    return l.total_pages ? `${l.total_pages} pages` : ''
+  }
   if (!l.transferred_pages && !l.total_pages) return ''
   return `${l.transferred_pages}/${l.total_pages || '?'} pages`
 }

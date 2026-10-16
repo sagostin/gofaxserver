@@ -44,9 +44,14 @@ function fmt(ts: string | null): string {
   return ts ? new Date(ts).toLocaleString() : '—'
 }
 
-// fmtPages shows transferred/total when the document total is known
-// (0 = unknown), so a "failed" fax whose pages all crossed reads 15/15.
+// fmtPages shows transferred/total for finished jobs (a "failed" fax whose
+// pages all crossed reads 15/15). Queued/sending jobs have transferred
+// nothing yet — show the intake document total without a misleading "0/N"
+// ratio (0 total = unknown).
 function fmtPages(j: Job): string {
+  if (j.status === 'queued' || j.status === 'sending') {
+    return j.total_pages ? `${j.total_pages} pages` : '—'
+  }
   if (!j.pages && !j.total_pages) return '—'
   if (j.total_pages) return `${j.pages}/${j.total_pages}`
   return `${j.pages}`

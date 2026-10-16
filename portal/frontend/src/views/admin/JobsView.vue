@@ -125,6 +125,11 @@ function span(first: string, last: string): string {
 }
 
 function groupPages(g: ResultGroup): string {
+  // Queued/in-flight jobs have transferred nothing yet — show the intake
+  // document total without a misleading "0/N" ratio (that's not a failure).
+  if (isIntakeGroup(g)) {
+    return g.total_pages ? `${g.total_pages} pages` : '—'
+  }
   if (!g.transferred_pages && !g.total_pages) return '—'
   return `${g.transferred_pages}/${g.total_pages || '—'}`
 }

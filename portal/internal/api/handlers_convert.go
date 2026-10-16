@@ -164,6 +164,9 @@ func (s *Server) handlePrepareFax(ctx iris.Context) {
 		switch {
 		case errors.Is(err, convert.ErrUnsupportedType):
 			status = iris.StatusBadRequest
+		case errors.Is(err, convert.ErrEmptyRender):
+			status = iris.StatusBadRequest
+			msg = "document cannot be rendered to fax format — try re-exporting it as a standard PDF"
 		case errors.Is(err, convert.ErrTooManyPages):
 			status = iris.StatusRequestEntityTooLarge
 			msg = err.Error()
