@@ -24,6 +24,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -83,6 +84,23 @@ type config struct {
 		// no-op on bridged/t38_gateway calls). Default true; disable per
 		// destination with a var_override fax policy rule.
 		EnableImageResizing *bool `json:"enable_image_resizing"`
+		// RTPJitterBuffer enables setting jitterbuffer_msec (and
+		// rtp_jitter_buffer_during_bridge) on every call leg that may carry
+		// G.711 audio: bridged/transcoded calls in both directions and
+		// softmodem rx/tx. No-op on legs that negotiate T.38/UDPTL.
+		// Default true; disable globally here or per route with a
+		// var_override fax policy rule (jitterbuffer_msec=disabled).
+		RTPJitterBuffer *bool `json:"rtp_jitter_buffer"`
+		// RTPJitterBufferMsec is the jitterbuffer_msec spec (FreeSWITCH
+		// format N or N:M = target[:max] milliseconds; a "p" suffix means
+		// packet counts). Values outside 10-10000ms are silently collapsed
+		// by FreeSWITCH to ~1 packet of buffering. Default "60:120".
+		RTPJitterBufferMsec string `json:"rtp_jitter_buffer_msec"`
+		// RTPJitterBufferDuringBridge keeps the jitter buffer active while
+		// the channel is bridged (FreeSWITCH pauses it by default), which is
+		// what makes the buffer effective on bridged/transcoded calls.
+		// Default true.
+		RTPJitterBufferDuringBridge *bool `json:"rtp_jitter_buffer_during_bridge"`
 		// Policy configures the Postgres-backed fax policy engine (T.38 /
 		// ECM / V.17 rules and adaptive learning). See FaxPolicyConfig.
 		Policy FaxPolicyConfig `json:"policy"`
@@ -345,6 +363,26 @@ func LoadConfig(filename string) {
 // fit the receiver's negotiated capabilities on txfax (default true).
 func ImageResizingEnabled() bool {
 	return boolOrDefault(Config.Faxing.EnableImageResizing, true)
+}
+
+// RTPJitterBufferEnabled reports whether jitterbuffer_msec /
+// rtp_jitter_buffer_during_bridge should be set on call legs (default true).
+func RTPJitterBufferEnabled() bool {
+	return boolOrDefault(Config.Faxing.RTPJitterBuffer, true)
+}
+
+// RTPJitterBufferSpec returns the jitterbuffer_msec spec (default "60:120").
+func RTPJitterBufferSpec() string {
+	if s := strings.TrimSpace(Config.Faxing.RTPJitterBufferMsec); s != "" {
+		return s
+	}
+	return "60:120"
+}
+
+// RTPJitterBufferDuringBridgeEnabled reports whether the jitter buffer should
+// stay active while the channel is bridged (default true).
+func RTPJitterBufferDuringBridgeEnabled() bool {
+	return boolOrDefault(Config.Faxing.RTPJitterBufferDuringBridge, true)
 }
 
 func FailedHangUpCause(hangUpCause string) bool {

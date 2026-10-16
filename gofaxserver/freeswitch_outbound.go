@@ -631,6 +631,13 @@ func (t *eventClient) start() {
 		"fax_verbose":                  strconv.FormatBool(gofaxlib.Config.FreeSwitch.Verbose),
 	}
 
+	// RTP media hardening defaults (jitter buffer) for the originated leg —
+	// in effect whenever it carries G.711 (T.38 disabled/refused). The
+	// var_override merge below can still retune or disable them per route.
+	for k, v := range rtpMediaVars(nil) {
+		dsVariablesMap[k] = v
+	}
+
 	// Apply channel-variable overrides from fax policy rules (replaces the
 	// old mod_db "override-<number>" realm).
 	for varName, varValue := range policy.VarOverrides {

@@ -117,6 +117,9 @@ Configuration is stored in `/etc/gofaxserver/config.json` (`./config.json` in th
     "wait_time": 1000,
     "disable_v17_after_retry": "0",
     "disable_ecm_after_retry": "0",
+    "rtp_jitter_buffer": true,
+    "rtp_jitter_buffer_msec": "60:120",
+    "rtp_jitter_buffer_during_bridge": true,
     "failed_response": ["UNALLOCATED_NUMBER", "CALL_REJECTED"],
     "retry_delay": "60s",
     "retry_attempts": "3",
@@ -185,6 +188,7 @@ Notes:
 - `gateway_config_dir` enables API-driven provisioning: rendered gateway XML is written there and FreeSWITCH is reloaded over ESL. Leave empty to disable. `gateway_config_chown` optionally chowns files, `gateway_profile` selects the Sofia profile to rescan (default `fax`), `gateway_monitor_seconds` is the registration poll interval and the re-resolution cadence for hostname-valued gateway ACL entries (default 60, negative disables both). See [docs/GATEWAYS.md](docs/GATEWAYS.md).
 - `dialplan.source` is `"config"` (rules from this file, shown above) or `"db"` (rules from the `dialplan_rules` table, editable via `/admin/dialplan*` and hot-reloaded by `/admin/reload`). Omit the whole `dialplan` section to use the built-in defaults.
 - `faxing.policy` configures the [fax policy engine](#fax-policy) (T.38/ECM/V.17 rules + adaptive learning). The whole section is optional — sensible defaults apply when absent. The old `freeswitch.softmodem_fallback` key is deprecated and ignored.
+- `rtp_jitter_buffer*` (default on) sets `jitterbuffer_msec` + `rtp_jitter_buffer_during_bridge` on every leg that may carry G.711 audio — bridged/transcoded calls in both directions and softmodem rx/tx (no-op on T.38/UDPTL legs). `rtp_jitter_buffer_msec` uses the FreeSWITCH `N[:M]` ms target[:max] format. Disable globally (`rtp_jitter_buffer: false`) or per route with a `var_override` fax policy rule (`jitterbuffer_msec=disabled`). To force RTP packetization, use a `var_override` rule with `absolute_codec_string=PCMA@20i,PCMU@20i` — ptime is part of the codec string, not a standalone variable.
 - `security` configures the SIP brute-force sentry: source IPs that repeatedly fail the gateway ACL check are banned at the host firewall (nftables/ipset) with escalating durations, and auto-unbanned if the IP later becomes a gateway endpoint. Disabled by default — see [docs/SECURITY.md](docs/SECURITY.md).
 - PostgreSQL SSL mode and timezone can be overridden via `POSTGRES_SSLMODE` and `POSTGRES_TIMEZONE` environment variables (defaults: `disable`, `America/Vancouver`).
 

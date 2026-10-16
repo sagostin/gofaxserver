@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,48 @@ const (
 		defaultFaxrcvdCmd = "bin/faxrcvd"
 		defaultDevice     = "freeswitch"*/
 )
+
+// rtpMediaVars returns the RTP media channel variables (jitter buffer
+// hardening) to apply to a call leg that may carry G.711 audio, overlaid
+// with per-route policy var overrides (which can retune values or disable
+// the buffer per route, e.g. jitterbuffer_msec=disabled). Returns nil when
+// the feature is globally disabled. Both variables are no-ops on legs that
+// negotiate T.38/UDPTL.
+func rtpMediaVars(overrides map[string]string) map[string]string {
+	if !gofaxlib.RTPJitterBufferEnabled() {
+		return nil
+	}
+	vars := map[string]string{
+		"jitterbuffer_msec":               gofaxlib.RTPJitterBufferSpec(),
+		"rtp_jitter_buffer_during_bridge": strconv.FormatBool(gofaxlib.RTPJitterBufferDuringBridgeEnabled()),
+	}
+	for _, name := range []string{"jitterbuffer_msec", "rtp_jitter_buffer_during_bridge"} {
+		if v, ok := overrides[name]; ok {
+			vars[name] = v
+		}
+	}
+	return vars
+}
+
+// chanVarPairs renders vars as a sorted "k=v" slice for deterministic
+// dialstrings and logs.
+func chanVarPairs(vars map[string]string) []string {
+	pairs := make([]string, 0, len(vars))
+	for k, v := range vars {
+		pairs = append(pairs, fmt.Sprintf("%s=%s", k, v))
+	}
+	sort.Strings(pairs)
+	return pairs
+}
+
+// chanVarPrefix renders vars as a FreeSWITCH originate/bridge "{...}"
+// dialstring prefix ("" when empty).
+func chanVarPrefix(vars map[string]string) string {
+	if len(vars) == 0 {
+		return ""
+	}
+	return "{" + strings.Join(chanVarPairs(vars), ",") + "}"
+}
 
 // EventSocketServer is a server for handling outgoing event socket connections from FreeSWITCH
 type EventSocketServer struct {
@@ -272,6 +315,17 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 		"enableT38":  enableT38,
 	}, enableBridge, bridgeGw)
 
+	// RTP media hardening (jitter buffer) for legs that may carry G.711
+	// audio. Applied to the inbound a-leg in all modes (both bridge
+	// directions and rxfax); bridge b-legs get the variables via the
+	// dialstring below. Must be set before answer/bridge so it is in place
+	// at media activation. Per-route var_override policy rules can retune
+	// or disable these.
+	mediaVars := rtpMediaVars(policy.VarOverrides)
+	for _, kv := range chanVarPairs(mediaVars) {
+		exec("set", kv, true)
+	}
+
 	// --- Bridge mode path -----------------------------------------------------
 	if enableBridge {
 		// Flip-flop probing applies only when no rule decided T.38.
@@ -314,11 +368,15 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			bridgeDirection = "upstream"
 			// Internal / PBX -> Upstream (t.38)
 
-			exportStr := fmt.Sprintf("{%s,%s,%s}",
+			// The b-leg carries G.711 if the upstream rejects T.38, so the
+			// jitter buffer vars ride along (no-op on UDPTL legs).
+			exportParts := []string{
 				fmt.Sprintf("fax_enable_t38=%t", enableT38),
 				fmt.Sprintf("fax_enable_t38_request=%t", requestT38),
 				fmt.Sprintf("sip_execute_on_image='t38_gateway %s'", "self nocng"),
-			)
+			}
+			exportParts = append(exportParts, chanVarPairs(mediaVars)...)
+			exportStr := "{" + strings.Join(exportParts, ",") + "}"
 
 			dsGateways := endpointGatewayDialstringTagged(e.server.UpstreamFsGateways, dstNum)
 			logf(logrus.InfoLevel, "FS_INBOUND → OUTBOUND BRIDGE %s", map[string]interface{}{"uuid": channelUUID.String()}, dsGateways)
@@ -344,7 +402,9 @@ func (e *EventSocketServer) handler(c *eventsocket.Connection) {
 			exec("set", fmt.Sprintf("fax_enable_t38_request=%t", requestT38), true)
 			exec("set", fmt.Sprintf("sip_execute_on_image=t38_gateway %s", "self nocng"), true)
 			bridgeStart = time.Now()
-			exec("bridge", fmt.Sprintf("sofia/gateway/%s/%s", bridgeGw, dstNum), true)
+			// The b-leg to the tenant PBX is the G.711 side of the transcoded
+			// call: prefix the dialstring with the jitter buffer vars.
+			exec("bridge", chanVarPrefix(mediaVars)+fmt.Sprintf("sofia/gateway/%s/%s", bridgeGw, dstNum), true)
 		}
 	}
 

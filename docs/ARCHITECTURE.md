@@ -39,7 +39,7 @@ A visual companion diagram is available in [`../gofaxserver.excalidraw`](../gofa
 | **Web Server** | `gofaxserver/web.go` | Iris HTTP server on `web.listen` (default `:8080`). Hosts admin, tenant-user, and authenticate parties. |
 | **FaxTracker** | `gofaxserver/faxtracker.go` | In-memory state for in-flight jobs; exposed via `GET /admin/faxes`. |
 | **LogManager** | `gofaxlib/log.go` | Stdout + Loki dispatcher; all components push structured logs through it. |
-| **Fax Policy Engine** | `gofaxserver/faxpolicy.go`, `web_faxpolicy.go` | Postgres-backed T.38/ECM/V.17 policy rules + adaptive learning (replaces the old FreeSWITCH `mod_db` softmodem fallback), persisted flip-flop pair state, and `var_override` dialstring channel-variable overrides (replaces the mod_db `override-<number>` realm). |
+| **Fax Policy Engine** | `gofaxserver/faxpolicy.go`, `web_faxpolicy.go` | Postgres-backed T.38/ECM/V.17 policy rules + adaptive learning (replaces the old FreeSWITCH `mod_db` softmodem fallback), persisted flip-flop pair state, and `var_override` channel-variable overrides on outbound originate and inbound bridge legs (replaces the mod_db `override-<number>` realm). |
 | **Notify** | `gofaxserver/notify.go` | Async fan-out of `email_report`, `email_full`, `email_full_failure`, `webhook`, `webhook_form` to a tenant / number's `notify` string. |
 
 ---
@@ -321,6 +321,7 @@ Persisted flip-flop probing state per src→dst pair and call type:
 | | `ident`, `header` | TSI / header for rxfax |
 | | `softmodem_fallback` | **Deprecated, unused** — fax policy is Postgres-backed (`faxing.policy`) |
 | `faxing` | `enable_t38`, `request_t38` | Default T.38 posture |
+| | `rtp_jitter_buffer`, `rtp_jitter_buffer_msec`, `rtp_jitter_buffer_during_bridge` | RTP jitter buffer hardening on G.711-capable legs (all on by default, spec `60:120`); per-route override via `var_override` policy rules |
 | | `answer_after` (ms), `wait_time` (ms) | Pre-answer / post-answer timing |
 | | `disable_v17_after_retry`, `disable_ecm_after_retry` | Auto-degrade thresholds within a job's retry chain (`"0"` = off) |
 | | `failed_response` | Hangup causes that mark a fax as a non-retryable failure |

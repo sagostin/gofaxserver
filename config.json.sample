@@ -25,6 +25,9 @@
     "wait_time": 1000,
     "disable_v17_after_retry": "0",
     "disable_ecm_after_retry": "0",
+    "rtp_jitter_buffer": true,
+    "rtp_jitter_buffer_msec": "60:120",
+    "rtp_jitter_buffer_during_bridge": true,
     "failed_response": [
       "UNALLOCATED_NUMBER",
       "CALL_REJECTED"

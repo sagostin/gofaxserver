@@ -45,3 +45,55 @@ func TestImageResizingEnabledExplicit(t *testing.T) {
 		t.Error("expected false when explicitly disabled")
 	}
 }
+
+func TestRTPJitterBufferEnabledDefaultsTrue(t *testing.T) {
+	old := Config.Faxing.RTPJitterBuffer
+	defer func() { Config.Faxing.RTPJitterBuffer = old }()
+
+	Config.Faxing.RTPJitterBuffer = nil
+	if !RTPJitterBufferEnabled() {
+		t.Error("expected RTP jitter buffer to default to true when unset")
+	}
+
+	off := false
+	Config.Faxing.RTPJitterBuffer = &off
+	if RTPJitterBufferEnabled() {
+		t.Error("expected false when explicitly disabled")
+	}
+}
+
+func TestRTPJitterBufferSpec(t *testing.T) {
+	old := Config.Faxing.RTPJitterBufferMsec
+	defer func() { Config.Faxing.RTPJitterBufferMsec = old }()
+
+	Config.Faxing.RTPJitterBufferMsec = ""
+	if got := RTPJitterBufferSpec(); got != "60:120" {
+		t.Errorf("default spec = %q, want 60:120", got)
+	}
+
+	Config.Faxing.RTPJitterBufferMsec = "  "
+	if got := RTPJitterBufferSpec(); got != "60:120" {
+		t.Errorf("blank spec = %q, want 60:120", got)
+	}
+
+	Config.Faxing.RTPJitterBufferMsec = "40:200"
+	if got := RTPJitterBufferSpec(); got != "40:200" {
+		t.Errorf("custom spec = %q, want 40:200", got)
+	}
+}
+
+func TestRTPJitterBufferDuringBridgeDefaultsTrue(t *testing.T) {
+	old := Config.Faxing.RTPJitterBufferDuringBridge
+	defer func() { Config.Faxing.RTPJitterBufferDuringBridge = old }()
+
+	Config.Faxing.RTPJitterBufferDuringBridge = nil
+	if !RTPJitterBufferDuringBridgeEnabled() {
+		t.Error("expected during-bridge jitter buffer to default to true when unset")
+	}
+
+	off := false
+	Config.Faxing.RTPJitterBufferDuringBridge = &off
+	if RTPJitterBufferDuringBridgeEnabled() {
+		t.Error("expected false when explicitly disabled")
+	}
+}
