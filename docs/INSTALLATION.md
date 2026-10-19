@@ -231,6 +231,17 @@ apt-get install freeswitch freeswitch-mod-commands freeswitch-mod-dptools \
     freeswitch-mod-tone-stream freeswitch-mod-db freeswitch-mod-syslog freeswitch-mod-logfile
 ```
 
+> **Note — pin mod_spandsp's stack to avoid a fax header regression.**
+> `freeswitch-mod-spandsp` 1.11.2+ (and any build linking `libspandsp4` /
+> spandsp 3.1.x) renders the outgoing fax page header stretched to twice its
+> correct width (freeswitch/spandsp commit `d9681c3` re-introduced `x_repeats`
+> in `header_row_read_handler()`; upstream issue
+> [freeswitch/spandsp#129](https://github.com/freeswitch/spandsp/issues/129),
+> open). The container image avoids this by pinning FreeSWITCH 1.11.1 +
+> `libspandsp3` — see the comment block at the top of
+> `examples/freeswitch/Dockerfile` for the exact version strings to pin with
+> `apt-get install pkg=version` on a host install.
+
 ### 2. Install the gofaxserver FreeSWITCH configuration
 
 ```bash
