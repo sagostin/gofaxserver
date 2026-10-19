@@ -24,7 +24,8 @@
 //     (constrain/fill/stretch), embedded via fpdf.
 //   - docx/doc: a Gotenberg sidecar (LibreOffice) over loopback HTTP.
 //   - tiff: ImageMagick via stdin/stdout (multi-page CCITT fax TIFFs).
-//   - pdf: pass-through (validated + page-counted only).
+//   - pdf: best-effort repair rewrite through pdfcpu (normalizePDF), then
+//     validated + page-counted.
 //
 // An optional generated cover page is prepended (pdfcpu merge, in memory),
 // and Ghostscript renders fax-accurate B&W previews (204x196 dpi mono — the
@@ -207,7 +208,10 @@ func (c *Converter) Convert(ctx context.Context, filename string, data []byte, o
 	var err error
 	switch ext {
 	case ".pdf":
-		pdf = data
+		// Repair pass first: producer quirks (e.g. HP Scan's duplicate
+		// trailer /Info) make gs render nothing while exiting 0. See
+		// repair.go.
+		pdf = normalizePDF(ctx, data)
 	case ".tif", ".tiff":
 		pdf, err = c.tiffToPDF(ctx, data)
 	case ".png", ".jpg", ".jpeg":

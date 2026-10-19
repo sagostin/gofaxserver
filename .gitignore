@@ -36,3 +36,9 @@ bin/
 *.log
 *.swp
 .gstack/
+
+sample-data/
+
+# Real-world producer sample containing scan content; kept local only.
+# Tests using it skip when absent (see repair_test.go).
+portal/internal/convert/testdata/hp_scan_dup_info.pdf
