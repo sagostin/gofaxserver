@@ -131,6 +131,13 @@ function groupPages(g: ResultGroup): string {
     return g.total_pages ? `${g.total_pages} pages` : '—'
   }
   if (!g.transferred_pages && !g.total_pages) return '—'
+  // The transferred/total ratio is only meaningful for outbound jobs (the
+  // total describes our own document). Inbound groups can never know the
+  // sender's intended page count, so a ratio would fake completeness —
+  // show the bare received count.
+  if (!g.leg_types.includes('transmission')) {
+    return `${g.transferred_pages}`
+  }
   return `${g.transferred_pages}/${g.total_pages || '—'}`
 }
 

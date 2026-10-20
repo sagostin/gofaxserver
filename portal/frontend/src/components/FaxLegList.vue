@@ -102,6 +102,15 @@ function fmtPages(l: FaxLeg): string {
     return l.total_pages ? `${l.total_pages} pages` : ''
   }
   if (!l.transferred_pages && !l.total_pages) return ''
+  // The transferred/total ratio is only meaningful on transmission legs:
+  // the total describes OUR document, so it answers "did every page cross
+  // before the call terminated?". Inbound legs (reception/bridge/delivery)
+  // can never know the sender's intended page count — SpanDSP's total there
+  // is just the locally written pages — so a ratio would fake completeness
+  // (a 3-of-10 partial receive would render "3/3"). Bare count only.
+  if (l.result_type !== 'transmission') {
+    return l.transferred_pages ? `${l.transferred_pages} pages` : ''
+  }
   return `${l.transferred_pages}/${l.total_pages || '?'} pages`
 }
 

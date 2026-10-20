@@ -651,30 +651,36 @@ func TestEmailSubjectBodyBridged(t *testing.T) {
 	}
 }
 
-// TestEmailSubjectBodyPagesRatio: when SpanDSP reported the document total,
-// pages render as transferred/total — a "failed" reception that actually
-// got every page reads 15/15, and a partial reads 10/15.
+// TestEmailSubjectBodyPagesRatio: the transferred/total ratio is rendered
+// only for OUTBOUND sends, where the total is authoritative (the intake TIFF
+// count and SpanDSP's Fax-Document-Total-Pages both describe our own file) —
+// a failed send that got every page across reads 15/15. INBOUND receptions
+// show the bare received count: the sender never announces a page count, so
+// SpanDSP's total is just the locally written pages and a ratio would fake
+// completeness.
 func TestEmailSubjectBodyPagesRatio(t *testing.T) {
 	now := time.Now()
 
+	// Outbound partial: ratio is real signal.
 	partial := attemptJob(true, 10, "OK", "NORMAL_CLEARING", now)
 	partial.Result.TotalPages = 15
 	nfr := NotifyFaxResults{
-		FaxJob:  emailJob("gateway", "2507620300", "2365461209", ""),
+		FaxJob:  emailJob("webhook", "2365461209", "2507620300", ""),
 		Results: map[string]*FaxJob{"a": partial},
 	}
 	subject, body := nfr.emailSubjectBody("email_report")
-	if subject != "Fax from 2507620300 succeeded (10/15 pages)" {
+	if subject != "Fax to 2507620300 succeeded (10/15 pages)" {
 		t.Errorf("unexpected subject: %q", subject)
 	}
 	if !strings.Contains(body, "Pages:     10/15") {
 		t.Errorf("body missing pages ratio:\n%s", body)
 	}
 
+	// Outbound failed with every page across: still 15/15.
 	full := attemptJob(false, 15, "NO ANSWER", "NO_ANSWER", now)
 	full.Result.TotalPages = 15
 	nfr = NotifyFaxResults{
-		FaxJob:            emailJob("gateway", "2507620300", "2365461209", ""),
+		FaxJob:            emailJob("webhook", "2365461209", "2507620300", ""),
 		AllAttemptsFailed: true,
 		Results:           map[string]*FaxJob{"a": full},
 	}
@@ -683,6 +689,23 @@ func TestEmailSubjectBodyPagesRatio(t *testing.T) {
 		t.Errorf("failed fax with all pages should still show 15/15:\n%s", body)
 	}
 
+	// Inbound reception: bare count, no fabricated denominator — even when
+	// SpanDSP reported a total (it is just the locally written page count).
+	received := attemptJob(true, 10, "OK", "NORMAL_CLEARING", now)
+	received.Result.TotalPages = 10
+	nfr = NotifyFaxResults{
+		FaxJob:  emailJob("gateway", "2507620300", "2365461209", ""),
+		Results: map[string]*FaxJob{"a": received},
+	}
+	subject, body = nfr.emailSubjectBody("email_report")
+	if subject != "Fax from 2507620300 succeeded (10 pages)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+	if !strings.Contains(body, "Pages:     10\n") {
+		t.Errorf("inbound body must show the bare page count:\n%s", body)
+	}
+
+	// Outbound single page keeps the 1/1 form.
 	single := attemptJob(true, 1, "OK", "NORMAL_CLEARING", now)
 	single.Result.TotalPages = 1
 	nfr = NotifyFaxResults{
@@ -691,6 +714,18 @@ func TestEmailSubjectBodyPagesRatio(t *testing.T) {
 	}
 	subject, _ = nfr.emailSubjectBody("email_report")
 	if subject != "Fax to 2507620300 succeeded (1/1 page)" {
+		t.Errorf("unexpected subject: %q", subject)
+	}
+
+	// Inbound single page: no ratio.
+	singleRx := attemptJob(true, 1, "OK", "NORMAL_CLEARING", now)
+	singleRx.Result.TotalPages = 1
+	nfr = NotifyFaxResults{
+		FaxJob:  emailJob("gateway", "2507620300", "2365461209", ""),
+		Results: map[string]*FaxJob{"a": singleRx},
+	}
+	subject, _ = nfr.emailSubjectBody("email_report")
+	if subject != "Fax from 2507620300 succeeded (1 page)" {
 		t.Errorf("unexpected subject: %q", subject)
 	}
 }
@@ -735,8 +770,9 @@ func TestBuildPortalStatusPayloadCallOutcomeAuthoritative(t *testing.T) {
 	if subject != "Fax from 2507620300 FAILED (NORMAL_CLEARING)" {
 		t.Errorf("unexpected subject: %q", subject)
 	}
-	if !strings.Contains(body, "Pages:     10/15") {
-		t.Errorf("body missing partial pages ratio:\n%s", body)
+	// Inbound: bare received count — the total is not the sender's intent.
+	if !strings.Contains(body, "Pages:     10\n") {
+		t.Errorf("body missing partial received page count:\n%s", body)
 	}
 }
 

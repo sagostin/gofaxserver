@@ -69,8 +69,8 @@ function fileUrl(id: number): string {
             <td>{{ f.number_name ? `${f.number_name} (${f.number})` : f.number || f.callee_number }}</td>
             <td>
               <template v-if="f.partial">
-                <span :title="`Call ended abnormally — only ${f.pages} of ${f.total_pages || '?'} pages received`">
-                  {{ f.total_pages ? `${f.pages}/${f.total_pages}` : (f.pages || '—') }}
+                <span :title="`Call ended abnormally — ${f.pages || 0} page(s) received before the call dropped`">
+                  {{ f.pages || '—' }}
                   <span class="badge partial">partial</span>
                 </span>
               </template>

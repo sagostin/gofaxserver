@@ -136,15 +136,25 @@ func (nfr *NotifyFaxResults) buildPortalStatusPayload() PortalStatusPayload {
 	return p
 }
 
-// pagesSummary renders page counts for subjects/bodies as "transferred/total"
-// when the total is known (SpanDSP reports Fax-Document-Total-Pages at hangup
-// for both rx and tx; outbound jobs also carry the intake TIFF page count).
-// A "failed" fax with transferred == total is a strong partial-success signal
-// (all pages crossed, the session just didn't close cleanly), so the ratio is
-// always shown when available. Falls back to a bare count when total is
-// unknown.
-func pagesSummary(transferred, total uint) string {
-	if total > 0 {
+// jobIsOutboundSend reports whether the job is an outbound transmission (vs
+// an inbound reception or a bridged call). It mirrors the direction phrasing
+// in emailSubjectBody.
+func jobIsOutboundSend(j *FaxJob) bool {
+	return !j.IsBridge && j.SourceInfo.SourceType != "gateway"
+}
+
+// pagesSummary renders page counts for subjects/bodies. showTotal controls
+// whether the "transferred/total" ratio is meaningful: for OUTBOUND sends the
+// total is authoritative (the intake TIFF page count and SpanDSP's
+// Fax-Document-Total-Pages both describe our own file), so the ratio answers
+// "did every page cross before the call terminated?" — including the "failed
+// but transferred == total" partial-success case. For INBOUND receptions the
+// sender never announces a page count (T.30 has no such signal) and SpanDSP's
+// total is merely the count of pages written locally, so a ratio would fake
+// completeness (a 3-of-10 partial receive would render "3/3"); only the bare
+// received count is shown.
+func pagesSummary(transferred, total uint, showTotal bool) string {
+	if showTotal && total > 0 {
 		if transferred == 1 && total == 1 {
 			return "1/1 page"
 		}
@@ -157,9 +167,10 @@ func pagesSummary(transferred, total uint) string {
 }
 
 // pagesSummaryPlain renders the bare "transferred/total" ratio (no unit) for
-// aligned body fields, falling back to the transferred count alone.
-func pagesSummaryPlain(transferred, total uint) string {
-	if total > 0 {
+// aligned body fields, falling back to the transferred count alone. showTotal
+// carries the same direction semantics as pagesSummary.
+func pagesSummaryPlain(transferred, total uint, showTotal bool) string {
+	if showTotal && total > 0 {
 		return fmt.Sprintf("%d/%d", transferred, total)
 	}
 	return fmt.Sprintf("%d", transferred)
@@ -189,7 +200,7 @@ func (nfr *NotifyFaxResults) emailSubjectBody(kind string) (subject, body string
 		phrase = fmt.Sprintf("Fax to %s", j.CalleeNumber)
 	}
 
-	pages := pagesSummary(p.TransferredPages, p.TotalPages)
+	pages := pagesSummary(p.TransferredPages, p.TotalPages, jobIsOutboundSend(j))
 
 	if p.Success {
 		subject = fmt.Sprintf("%s succeeded (%s)", phrase, pages)
@@ -220,7 +231,7 @@ func (nfr *NotifyFaxResults) emailSubjectBody(kind string) (subject, body string
 	fmt.Fprintf(&b, "Direction: %s\n", direction)
 	fmt.Fprintf(&b, "From:      %s\n", from)
 	fmt.Fprintf(&b, "To:        %s\n", j.CalleeNumber)
-	fmt.Fprintf(&b, "Pages:     %s\n", pagesSummaryPlain(p.TransferredPages, p.TotalPages))
+	fmt.Fprintf(&b, "Pages:     %s\n", pagesSummaryPlain(p.TransferredPages, p.TotalPages, jobIsOutboundSend(j)))
 	fmt.Fprintf(&b, "Attempts:  %d\n", p.Attempts)
 	if p.ResultText != "" {
 		fmt.Fprintf(&b, "Result:    %s\n", p.ResultText)
@@ -296,6 +307,10 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 
 	// Draw table rows.
 	pdf.SetFont("Arial", "", 12)
+	// The transferred/total ratio is only meaningful for outbound sends — see
+	// pagesSummary. Inbound reception/bridge rows show the bare received
+	// count; a ratio there would fake completeness.
+	showTotal := jobIsOutboundSend(nfr.FaxJob)
 	for _, key := range keys {
 		faxJob := nfr.Results[key]
 
@@ -329,9 +344,9 @@ func (nfr *NotifyFaxResults) GenerateFaxResultsPDF() (string, error) {
 				success = "success"
 			}
 			// transferred/total when known — surfaces the "failed but every
-			// page crossed" case directly on the report.
-			if faxJob.Result.TransferredPages > 0 || faxJob.Result.TotalPages > 0 {
-				pages = pagesSummaryPlain(faxJob.Result.TransferredPages, faxJob.Result.TotalPages)
+			// page crossed" case directly on the report (outbound only).
+			if faxJob.Result.TransferredPages > 0 || (showTotal && faxJob.Result.TotalPages > 0) {
+				pages = pagesSummaryPlain(faxJob.Result.TransferredPages, faxJob.Result.TotalPages, showTotal)
 			}
 		}
 
