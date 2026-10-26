@@ -18,9 +18,15 @@
 package api
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"gofaxportal/internal/fsclient"
+
+	"github.com/kataras/iris/v12"
+	irishttptest "github.com/kataras/iris/v12/httptest"
 )
 
 func TestSanitizeNumber(t *testing.T) {
@@ -195,5 +201,78 @@ func TestValidateEndpointRules(t *testing.T) {
 	g := &fsclient.Endpoint{Type: "global", TypeID: 55, EndpointType: "gateway", Endpoint: "sbc:1.1.1.1"}
 	if msg := s.validateEndpoint(g, "direct"); msg != "" || g.TypeID != 0 {
 		t.Fatalf("global scope must force type_id=0, got msg=%q id=%d", msg, g.TypeID)
+	}
+}
+
+func TestAdminUpdateEndpointUpstreamErrorMapping(t *testing.T) {
+	tests := []struct {
+		name            string
+		upstreamStatus  int
+		upstreamMessage string
+		wantStatus      int
+		wantError       string
+	}{
+		{
+			name:            "missing endpoint is actionable",
+			upstreamStatus:  http.StatusNotFound,
+			upstreamMessage: "endpoint not found",
+			wantStatus:      http.StatusNotFound,
+			wantError:       "endpoint #36 no longer exists on gofaxserver; it may have been deleted or recreated. Refresh the endpoint list and try again",
+		},
+		{
+			name:            "managed endpoint conflict passes through",
+			upstreamStatus:  http.StatusConflict,
+			upstreamMessage: "endpoint is managed by gateway carrier",
+			wantStatus:      http.StatusConflict,
+			wantError:       "upstream update failed: endpoint is managed by gateway carrier",
+		},
+		{
+			name:            "upstream server failure remains bad gateway",
+			upstreamStatus:  http.StatusInternalServerError,
+			upstreamMessage: "database unavailable",
+			wantStatus:      http.StatusBadGateway,
+			wantError:       "upstream update failed: gofaxserver 500: database unavailable",
+		},
+		{
+			name:            "upstream auth failure does not expire portal session",
+			upstreamStatus:  http.StatusUnauthorized,
+			upstreamMessage: "unauthorized",
+			wantStatus:      http.StatusBadGateway,
+			wantError:       "upstream update failed: gofaxserver 401: unauthorized",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/admin/tenants":
+					_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 33, "name": "TOPS"}})
+				case r.Method == http.MethodPut && r.URL.Path == "/admin/endpoint/36":
+					w.WriteHeader(tt.upstreamStatus)
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": tt.upstreamMessage})
+				default:
+					t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}))
+			defer upstream.Close()
+
+			s := &Server{FX: fsclient.New(upstream.URL, "testkey")}
+			app := iris.New()
+			app.Put("/admin/endpoints/{id:uint}", s.adminUpdateEndpoint)
+			e := irishttptest.New(t, app)
+
+			e.PUT("/admin/endpoints/36").WithJSON(map[string]any{
+				"id":            36,
+				"type":          "tenant",
+				"type_id":       33,
+				"endpoint_type": "webhook",
+				"endpoint":      "https://hooks.example.com/fax-receive",
+				"priority":      0,
+				"bridge":        false,
+			}).Expect().Status(tt.wantStatus).JSON().Object().ValueEqual("error", tt.wantError)
+		})
 	}
 }

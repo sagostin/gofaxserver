@@ -20,11 +20,13 @@ package gofaxserver
 import (
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
 	"gofaxserver/gofaxlib"
+	"gorm.io/gorm"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -532,9 +534,14 @@ func (s *Server) handleUpdateEndpoint(ctx iris.Context) {
 	// (scope/priority/bridge stay editable). Once the gateway is deprovisioned
 	// the endpoint decouples and its value becomes editable again.
 	var existing Endpoint
-	if err := s.DB.First(&existing, ep.ID); err != nil {
-		ctx.StatusCode(http.StatusNotFound)
-		ctx.JSON(iris.Map{"error": "endpoint not found"})
+	if err := s.DB.First(&existing, ep.ID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			ctx.StatusCode(http.StatusNotFound)
+			ctx.JSON(iris.Map{"error": "endpoint not found"})
+			return
+		}
+		ctx.StatusCode(http.StatusInternalServerError)
+		ctx.JSON(iris.Map{"error": "failed to load endpoint: " + err.Error()})
 		return
 	}
 	if existing.EndpointType == "gateway" && ep.Endpoint != existing.Endpoint {

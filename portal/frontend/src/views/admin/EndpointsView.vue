@@ -17,7 +17,9 @@ interface Ep {
 const eps = ref<Ep[]>([])
 const managedBy = ref<Record<number, string>>({}) // endpoint_id -> gateway name
 const gatewayNames = ref<string[]>([])            // provisioned gateway names (alias sources)
-const error = ref('')
+const pageError = ref('')
+const createError = ref('')
+const editError = ref('')
 const busy = ref(false)
 const form = ref({ type: 'tenant', scope_source: 'portal', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false })
 const aliasGateway = ref('') // when set + number scope + gateway kind: create via the alias API
@@ -44,6 +46,7 @@ const aliasOf = computed(() => {
 })
 
 async function load() {
+  pageError.value = ''
   try {
     const [list, gw] = await Promise.all([
       api<Ep[]>('/admin/endpoints'),
@@ -59,12 +62,12 @@ async function load() {
     }
     managedBy.value = map
     gatewayNames.value = names
-  } catch (e: any) { error.value = e.message }
+  } catch (e: any) { pageError.value = e.message }
 }
 onMounted(load)
 
 async function create() {
-  error.value = ''
+  createError.value = ''
   busy.value = true
   try {
     if (aliasMode.value) {
@@ -79,16 +82,16 @@ async function create() {
     form.value = { type: 'tenant', scope_source: 'portal', type_id: 0, endpoint_type: 'gateway', endpoint: '', priority: 0, bridge: false }
     aliasGateway.value = ''
     await load()
-  } catch (e: any) { error.value = e.message } finally { busy.value = false }
+  } catch (e: any) { createError.value = e.message } finally { busy.value = false }
 }
 
 async function remove(ep: Ep) {
   const q = ep.type === 'global' ? '?confirm=true' : ''
   if (!confirm(`Delete endpoint ${ep.endpoint}?`)) return
   if (ep.type === 'global' && !confirmGlobal.value && !confirm('This is a GLOBAL upstream gateway. Really delete?')) return
-  error.value = ''
+  pageError.value = ''
   try { await api(`/admin/endpoints/${ep.id}${q}`, { method: 'DELETE' }); await load() }
-  catch (e: any) { error.value = e.message }
+  catch (e: any) { pageError.value = e.message }
 }
 
 const editFor = ref<Ep | null>(null)
@@ -96,12 +99,13 @@ const epForm = ref({ endpoint: '', priority: 0, bridge: false })
 
 function openEdit(ep: Ep) {
   editFor.value = ep
+  editError.value = ''
   epForm.value = { endpoint: ep.endpoint, priority: ep.priority, bridge: ep.bridge }
 }
 
 async function saveEdit() {
   if (!editFor.value) return
-  error.value = ''
+  editError.value = ''
   try {
     await api(`/admin/endpoints/${editFor.value.id}`, {
       method: 'PUT',
@@ -109,7 +113,15 @@ async function saveEdit() {
     })
     editFor.value = null
     await load()
-  } catch (e: any) { error.value = e.message }
+  } catch (e: any) {
+    if (e?.status === 404) {
+      editFor.value = null
+      await load()
+      pageError.value = e.message
+    } else {
+      editError.value = e.message
+    }
+  }
 }
 </script>
 
@@ -158,10 +170,11 @@ async function saveEdit() {
         tracked automatically on gateway updates.
       </p>
       <p class="muted">Editing endpoints changes fax routing — prefer the CLI for carrier-level changes unless you know what you're doing.</p>
-      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="createError" class="error" role="alert">{{ createError }}</p>
     </div>
 
     <div class="panel">
+      <p v-if="pageError" class="error" role="alert">{{ pageError }}</p>
       <table>
         <thead>
           <tr><th>ID</th><th>Scope</th><th>Type ID</th><th>Kind</th><th>Value</th><th>Pri</th><th>Bridge</th><th></th></tr>
@@ -211,6 +224,7 @@ async function saveEdit() {
       <div class="field">
         <label style="font-size:13px; color:var(--text)"><input type="checkbox" v-model="epForm.bridge" /> bridge calls to this endpoint</label>
       </div>
+      <p v-if="editError" class="error" role="alert">{{ editError }}</p>
       <template #footer>
         <button class="secondary" @click="editFor = null">Cancel</button>
         <button :disabled="!epForm.endpoint" @click="saveEdit">Save</button>

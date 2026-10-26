@@ -18,6 +18,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -1359,8 +1360,20 @@ func (s *Server) adminUpdateEndpoint(ctx iris.Context) {
 		return
 	}
 	if err := s.FX.UpdateEndpoint(ep); err != nil {
-		ctx.StatusCode(502)
-		ctx.JSON(map[string]string{"error": "upstream update failed: " + err.Error()})
+		status := 502
+		message := "upstream update failed: " + err.Error()
+		var ae *fsclient.APIError
+		if errors.As(err, &ae) && ae.Status >= 400 && ae.Status < 500 && ae.Status != 401 && ae.Status != 403 {
+			// Upstream auth failures indicate a server configuration problem, not
+			// an expired portal session, so keep those mapped to 502.
+			status = ae.Status
+			message = "upstream update failed: " + ae.Message
+			if ae.Status == 404 {
+				message = fmt.Sprintf("endpoint #%d no longer exists on gofaxserver; it may have been deleted or recreated. Refresh the endpoint list and try again", id)
+			}
+		}
+		ctx.StatusCode(status)
+		ctx.JSON(map[string]string{"error": message})
 		return
 	}
 	s.audit(ctx, "ENDPOINT_UPDATE", fmt.Sprintf("endpoint:%d", id), ep)
