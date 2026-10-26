@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../../api'
 import { useScopeTargets } from '../../scope'
+import ActionsMenu, { type ActionItem } from '../../components/ActionsMenu.vue'
 
 interface Tpl {
   id: number
@@ -274,6 +275,16 @@ async function repair(gs: GwStatus) {
   } catch (e: any) { error.value = e.message }
 }
 
+function gatewayActions(gs: GwStatus): ActionItem[] {
+  const items: ActionItem[] = [
+    { label: 'Assign to number…', onClick: () => startAlias(gs) },
+    { label: 'Edit', onClick: () => edit(gs) },
+  ]
+  if (!gs.exists_on_disk) items.push({ label: 'Re-render', onClick: () => repair(gs) })
+  items.push({ label: 'Deprovision', danger: true, onClick: () => remove(gs) })
+  return items
+}
+
 async function adopt(u: UnmanagedFile) {
   if (!confirm(`Adopt ${u.file} into managed gateways${u.name ? ` as "${u.name}"` : ''}?`)) return
   error.value = ''
@@ -428,7 +439,7 @@ async function provisionFromEndpoint() {
       <h3>Provisioned gateways <span class="muted">(live from gofaxserver + FreeSWITCH)</span></h3>
       <table>
         <thead>
-          <tr><th>Name</th><th>Template</th><th>Realm</th><th>FS state</th><th>XML on disk</th><th>Endpoint</th><th>Aliases</th><th></th></tr>
+          <tr><th>Name</th><th>Template</th><th>Realm</th><th>FS state</th><th>XML on disk</th><th>Endpoint</th><th>Aliases</th><th>Actions</th></tr>
         </thead>
         <tbody>
           <tr v-for="gs in gateways" :key="gs.gateway.id">
@@ -439,10 +450,7 @@ async function provisionFromEndpoint() {
               {{ gs.state }}
               <span v-if="isRegistered(gs) && gs.gateway.last_state" class="muted">(monitored: {{ gs.gateway.last_state }})</span>
             </td>
-            <td>
-              {{ gs.exists_on_disk ? 'yes' : 'missing' }}
-              <button v-if="!gs.exists_on_disk" class="secondary" style="margin-left:6px" @click="repair(gs)">Re-render</button>
-            </td>
+            <td>{{ gs.exists_on_disk ? 'yes' : 'missing' }}</td>
             <td>{{ gs.gateway.endpoint_id ? '#' + gs.gateway.endpoint_id : '—' }}</td>
             <td>
               <template v-if="(gs.aliases || []).length">
@@ -455,9 +463,7 @@ async function provisionFromEndpoint() {
               <span v-else class="muted">—</span>
             </td>
             <td class="actions-cell">
-              <button class="secondary" @click="startAlias(gs)">Assign to number…</button>
-              <button class="secondary" @click="edit(gs)">Edit</button>
-              <button class="danger" @click="remove(gs)">Deprovision</button>
+              <ActionsMenu :items="gatewayActions(gs)" />
             </td>
           </tr>
           <tr v-if="!gateways.length"><td colspan="8" class="muted">No gateways provisioned yet.</td></tr>
