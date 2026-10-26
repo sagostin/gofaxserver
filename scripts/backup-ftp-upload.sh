@@ -50,6 +50,8 @@ echo "[$(date)] Uploading backups to ftp://${FTP_HOST}:${FTP_PORT}${REMOTE_PATH}
 UPLOADED=0
 FAILED=0
 
+# Include hidden .env snapshots and handle empty directories cleanly.
+shopt -s nullglob dotglob
 for FILE in "$LOCAL_DIR"/*; do
   [[ -f "$FILE" ]] || continue
 

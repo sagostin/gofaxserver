@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# backup-gofaxserver-config.sh — Snapshot /etc/gofaxserver/config.json.
+# backup-gofaxserver-config.sh — Snapshot the gofaxserver config.json.
+# Prefers /etc/gofaxserver/config.json and falls back to ./config.json.
+# Override with GOFAXSERVER_CONFIG=/path/to/config.json.
 #
 # Usage:  sudo ./scripts/backup-gofaxserver-config.sh [backup_dir]
 #
@@ -11,10 +13,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-GOFXSERVER_CONFIG="/etc/gofaxserver/config.json"
+GOFAXSERVER_CONFIG="${GOFAXSERVER_CONFIG:-/etc/gofaxserver/config.json}"
+if [[ ! -f "$GOFAXSERVER_CONFIG" && "$GOFAXSERVER_CONFIG" == "/etc/gofaxserver/config.json" && -f "$PROJECT_ROOT/config.json" ]]; then
+  GOFAXSERVER_CONFIG="$PROJECT_ROOT/config.json"
+fi
 
-if [[ ! -f "$GOFXSERVER_CONFIG" ]]; then
-  echo "ERROR: gofaxserver config not found at $GOFXSERVER_CONFIG" >&2
+if [[ ! -f "$GOFAXSERVER_CONFIG" ]]; then
+  echo "ERROR: gofaxserver config not found at $GOFAXSERVER_CONFIG" >&2
   exit 1
 fi
 
@@ -28,7 +33,7 @@ mkdir -p "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/config_${TIMESTAMP}.json"
 
 # ── Copy ────────────────────────────────────────────────────
-cp "$GOFXSERVER_CONFIG" "$BACKUP_FILE"
+cp "$GOFAXSERVER_CONFIG" "$BACKUP_FILE"
 chmod 600 "$BACKUP_FILE"
 
 echo "[$(date)] gofaxserver config backed up to $BACKUP_FILE"

@@ -32,9 +32,12 @@ python setup-tenant-tui.py
 ## Backup Scripts
 
 See individual script files for backup utilities:
-- `backup-all.sh` - Full system backup
-- `backup-db.sh` - Database backup
-- `backup-env.sh` - Environment configuration backup
-- `backup-freeswitch.sh` - FreeSWITCH configuration backup
-- `backup-gofaxserver-config.sh` - gofaxserver config backup
-- `backup-ftp-upload.sh` - FTP upload utility
+- `backup-all.sh` - Full runtime backup for gofaxserver and, when configured, the portal
+- `backup-db.sh` - GoFaxServer database backup
+- `backup-env.sh` - GoFaxServer root environment backup
+- `backup-freeswitch.sh` - FreeSWITCH configuration and generated gateway backup
+- `backup-gofaxserver-config.sh` - GoFaxServer config backup
+- `backup-portal-db.sh` - Portal database backup (includes branding and stored faxes)
+- `backup-portal-env.sh` - Portal environment and encryption-secret backup
+- `backup-portal-config.sh` - Optional portal config backup
+- `backup-ftp-upload.sh` - FTP upload utility, including hidden `.env` snapshots

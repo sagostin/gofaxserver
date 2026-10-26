@@ -4,9 +4,10 @@
 #
 # Usage:  ./scripts/backup-freeswitch.sh [backup_dir]
 #
-# Defaults to ./backups/freeswitch/. Backs up /etc/freeswitch (host-service
-# installs); for all-container installs the live config is volumes/freeswitch —
-# override with FS_CONFIG_DIR=volumes/freeswitch ./scripts/backup-freeswitch.sh
+# Defaults to ./backups/freeswitch/. Prefers /etc/freeswitch (host-service
+# installs) and falls back to volumes/freeswitch (all-container installs).
+# volumes/gateways is included automatically for the project layout.
+# Override with FS_CONFIG_DIR=/path/to/freeswitch ./scripts/backup-freeswitch.sh
 # May need root/sudo to read /etc/freeswitch on host-service installs.
 #
 set -euo pipefail
@@ -15,6 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 FS_CONFIG_DIR="${FS_CONFIG_DIR:-/etc/freeswitch}"
+if [[ ! -d "$FS_CONFIG_DIR" && "$FS_CONFIG_DIR" == "/etc/freeswitch" && -d "$PROJECT_ROOT/volumes/freeswitch" ]]; then
+  FS_CONFIG_DIR="$PROJECT_ROOT/volumes/freeswitch"
+fi
 
 if [[ ! -d "$FS_CONFIG_DIR" ]]; then
   echo "ERROR: FreeSWITCH config directory not found at $FS_CONFIG_DIR" >&2
@@ -33,7 +37,13 @@ BACKUP_FILE="$BACKUP_DIR/freeswitch_${TIMESTAMP}.tar.gz"
 # ── Archive ─────────────────────────────────────────────────
 echo "[$(date)] Archiving $FS_CONFIG_DIR ..."
 
-tar czf "$BACKUP_FILE" -C "$(dirname "$FS_CONFIG_DIR")" "$(basename "$FS_CONFIG_DIR")"
+TAR_ARGS=(-C "$(dirname "$FS_CONFIG_DIR")" "$(basename "$FS_CONFIG_DIR")")
+if [[ "$FS_CONFIG_DIR" == "$PROJECT_ROOT/volumes/freeswitch" && -d "$PROJECT_ROOT/volumes/gateways" ]]; then
+  echo "[$(date)] Including $PROJECT_ROOT/volumes/gateways ..."
+  TAR_ARGS+=(-C "$PROJECT_ROOT/volumes" gateways)
+fi
+
+tar czf "$BACKUP_FILE" "${TAR_ARGS[@]}"
 
 SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
 echo "[$(date)] Backup complete: $BACKUP_FILE ($SIZE)"
